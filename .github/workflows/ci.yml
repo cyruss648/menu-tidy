@@ -5,12 +5,18 @@ on:
     branches: ['**']
     tags: ['v*']
   pull_request:
+  workflow_dispatch:
+    inputs:
+      validate_signing:
+        description: 'Validate dedicated signing on both architectures without publishing'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.validate_signing || false }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
@@ -54,11 +60,11 @@ jobs:
           PY
 
       - name: Use temporary signing for CI builds
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        if: ${{ !startsWith(github.ref, 'refs/tags/') && !(github.event_name == 'workflow_dispatch' && inputs.validate_signing) }}
         run: printf 'CODE_SIGN_IDENTITY=-\n' >> "$GITHUB_ENV"
 
       - name: Import dedicated release signing identity
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.validate_signing)
         env:
           MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
           MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
@@ -83,13 +89,13 @@ jobs:
           compression-level: 0
 
       - name: Remove temporary release signing material
-        if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ always() && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.validate_signing)) }}
         run: python3 scripts/ci-signing.py cleanup
 
   release:
     name: Publish verified prerelease
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

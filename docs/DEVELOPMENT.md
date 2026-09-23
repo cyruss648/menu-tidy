@@ -118,7 +118,7 @@ CODE_SIGN_IDENTITY=- ./scripts/build.sh release
 ```sh
 ./scripts/changelog.sh --unreleased
 ./scripts/changelog.sh --latest
-./scripts/changelog.sh --tag v0.3.0
+./scripts/changelog.sh --tag v0.3.1
 ```
 
 版本号、构建号、tag 与 Release 标题需要保持一致。准备发布时，应复核面向用户的变化、已知限制和升级说明，不把纯内部诊断记录直接作为 Release 说明。
@@ -137,20 +137,20 @@ CODE_SIGN_IDENTITY=- ./scripts/build.sh release
 - 对应 `.zip.sha256` 校验文件。
 - 对应 `.zip.metadata.json`，记录版本、构建号、架构、提交、工作区状态、二进制哈希及签名等信息。
 
-这是当前机器的原生包；单次本地打包不会生成另一架构或 Universal Binary。下载或解压前，可在产物所在目录验证校验文件，例如 Apple Silicon 0.3.0 包：
+这是当前机器的原生包；单次本地打包不会生成另一架构或 Universal Binary。下载或解压前，可在产物所在目录验证校验文件，例如 Apple Silicon 0.3.1 包：
 
 ```sh
-shasum -a 256 -c Menu-Tidy-0.3.0-macos-arm64.zip.sha256
+shasum -a 256 -c Menu-Tidy-0.3.1-macos-arm64.zip.sha256
 ```
 
 维护者发布还需要已登录的 GitHub CLI（`gh`）和仓库推送权限。先更新 Info.plist 的版本与构建号、准备 `CHANGELOG.md` 对应版本说明，将更改提交并推送 `main`，等待该提交的 CI 通过，再执行：
 
 ```sh
 # 只预览发布说明，不推送
-python3 scripts/release-notes.py v0.3.0
+python3 scripts/release-notes.py v0.3.1
 
-# 执行本地完整检查，创建并推送 v0.3.0 注解标签
-./scripts/release.sh 0.3.0
+# 执行本地完整检查，创建并推送 v0.3.1 注解标签
+./scripts/release.sh 0.3.1
 ```
 
 `release.sh` 检查资源版本、GitHub 登录、干净工作区、当前分支为 `main` 且 HEAD 等于 `origin/main`，然后运行 `check.sh --full`。成功后推送标签，触发 GitHub Actions 双架构构建及预览版发布。它会实际推送，不能用作无副作用的预览；既有标签不覆盖。

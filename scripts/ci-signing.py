@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -95,6 +96,32 @@ def locations():
     return temporary, temporary / "menu-tidy-signing-state.json"
 
 
+def user_keychains():
+    # security quotes paths containing spaces; do not split them on whitespace.
+    paths = shlex.split(security(["list-keychains", "-d", "user"]).decode())
+    if any(not Path(path).is_absolute() for path in paths):
+        raise ValueError("Unexpected user keychain search list")
+    return paths
+
+
+def same_keychain(first, second):
+    return Path(first).resolve() == Path(second).resolve()
+
+
+def signing_preflight(scratch, keychain, fingerprint, requirement):
+    # A visible certificate does not prove that codesign can locate its private
+    # identity. Exercise the same identity, keychain and requirement as the app.
+    probe = scratch / "signing-preflight"
+    shutil.copyfile("/usr/bin/true", probe)
+    probe.chmod(0o700)
+    run([CODESIGN, "--force", "--sign", fingerprint, "--keychain", str(keychain),
+         "--identifier", BUNDLE_ID, "--timestamp=none", "--requirements",
+         "=designated => " + requirement, str(probe)])
+    run([CODESIGN, "--verify", "--strict", "--test-requirement",
+         "=" + requirement, str(probe)])
+    probe.unlink()
+
+
 def install():
     temporary, state_file = locations()
     if state_file.exists():
@@ -105,9 +132,11 @@ def install():
         raise ValueError("Release signing secrets are missing; refusing an ad-hoc release")
     env_file = Path(os.environ["GITHUB_ENV"])
     payload = base64.b64decode(encoded, validate=True)
+    original_keychains = user_keychains()
     scratch = Path(tempfile.mkdtemp(prefix="menu-tidy-signing-", dir=temporary))
     keychain = scratch / "release.keychain-db"
-    state_file.write_text(json.dumps({"scratch": str(scratch), "keychain": str(keychain)}))
+    state_file.write_text(json.dumps({"scratch": str(scratch), "keychain": str(keychain),
+                                     "originalKeychains": original_keychains}))
     identity = scratch / "identity.p12"
     identity.write_bytes(payload)
     keychain_password = secrets.token_hex(32)
@@ -119,18 +148,26 @@ def install():
                   "-x", "-T", CODESIGN])
         security(["set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-t", "private",
                   "-k", keychain_password, str(keychain)])
+        # --keychain selects an identity but does not replace codesign's search
+        # list for resolving its certificate chain. Preserve existing entries.
+        current_keychains = user_keychains()
+        security(["list-keychains", "-d", "user", "-s", str(keychain),
+                  *[path for path in current_keychains if not same_keychain(path, keychain)]])
+        if not any(same_keychain(path, keychain) for path in user_keychains()):
+            raise ValueError("Temporary signing keychain is not searchable")
         pem = security(["find-certificate", "-a", "-p", str(keychain)])
         if pem.count(b"-----BEGIN CERTIFICATE-----") != 1:
             raise ValueError("Expected one dedicated self-signed release certificate")
         der = run([OPENSSL, "x509", "-outform", "DER"], input_data=pem)
         fingerprint = hashlib.sha1(der).hexdigest().upper()
         requirement = f'identifier "{BUNDLE_ID}" and certificate leaf = H"{fingerprint}"'
+        signing_preflight(scratch, keychain, fingerprint, requirement)
         with env_file.open("a") as stream:
             stream.write(f"CODE_SIGN_IDENTITY={fingerprint}\n")
             stream.write(f"CODE_SIGN_KEYCHAIN={keychain}\n")
             stream.write(f"CODE_SIGN_REQUIREMENT={requirement}\n")
         identity.unlink()
-        print("Release identity imported into a temporary keychain; fixed signing requirement configured.")
+        print("Release identity imported; codesign preflight and fixed certificate requirement verified.")
     except BaseException:
         cleanup()
         raise
@@ -146,6 +183,13 @@ def cleanup():
     if (scratch.parent.resolve() != temporary or not scratch.name.startswith("menu-tidy-signing-")
             or scratch.is_symlink() or keychain != scratch / "release.keychain-db"):
         raise ValueError("Refusing to clean up unexpected signing paths")
+    # Remove only this job's entry from the current list. Replacing the entire
+    # list with the saved snapshot would erase unrelated concurrent additions
+    # (or reintroduce entries another process deliberately removed).
+    current_keychains = user_keychains()
+    remaining_keychains = [path for path in current_keychains if not same_keychain(path, keychain)]
+    if remaining_keychains != current_keychains:
+        security(["list-keychains", "-d", "user", "-s", *remaining_keychains])
     if keychain.exists():
         security(["delete-keychain", str(keychain)])
     if scratch.exists():

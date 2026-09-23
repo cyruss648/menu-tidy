@@ -1,6 +1,6 @@
 # 构建与发布
 
-Menu Tidy 0.3.0 采用预发布流程。普通提交和 Pull Request 会生成供检查的构建产物；只有推送与应用版本一致的 `v*` 标签，才会尝试创建 GitHub Release。所有自动发布的版本都标为 **Prerelease**，不会替换稳定版本的 Latest 标记。
+Menu Tidy 0.3.1 采用预发布流程。普通提交和 Pull Request 会生成供检查的构建产物；只有推送与应用版本一致的 `v*` 标签，才会尝试创建 GitHub Release。所有自动发布的版本都标为 **Prerelease**，不会替换稳定版本的 Latest 标记。
 
 工作流定义在 [ci.yml](../.github/workflows/ci.yml)。工作流文件、脚本检查或本地打包成功，都不代表某次 GitHub 构建已经通过；以对应提交的 Actions 运行结果和 Release 中的实际附件为准。
 
@@ -10,12 +10,14 @@ Menu Tidy 0.3.0 采用预发布流程。普通提交和 Pull Request 会生成�
 
 | 架构 | GitHub runner | 工具链 |
 | --- | --- | --- |
-| Apple Silicon / `arm64` | `macos-15` | Xcode 26.3 / Swift 6.2.3 |
-| Intel / `x86_64` | `macos-15-intel` | Xcode 26.3 / Swift 6.2.3 |
+| Apple Silicon / `arm64` | `macos-15` | Xcode 26.3 / Swift 6.2.x |
+| Intel / `x86_64` | `macos-15-intel` | Xcode 26.3 / Swift 6.2.x |
 
 工作流通过 `DEVELOPER_DIR` 固定 Xcode 路径，并检查实际 runner 架构。每个任务执行 `./scripts/check.sh --full` 和 `./scripts/package.sh`，完成检查后上传独立架构的应用压缩包、SHA-256 文件和构建元数据。Actions artifacts 保留 14 天。
 
-普通分支和 Pull Request 使用显式的 ad hoc 签名 `CODE_SIGN_IDENTITY=-`。这些构建用于验证代码，签名身份不会跨构建保持稳定。CI 不会自动初始化开发证书，也不需要用于发布的签名 secrets。Pull Request 使用 `pull_request` 事件，构建任务仅授予仓库内容读取权限。
+普通分支 push 和 Pull Request 使用显式的 ad hoc 签名 `CODE_SIGN_IDENTITY=-`。这些构建用于验证代码，签名身份不会跨构建保持稳定。CI 不会自动初始化开发证书，也不需要用于发布的签名 secrets。Pull Request 使用 `pull_request` 事件，构建任务仅授予仓库内容读取权限。
+
+维护者可在 Actions 中手动运行此工作流，勾选 `validate_signing`，在打标签前验证两个架构的真实签名打包。该选项默认关闭；开启时使用专用 secrets，但手动运行始终不创建 Release。命令行等效操作为 `gh workflow run ci.yml --ref main -f validate_signing=true`。
 
 当前最低部署目标是 macOS 13。CI 在 macOS 15 的两个架构上测试和编译，不构成 macOS 13 运行验收，也不会自动完成辅助功能授权、图标移动、展开与收起、多显示器等桌面交互测试。macOS 27 的既有实机观察见[验收记录索引](README.md#验收记录)；新版本仍需针对实际使用场景验收。
 
@@ -28,12 +30,12 @@ Menu Tidy 0.3.0 采用预发布流程。普通提交和 Pull Request 会生成�
 ./scripts/package.sh
 ```
 
-打包脚本读取 `Resources/Info.plist` 的版本，构建本机原生架构，检查 Mach-O 架构和应用签名，然后产生以下文件。以 0.3.0 的 Apple Silicon 包为例：
+打包脚本读取 `Resources/Info.plist` 的版本，构建本机原生架构，检查 Mach-O 架构和应用签名，然后产生以下文件。以 0.3.1 的 Apple Silicon 包为例：
 
 ```text
-dist/Menu-Tidy-0.3.0-macos-arm64.zip
-dist/Menu-Tidy-0.3.0-macos-arm64.zip.sha256
-dist/Menu-Tidy-0.3.0-macos-arm64.zip.metadata.json
+dist/Menu-Tidy-0.3.1-macos-arm64.zip
+dist/Menu-Tidy-0.3.1-macos-arm64.zip.sha256
+dist/Menu-Tidy-0.3.1-macos-arm64.zip.metadata.json
 ```
 
 Intel runner 产生同名规则的 `x86_64` 文件。当前发布两个独立架构包，不生成 Universal 包。元数据记录源码提交、工作区是否有改动、版本、架构、最低系统版本、工具链、摘要和签名 designated requirement；不要把签名自检等同于 Apple 公证或 Gatekeeper 放行。
@@ -41,7 +43,7 @@ Intel runner 产生同名规则的 `x86_64` 文件。当前发布两个独立架
 应用先由 `ditto` 打包成 zip，再作为一个文件上传，避免直接上传 `.app` 目录时 Actions artifact 丢失可执行文件的权限。下载后可以在文件所在目录检查完整性：
 
 ```sh
-shasum -a 256 -c Menu-Tidy-0.3.0-macos-arm64.zip.sha256
+shasum -a 256 -c Menu-Tidy-0.3.1-macos-arm64.zip.sha256
 ```
 
 SHA-256 用于检查文件内容是否与发布的摘要一致，不替代发行者身份认证。
@@ -57,7 +59,7 @@ SHA-256 用于检查文件内容是否与发布的摘要一致，不替代发行
 
 材料必须来自明确授权准备的专用身份。不要把本机现有开发私钥复制到仓库，也不要复用 [本地签名说明](LOCAL-SIGNING.md) 中不可导出的开发私钥。证书、私钥、密码和包含它们的编码都不应写入 Git、文档或工作流日志。准备材料、上传 secrets 与第一次真实 CI 发布是不同步骤；只有仓库 secrets 配置完成后，标签任务才具备签名条件。
 
-标签任务调用 `scripts/ci-signing.py install`，在 runner 的临时目录建立签名钥匙串，并把签名参数提供给后续构建。缺少 secrets 或导入失败时任务失败，不降级成 ad hoc 发布。任务退出时执行 `scripts/ci-signing.py cleanup` 清理临时材料。两个架构包必须使用相同的证书约束，发布前会检查这一点。
+标签任务调用 `scripts/ci-signing.py install`，在 runner 的临时目录建立签名钥匙串，将其加入当前用户搜索列表，并通过实际签名预检后把签名参数提供给后续构建。缺少 secrets 或导入失败时任务失败，不降级成 ad hoc 发布。任务退出时执行 `scripts/ci-signing.py cleanup` 清理临时材料及对应搜索列表项，保留原有钥匙串配置。两个架构包必须使用相同的证书约束，发布前会检查这一点。
 
 当前专用自签名身份用于保持发行签名连续性，**不是 Apple Developer ID，也不表示应用经过 Apple notarization**。发布元数据会明确记录公证状态。后续接入 Developer ID 和公证时，需要同时更新签名流程、校验与用户说明，不能只改变 Release 文案。
 
@@ -68,12 +70,12 @@ SHA-256 用于检查文件内容是否与发布的摘要一致，不替代发行
 3. 确认远端、GitHub 登录身份与发布签名 secrets 配置正确，再运行发布脚本：
 
    ```sh
-   ./scripts/release.sh 0.3.0
+   ./scripts/release.sh 0.3.1
    ```
 
 发布脚本接收不带 `v` 的版本号，要求从已推送到远端的 `main` 分支发布，且当前提交最近一次分支 push 工作流已成功完成。它会校验版本、标签、GitHub 登录状态、工作区及对应 CI 结果，执行完整检查，并创建和推送 annotated tag。不要通过强制移动已有标签来重复发布同一个版本。
 
-标签必须是应用版本前加 `v`，例如 `v0.3.0` 对应 `CFBundleShortVersionString` 的 `0.3.0`。推送标签后，工作流重新测试并构建两个架构，成功后才进入发布任务。
+标签必须是应用版本前加 `v`，例如 `v0.3.1` 对应 `CFBundleShortVersionString` 的 `0.3.1`。推送标签后，工作流重新测试并构建两个架构，成功后才进入发布任务。
 
 ## 发布前的自动校验
 
