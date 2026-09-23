@@ -84,9 +84,12 @@ final class MenuTidyModel: ObservableObject {
     private var lastPermissionCheck = 0.0
     private var anchorScanSequence = 0
     private var stopping = false
+    private var arrangementSequence = 0
+    private var beforeTemporaryRevealCollapsed: Bool?
+    private var usesNativeAlwaysSection = false
     var permissionSettingsName: String { ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 ? "设备控制和数据访问" : "辅助功能" }
     var applicationPath: String { Bundle.main.bundleURL.path }
-    var hasAlwaysHiddenItems: Bool { rules.rules.values.contains { $0.visibility == .alwaysHidden } }
+    var hasAlwaysHiddenItems: Bool { usesNativeAlwaysSection || rules.rules.values.contains { $0.visibility == .alwaysHidden } }
 
     init() {
         defaults = CommandLine.arguments.contains("--demo-items") ? UserDefaults(suiteName: "dev.hdh.MenuTidy.demo")! : .standard
@@ -96,6 +99,7 @@ final class MenuTidyModel: ObservableObject {
         startCollapsed = defaults.bool(forKey: "startCollapsed")
         shortcutEnabled = defaults.bool(forKey: "shortcutEnabled")
         hasCompletedSetup = defaults.bool(forKey: "hasCompletedSetup")
+        usesNativeAlwaysSection = defaults.bool(forKey: "usesNativeAlwaysSection")
         if let data = defaults.data(forKey: "itemRules.v1") {
             do { rules = try JSONDecoder().decode(ItemRuleBook.self, from: data) }
             catch {
@@ -125,7 +129,7 @@ final class MenuTidyModel: ObservableObject {
             MainActor.assumeIsolated {
                 self?.checkAutoCollapse()
                 guard let self else { return }
-                if self.settingsVisible && ProcessInfo.processInfo.systemUptime - self.lastPermissionCheck > 2 {
+                if (self.settingsVisible || self.isArranging) && ProcessInfo.processInfo.systemUptime - self.lastPermissionCheck > 2 {
                     self.refreshPermissions()
                 }
             }
@@ -175,6 +179,8 @@ final class MenuTidyModel: ObservableObject {
             permissionCheckMessage = "macOS 已撤销当前应用的辅助功能访问，请重新授权。"
             workTask?.cancel()
             Task { await access.cancel() }
+            if isArranging { leaveArrangementExpanded() }
+            beforeTemporaryRevealCollapsed = nil
             temporarilyRevealingAll = true
             state.expand()
             if !isApplying { applyState() }
@@ -189,7 +195,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func refreshMenuItems() {
-        guard !isApplying, !isRefreshing else { return }
+        guard !isApplying, !isRefreshing, !isArranging else { return }
         guard accessibilityGranted else { managementError = "先在权限页开启辅助功能权限，再读取菜单栏图标。"; return }
         isRefreshing = true
         managementError = nil
@@ -210,14 +216,14 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func setGroup(id: String, group: ItemVisibility) {
-        guard !isApplying, !isRefreshing, let row = items.first(where: { $0.id == id }), row.canMove, row.isAvailable else { return }
+        guard !isApplying, !isRefreshing, !isArranging, let row = items.first(where: { $0.id == id }), row.canMove, row.isAvailable else { return }
         drafts.set(ItemRule(id: id, name: row.name, bundleIdentifier: row.bundleIdentifier, visibility: group))
         managementError = nil
         rebuildRows()
     }
 
     func forgetItem(id: String) {
-        guard !isApplying, !isRefreshing, !items.contains(where: { $0.id == id && $0.isAvailable }) else { return }
+        guard !isApplying, !isRefreshing, !isArranging, !items.contains(where: { $0.id == id && $0.isAvailable }) else { return }
         rules.remove(id: id)
         drafts.remove(id: id)
         persistRules()
@@ -226,7 +232,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func applyItemRules() {
-        guard !isApplying, !isRefreshing else { return }
+        guard !isApplying, !isRefreshing, !isArranging else { return }
         guard accessibilityGranted else { requestAccessibility(); return }
         refreshEnvironment()
         guard environmentIssue == nil else { managementError = "请先退出其他菜单栏整理器，再应用分类，以免两个工具同时移动图标。"; return }
@@ -242,7 +248,10 @@ final class MenuTidyModel: ObservableObject {
             var failureMessage: String?
             defer {
                 self.isApplying = false
-                if !succeeded { self.temporarilyRevealingAll = true }
+                if !succeeded {
+                    self.beforeTemporaryRevealCollapsed = false
+                    self.temporarilyRevealingAll = true
+                }
                 self.rebuildRows()
                 self.applyState()
             }
@@ -316,6 +325,7 @@ final class MenuTidyModel: ObservableObject {
                 self.hasCompletedSetup = true
                 self.defaults.set(true, forKey: "hasCompletedSetup")
                 self.temporarilyRevealingAll = false
+                self.beforeTemporaryRevealCollapsed = nil
                 self.state.expand()
                 let hasUnknownOrder = self.items.contains {
                     $0.isAvailable && $0.canMove && self.rules.rule(for: $0.id) != nil && self.actualGroups[$0.id] == nil
@@ -422,7 +432,7 @@ final class MenuTidyModel: ObservableObject {
             throw error
         }
         logOwnAnchors(newSnapshots, scanID: scanID)
-        guard !stopping else { return }
+        guard !stopping, !Task.isCancelled, scanID == anchorScanSequence else { throw MenuBarAccessError.cancelled }
         snapshots = newSnapshots
         actualGroups.removeAll()
         if let always = snapshots.first(where: { $0.ownIdentifier == "menu-tidy-always-divider" }),
@@ -500,24 +510,166 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func revealAllTemporarily() {
-        guard !isApplying, !isRefreshing else { return }
+        guard !isApplying, !isRefreshing, !isArranging else { return }
+        if !temporarilyRevealingAll { beforeTemporaryRevealCollapsed = isCollapsed }
         temporarilyRevealingAll = true
         state.expand()
         applyState()
-        managementMessage = "已临时展开全部分组，包含「始终隐藏」。系统空间不足时，请通过系统溢出入口查看图标；结束临时显示后恢复分类。"
-        refreshMenuItems()
+        managementMessage = "已临时展开全部分组，包含「始终隐藏」。系统空间不足时，请通过系统溢出入口查看图标；点击「···」或「结束临时显示」恢复之前的状态。"
     }
-    func endTemporaryReveal() { guard !isApplying, !isRefreshing else { return }; temporarilyRevealingAll = false; applyState() }
+
+    func endTemporaryReveal() {
+        guard !isApplying, !isRefreshing, !isArranging, temporarilyRevealingAll else { return }
+        let shouldCollapse = beforeTemporaryRevealCollapsed == true
+        temporarilyRevealingAll = false
+        beforeTemporaryRevealCollapsed = nil
+        state.expand()
+        applyState()
+        if shouldCollapse { collapseIfSafe() }
+    }
+
     func toggleVisibility() {
         guard !isApplying, !isRefreshing else { return }
-        guard !isArranging else { onShowSettings?(); return }
-        temporarilyRevealingAll = false
+        if isArranging { finishArrangement(); return }
+        if temporarilyRevealingAll { endTemporaryReveal(); return }
         if isCollapsed { state.expand(); applyState() } else { collapseIfSafe() }
     }
-    func beginArrangement() { revealAllTemporarily(); onShowSettings?() }
-    func finishArrangement() { endTemporaryReveal() }
+
+    func beginArrangement() {
+        guard !isApplying, !isRefreshing, !isArranging else { return }
+        refreshPermissions()
+        guard accessibilityGranted else { requestAccessibility(); onShowSettings?(); return }
+        guard !isRefreshing else { return }
+        refreshEnvironment()
+        guard environmentIssue == nil else {
+            managementError = "请先退出其他菜单栏整理器，再使用菜单栏拖拽分组。"
+            onShowSettings?()
+            return
+        }
+        arrangementSequence += 1
+        temporarilyRevealingAll = false
+        beforeTemporaryRevealCollapsed = nil
+        managementError = nil
+        managementMessage = "按住 ⌘ 拖动图标：「常隐」左侧始终隐藏；「常隐」与「收起」之间收起后隐藏；「收起」右侧常驻。拖好后点击「···」完成并收起。"
+        state.beginArrangement()
+        applyState()
+    }
+
+    /// Native dragging belongs to macOS. We only read the settled positions;
+    /// never run synthetic moves or acquire the automated overflow pointer lease.
+    func finishArrangement() {
+        guard isArranging, !isApplying, !isRefreshing else { return }
+        refreshPermissions()
+        guard isArranging, accessibilityGranted else { return }
+        refreshEnvironment()
+        guard environmentIssue == nil else {
+            managementError = "检测到其他菜单栏整理器，请退出它后再完成拖拽。"
+            applyState()
+            return
+        }
+        guard NSEvent.pressedMouseButtons == 0 else {
+            managementError = "请松开鼠标后，再点击「完成拖拽并收起」。"
+            return
+        }
+        let sequence = arrangementSequence
+        isRefreshing = true
+        managementError = nil
+        managementMessage = "正在确认拖拽后的分组位置…"
+        applyState()
+        workTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.arrangementSequence == sequence {
+                    self.isRefreshing = false
+                    self.applyState()
+                }
+            }
+            do {
+                try await Task.sleep(for: .milliseconds(350))
+                try await self.scanNow()
+                let first = try self.manualArrangementObservation()
+                try await Task.sleep(for: .milliseconds(200))
+                try await self.scanNow()
+                let second = try self.manualArrangementObservation()
+                guard !Task.isCancelled, !self.stopping, self.isArranging,
+                      self.arrangementSequence == sequence, AXIsProcessTrusted(),
+                      NSEvent.pressedMouseButtons == 0 else { throw MenuBarAccessError.cancelled }
+                let confirmed = second.values.filter { first[$0.id]?.visibility == $0.visibility }
+                let merged = ManualArrangementRules.reconcile(saved: self.rules, drafts: self.drafts,
+                                                              observed: Array(confirmed))
+                self.rules = merged.saved
+                self.drafts = merged.drafts
+                self.persistRules()
+                // Native placement remains authoritative for the always-hidden
+                // boundary, even for unidentifiable/session-only overflow items.
+                self.usesNativeAlwaysSection = true
+                self.defaults.set(true, forKey: "usesNativeAlwaysSection")
+                self.hasCompletedSetup = true
+                self.defaults.set(true, forKey: "hasCompletedSetup")
+                self.temporarilyRevealingAll = false
+                self.state.finishArrangement(collapse: true)
+                self.rebuildRows()
+                let available = self.items.filter { $0.isAvailable && $0.canMove }.count
+                let unknown = max(0, available - confirmed.count)
+                self.managementMessage = "已按菜单栏位置收起；\(confirmed.count) 个图标分类已确认并同步。" +
+                    (unknown > 0 ? "另有 \(unknown) 个图标位置未确认，保留原有记录；原生分组仍按边界位置隐藏。" : "") +
+                    (self.hasPendingChanges ? "界面中尚未应用的选择已保留。" : "")
+            } catch {
+                guard !Task.isCancelled, !self.stopping, self.arrangementSequence == sequence else { return }
+                self.managementError = "暂时无法确认拖拽结果：\(error.localizedDescription) 请确认从左到右为「常隐」「收起」「···」，空间不足时打开系统溢出区，再重试完成；也可保持全部展开退出。"
+                self.managementMessage = nil
+            }
+        }
+    }
+
+    private func manualArrangementObservation() throws -> [String: ItemRule] {
+        guard NSEvent.pressedMouseButtons == 0 else { throw MenuBarAccessError.cancelled }
+        let ids = try anchorIDs()
+        guard let always = snapshots.first(where: { $0.id == ids.always }),
+              let regular = snapshots.first(where: { $0.id == ids.regular }),
+              let control = snapshots.first(where: { $0.id == ids.control }),
+              always.hasReliableGeometry, regular.hasReliableGeometry, control.hasReliableGeometry,
+              always.frame.maxX <= regular.frame.minX + 1,
+              regular.frame.maxX <= control.frame.minX + 1,
+              abs(always.frame.midY - regular.frame.midY) < 8,
+              abs(control.frame.midY - regular.frame.midY) < 8,
+              sameDisplay(always.frame, regular.frame), sameDisplay(control.frame, regular.frame) else {
+            throw MenuBarAccessError.invalidGeometry
+        }
+        var observed: [String: ItemRule] = [:]
+        let counts = Dictionary(grouping: snapshots, by: \.id).mapValues(\.count)
+        for item in snapshots where item.ownIdentifier == nil && item.canMove &&
+            item.bundleIdentifier != Bundle.main.bundleIdentifier && counts[item.id] == 1 &&
+            item.hasReliableGeometry && abs(item.frame.midY - regular.frame.midY) < 8 &&
+            sameDisplay(item.frame, regular.frame) {
+            guard !item.frame.intersects(always.frame), !item.frame.intersects(regular.frame),
+                  !item.frame.intersects(control.frame) else { continue }
+            let group: ItemVisibility = item.frame.minX < always.frame.minX ? .alwaysHidden :
+                (item.frame.minX < regular.frame.minX ? .collapsible : .visible)
+            observed[item.id] = ItemRule(id: item.id, name: item.name,
+                                        bundleIdentifier: item.bundleIdentifier, visibility: group)
+        }
+        return observed
+    }
+
+    func leaveArrangementExpanded() {
+        guard isArranging else { return }
+        arrangementSequence += 1
+        workTask?.cancel()
+        isRefreshing = false
+        state.finishArrangement(collapse: false)
+        beforeTemporaryRevealCollapsed = false
+        temporarilyRevealingAll = true
+        managementError = nil
+        managementMessage = "已退出拖拽并保持全部展开。原生拖动的位置不会撤销，未确认的分类没有写入规则。"
+        applyState()
+    }
+
     func recoverVisibility() {
         guard !isApplying else { return }
+        if isArranging { leaveArrangementExpanded() }
+        beforeTemporaryRevealCollapsed = false
+        temporarilyRevealingAll = true
         state.expand()
         statusBar?.restoreControlVisibility()
         applyState()
@@ -543,7 +695,7 @@ final class MenuTidyModel: ObservableObject {
 
     private func visibilityDiagnosticIsCurrent(_ sequence: Int) -> Bool {
         !Task.isCancelled && !stopping && !visibilityDiagnosticsStopped && accessibilityGranted &&
-            !isApplying && !isRefreshing && visibilityDiagnosticSequence == sequence
+            !isApplying && !isRefreshing && !isArranging && visibilityDiagnosticSequence == sequence
     }
 
     private func scheduleVisibilityDiagnostics() {
@@ -635,6 +787,7 @@ final class MenuTidyModel: ObservableObject {
     }
     func stop() {
         stopping = true
+        arrangementSequence += 1
         visibilityDiagnosticsStopped = true
         cancelVisibilityDiagnostics()
         workTask?.cancel()

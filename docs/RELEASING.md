@@ -1,6 +1,6 @@
 # 构建与发布
 
-Menu Tidy 0.3.1 采用预发布流程。普通提交和 Pull Request 会生成供检查的构建产物；只有推送与应用版本一致的 `v*` 标签，才会尝试创建 GitHub Release。所有自动发布的版本都标为 **Prerelease**，不会替换稳定版本的 Latest 标记。
+Menu Tidy 0.4.0 采用预发布流程。普通提交和 Pull Request 会生成供检查的构建产物；只有推送与应用版本一致的 `v*` 标签，才会尝试创建 GitHub Release。所有自动发布的版本都标为 **Prerelease**，不会替换稳定版本的 Latest 标记。
 
 工作流定义在 [ci.yml](../.github/workflows/ci.yml)。工作流文件、脚本检查或本地打包成功，都不代表某次 GitHub 构建已经通过；以对应提交的 Actions 运行结果和 Release 中的实际附件为准。
 
@@ -30,12 +30,12 @@ Menu Tidy 0.3.1 采用预发布流程。普通提交和 Pull Request 会生成�
 ./scripts/package.sh
 ```
 
-打包脚本读取 `Resources/Info.plist` 的版本，构建本机原生架构，检查 Mach-O 架构和应用签名，然后产生以下文件。以 0.3.1 的 Apple Silicon 包为例：
+打包脚本读取 `Resources/Info.plist` 的版本，构建本机原生架构，检查 Mach-O 架构和应用签名，然后产生以下文件。以 0.4.0 的 Apple Silicon 包为例：
 
 ```text
-dist/Menu-Tidy-0.3.1-macos-arm64.zip
-dist/Menu-Tidy-0.3.1-macos-arm64.zip.sha256
-dist/Menu-Tidy-0.3.1-macos-arm64.zip.metadata.json
+dist/Menu-Tidy-0.4.0-macos-arm64.zip
+dist/Menu-Tidy-0.4.0-macos-arm64.zip.sha256
+dist/Menu-Tidy-0.4.0-macos-arm64.zip.metadata.json
 ```
 
 Intel runner 产生同名规则的 `x86_64` 文件。当前发布两个独立架构包，不生成 Universal 包。元数据记录源码提交、工作区是否有改动、版本、架构、最低系统版本、工具链、摘要和签名 designated requirement；不要把签名自检等同于 Apple 公证或 Gatekeeper 放行。
@@ -43,7 +43,7 @@ Intel runner 产生同名规则的 `x86_64` 文件。当前发布两个独立架
 应用先由 `ditto` 打包成 zip，再作为一个文件上传，避免直接上传 `.app` 目录时 Actions artifact 丢失可执行文件的权限。下载后可以在文件所在目录检查完整性：
 
 ```sh
-shasum -a 256 -c Menu-Tidy-0.3.1-macos-arm64.zip.sha256
+shasum -a 256 -c Menu-Tidy-0.4.0-macos-arm64.zip.sha256
 ```
 
 SHA-256 用于检查文件内容是否与发布的摘要一致，不替代发行者身份认证。
@@ -70,12 +70,12 @@ SHA-256 用于检查文件内容是否与发布的摘要一致，不替代发行
 3. 确认远端、GitHub 登录身份与发布签名 secrets 配置正确，再运行发布脚本：
 
    ```sh
-   ./scripts/release.sh 0.3.1
+   ./scripts/release.sh 0.4.0
    ```
 
 发布脚本接收不带 `v` 的版本号，要求从已推送到远端的 `main` 分支发布，且当前提交最近一次分支 push 工作流已成功完成。它会校验版本、标签、GitHub 登录状态、工作区及对应 CI 结果，执行完整检查，并创建和推送 annotated tag。不要通过强制移动已有标签来重复发布同一个版本。
 
-标签必须是应用版本前加 `v`，例如 `v0.3.1` 对应 `CFBundleShortVersionString` 的 `0.3.1`。推送标签后，工作流重新测试并构建两个架构，成功后才进入发布任务。
+标签必须是应用版本前加 `v`，例如 `v0.4.0` 对应 `CFBundleShortVersionString` 的 `0.4.0`。推送标签后，工作流重新测试并构建两个架构，成功后才进入发布任务。
 
 ## 发布前的自动校验
 

@@ -16,6 +16,7 @@ struct SettingsView: View {
         var id: String { rawValue }
     }
     private var isBusy: Bool { model.isRefreshing || model.isApplying }
+    private var groupingControlsDisabled: Bool { isBusy || model.isArranging }
     private var filteredItems: [ManagedItemRow] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return model.items.filter { item in
@@ -88,7 +89,9 @@ struct SettingsView: View {
 
     private var statusText: String {
         if model.isApplying { return "正在应用分组…" }
+        if model.isRefreshing && model.isArranging { return "正在确认拖拽分组…" }
         if model.isRefreshing { return "正在读取图标…" }
+        if model.isArranging { return "拖拽整理中" }
         if model.temporarilyRevealingAll { return "全部分组已展开" }
         if !model.accessibilityGranted { return "等待授权" }
         return model.isCollapsed ? "已收起" : "已展开"
@@ -99,11 +102,12 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: 12) {
                     if !model.accessibilityGranted { permissionCard(compact: true) }
+                    if model.isArranging { arrangementNotice } else { arrangementEntry }
                     HStack(spacing: 10) {
                         ForEach(ItemVisibility.allCases, id: \.id) { groupSummary($0) }
                     }
                     managementNotices
-                    if model.temporarilyRevealingAll { temporaryRevealNotice }
+                    if model.temporarilyRevealingAll && !model.isArranging { temporaryRevealNotice }
                     listToolbar
                     itemList
                         .frame(height: max(160, geometry.size.height - (model.accessibilityGranted ? 250 : 450)))
@@ -112,6 +116,89 @@ struct SettingsView: View {
                 .padding(20)
             }
         }
+    }
+
+    private var arrangementEntry: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "cursorarrow.motionlines")
+                .font(.system(size: 19)).foregroundStyle(accent).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("也可以直接拖动菜单栏图标")
+                    .font(.system(size: 12, weight: .medium))
+                Text("进入整理模式后，按住 ⌘ 将图标拖到对应分组。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button("在菜单栏拖拽分组") { model.beginArrangement() }
+                .disabled(isBusy || !model.accessibilityGranted)
+                .help(model.accessibilityGranted
+                    ? "显示菜单栏分组标记；拖动完成后验证分组并收起。"
+                    : "请先在权限页开启辅助功能权限，以便读取并保存拖动后的分组。")
+        }
+        .padding(12)
+        .modifier(SettingsCardStyle())
+    }
+
+    private var arrangementNotice: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "cursorarrow.motionlines")
+                    .foregroundStyle(accent).accessibilityHidden(true)
+                Text(model.isRefreshing ? "正在确认拖拽后的分组" : "按住 ⌘，在菜单栏中拖动图标")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text("整理模式")
+                    .font(.system(size: 10, weight: .medium)).foregroundStyle(accent)
+            }
+            HStack(spacing: 8) {
+                arrangementZone("始终隐藏", color: .orange)
+                arrangementMarker("常隐")
+                arrangementZone("收起后隐藏", color: .secondary)
+                arrangementMarker("收起")
+                arrangementZone("常驻显示", color: accent)
+                Image(systemName: "ellipsis").foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .padding(.horizontal, 10)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("从左到右：始终隐藏、常隐标记、收起后隐藏、收起标记、常驻显示、Menu Tidy 入口。")
+            Text("「常隐」左侧始终隐藏；两个标记之间收起后隐藏；「收起」右侧常驻显示。标记仅在整理时显示。")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                Text("也可点击菜单栏「···」或其右键菜单完成。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                Button("保持展开并退出") { model.leaveArrangementExpanded() }
+                    .disabled(isBusy)
+                    .help("保留已拖动的图标位置，退出整理模式并保持全部分组展开。")
+                Button { model.finishArrangement() } label: {
+                    Text(model.isRefreshing ? "正在确认…" : "完成并收起")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isBusy)
+                .help("只保存连续两次可信扫描确认的分组，再收起。位置未知时不会猜测分类。")
+            }
+        }
+        .padding(12)
+        .background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func arrangementZone(_ title: String, color: Color) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity)
+    }
+
+    private func arrangementMarker(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .semibold))
+            .padding(.horizontal, 7).padding(.vertical, 4)
+            .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
     }
 
     private func groupSummary(_ group: ItemVisibility) -> some View {
@@ -198,7 +285,7 @@ struct SettingsView: View {
             Button { model.refreshMenuItems() } label: {
                 Label("刷新图标", systemImage: "arrow.clockwise")
             }
-            .disabled(isBusy || !model.accessibilityGranted)
+            .disabled(groupingControlsDisabled || !model.accessibilityGranted)
         }
     }
 
@@ -259,14 +346,14 @@ struct SettingsView: View {
             }
             .labelsHidden()
             .frame(width: 125)
-            .disabled(!item.canMove || !item.isAvailable || isBusy || !model.accessibilityGranted)
+            .disabled(!item.canMove || !item.isAvailable || groupingControlsDisabled || !model.accessibilityGranted)
             .help(item.canMove ? "修改后点击「应用分组」才会调整菜单栏。" : item.detail)
             if !item.isAvailable {
                 Button { model.forgetItem(id: item.id) } label: {
                     Image(systemName: "trash").foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
-                .disabled(isBusy)
+                .disabled(groupingControlsDisabled)
                 .help("忘记此图标保存的规则")
                 .accessibilityLabel("忘记\(item.name)的规则")
                 .frame(width: 18)
@@ -319,7 +406,7 @@ struct SettingsView: View {
                 .font(.system(size: 24, weight: .light)).foregroundStyle(.secondary)
             if !model.accessibilityGranted {
                 Text("授权后，在这里管理菜单栏图标").font(.system(size: 12, weight: .medium))
-                Text("无需逐个拖动，在列表中选择显示方式即可。")
+                Text("可以在列表中选择，也可以按住 ⌘ 拖动分组。")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             } else if model.isRefreshing {
                 Text("正在读取菜单栏图标…").font(.system(size: 12))
@@ -340,15 +427,15 @@ struct SettingsView: View {
     private var applyBar: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.hasPendingChanges ? "有未应用的分组更改" : "在列表中选择，再应用到菜单栏")
+                Text(model.isArranging ? "请先完成菜单栏拖拽分组" : (model.hasPendingChanges ? "有未应用的分组更改" : "在列表中选择，再应用到菜单栏"))
                     .font(.system(size: 12, weight: .medium))
-                Text(model.hasPendingChanges ? "当前选择尚未应用，点击右侧按钮后执行。" : "「始终隐藏」仍可在此管理，普通展开不会显示它。")
+                Text(model.isArranging ? "整理期间暂停列表修改，完成后重新读取分组。" : (model.hasPendingChanges ? "当前选择尚未应用，点击右侧按钮后执行。" : "「始终隐藏」仍可在此管理，普通展开不会显示它。"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
             if !model.temporarilyRevealingAll {
                 Button("临时显示全部") { model.revealAllTemporarily() }
-                    .disabled(isBusy)
+                    .disabled(groupingControlsDisabled)
                     .help("展开包括「始终隐藏」在内的全部分组；系统空间不足时，请通过系统溢出入口查看图标。")
             }
             Button { model.applyItemRules() } label: {
@@ -361,7 +448,7 @@ struct SettingsView: View {
             .controlSize(.large)
             .keyboardShortcut(.return, modifiers: .command)
             .help("应用当前分组选择（⌘↩）。整理期间请暂时不要操作鼠标或键盘。")
-            .disabled(isBusy || !model.accessibilityGranted || !model.hasPendingChanges)
+            .disabled(groupingControlsDisabled || !model.accessibilityGranted || !model.hasPendingChanges)
         }
         .padding(.top, 3)
     }
@@ -371,11 +458,11 @@ struct SettingsView: View {
             Image(systemName: "eye").foregroundStyle(accent).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 Text("已临时展开全部分组").font(.system(size: 12, weight: .medium))
-                Text("包含「始终隐藏」。系统空间不足时，部分图标仍在系统溢出区；结束后恢复分类。")
+                Text("包含「始终隐藏」。系统空间不足时仍需系统溢出入口；结束后恢复此前的展开／收起状态。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("结束临时显示") { model.endTemporaryReveal() }.disabled(isBusy)
+            Button("结束临时显示") { model.endTemporaryReveal() }.disabled(groupingControlsDisabled)
         }
         .padding(12)
         .background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
@@ -404,6 +491,7 @@ struct SettingsView: View {
     private var settingsPage: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                if model.isArranging { arrangementNotice }
                 permissionCard(compact: false)
                 VStack(alignment: .leading, spacing: 10) {
                     Text("使用偏好").font(.system(size: 13, weight: .semibold))
