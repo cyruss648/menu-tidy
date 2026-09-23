@@ -210,7 +210,7 @@ final class MenuTidyModel: ObservableObject {
                 guard !Task.isCancelled, !self.stopping else { return }
                 self.managementMessage = self.items.isEmpty
                     ? "没有读到菜单栏项目。请退出全屏、展开其他整理器后重试。"
-                    : "主屏读取到 \(self.items.filter(\.isAvailable).count) 个项目。选择分类后点击「应用分组」；空间不足时，请通过系统溢出入口查看图标。"
+                    : "主屏读取到 \(self.items.filter(\.isAvailable).count) 个项目。选择分类后点击「应用并收起」；空间不足时，请通过系统溢出入口查看图标。"
             } catch { self.managementError = error.localizedDescription }
         }
     }
@@ -251,6 +251,12 @@ final class MenuTidyModel: ObservableObject {
                 if !succeeded {
                     self.beforeTemporaryRevealCollapsed = false
                     self.temporarilyRevealingAll = true
+                    self.state.expand()
+                } else {
+                    self.collapseIfSafe()
+                    if self.isCollapsed {
+                        self.managementMessage = "分类已保存并收起。点击菜单栏「···」可展开「收起后隐藏」的图标。"
+                    }
                 }
                 self.rebuildRows()
                 self.applyState()
@@ -258,7 +264,7 @@ final class MenuTidyModel: ObservableObject {
             do {
                 try await Task.sleep(for: .milliseconds(400))
                 stage = "扫描菜单栏"
-                try await self.scanNow()
+                try await self.scanManagementAnchors()
                 stage = "展开系统溢出区域"
                 _ = try await self.access.revealSystemOverflowForManagement()
                 stage = "展开系统溢出区域后重新扫描"
@@ -280,10 +286,10 @@ final class MenuTidyModel: ObservableObject {
                 stage = "修复定位项后重新扫描"
                 try await self.scanNow()
                 let pending = self.items.filter { $0.isAvailable && $0.canMove && $0.isPending }
-                for row in pending {
+                for (index, row) in pending.enumerated() {
                     stage = "移动「\(row.name)」至\(row.group.title)"
                     try Task.checkCancellation()
-                    self.managementMessage = "正在将「\(row.name)」设为\(row.group.title)…"
+                    self.managementMessage = "正在整理 \(index + 1)/\(pending.count)：将「\(row.name)」设为\(row.group.title)。请暂时不要操作鼠标或键盘。"
                     let anchor = row.group == .alwaysHidden ? anchors.always : (row.group == .collapsible ? anchors.regular : anchors.control)
                     try await self.access.move(id: row.id, before: anchor)
                     stage = "连续两次验证「\(row.name)」的\(row.group.title)分类"
@@ -319,7 +325,7 @@ final class MenuTidyModel: ObservableObject {
             }
 
             if let failureMessage {
-                self.managementError = "\(failureMessage) 已完成的项目已保存，其余更改仍待应用。已临时展开本应用的全部分组；系统空间不足时，请通过系统溢出入口查看图标。"
+                self.managementError = "\(failureMessage) 本次分类尚未全部生效：已确认的项目已保存，其余选择仍待应用。请松开鼠标和键盘后重试「应用并收起」。当前已临时展开全部分组。"
                 self.managementMessage = nil
             } else {
                 self.hasCompletedSetup = true
@@ -347,6 +353,19 @@ final class MenuTidyModel: ObservableObject {
             return matches[0].id
         }
         return try (identifier("menu-tidy-toggle"), identifier("menu-tidy-divider"), identifier("menu-tidy-always-divider"))
+    }
+
+    private func scanManagementAnchors() async throws {
+        // Remote-hosted status views can be absent for one layout snapshot.
+        // Retry reads before acquiring the pointer; never guess a missing anchor.
+        for attempt in 0..<3 {
+            try await scanNow()
+            do { _ = try anchorIDs(); return }
+            catch {
+                if attempt == 2 { throw error }
+                try await Task.sleep(for: .milliseconds(150))
+            }
+        }
     }
 
     private func verify(id: String, group: ItemVisibility, anchors: (control: String, regular: String, always: String)) async throws {

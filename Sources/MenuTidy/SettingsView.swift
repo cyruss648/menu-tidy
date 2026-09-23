@@ -88,7 +88,7 @@ struct SettingsView: View {
     }
 
     private var statusText: String {
-        if model.isApplying { return "正在应用分组…" }
+        if model.isApplying { return "正在应用并收起…" }
         if model.isRefreshing && model.isArranging { return "正在确认拖拽分组…" }
         if model.isRefreshing { return "正在读取图标…" }
         if model.isArranging { return "拖拽整理中" }
@@ -347,7 +347,7 @@ struct SettingsView: View {
             .labelsHidden()
             .frame(width: 125)
             .disabled(!item.canMove || !item.isAvailable || groupingControlsDisabled || !model.accessibilityGranted)
-            .help(item.canMove ? "修改后点击「应用分组」才会调整菜单栏。" : item.detail)
+            .help(item.canMove ? "修改后点击「应用并收起」才会调整菜单栏。" : item.detail)
             if !item.isAvailable {
                 Button { model.forgetItem(id: item.id) } label: {
                     Image(systemName: "trash").foregroundStyle(.secondary)
@@ -441,7 +441,7 @@ struct SettingsView: View {
             Button { model.applyItemRules() } label: {
                 HStack(spacing: 6) {
                     if model.isApplying { ProgressView().controlSize(.small) }
-                    Text(model.isApplying ? "正在应用…" : "应用分组")
+                    Text(model.isApplying ? "正在应用…" : "应用并收起")
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -632,7 +632,7 @@ struct SettingsView: View {
                 }
             }
             Divider()
-            preferenceRow(title: "启动时收起图标", subtitle: model.hasCompletedSetup ? "打开 Menu Tidy 时保持菜单栏整洁。" : "首次应用分组后可启用。") {
+            preferenceRow(title: "启动时收起图标", subtitle: model.hasCompletedSetup ? "打开 Menu Tidy 时保持菜单栏整洁。" : "首次应用并收起后可启用。") {
                 Toggle("启动时收起图标", isOn: $model.startCollapsed)
                     .labelsHidden().toggleStyle(.switch).controlSize(.small)
                     .disabled(!model.hasCompletedSetup)

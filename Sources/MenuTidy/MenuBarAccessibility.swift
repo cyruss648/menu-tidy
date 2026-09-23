@@ -36,6 +36,7 @@ struct MenuBarVisibilityInspection: Sendable {
 
 enum MenuBarAccessError: LocalizedError, Sendable {
     case permission, eventPermission, disappeared, invalidGeometry, differentScreen, rejected, cancelled
+    case dragEventTimedOut, inputStateChanged
     case geometryDetail(String)
     var errorDescription: String? {
         switch self {
@@ -47,6 +48,8 @@ enum MenuBarAccessError: LocalizedError, Sendable {
         case .differentScreen: return "目标与分隔线不在同一块屏幕，无法安全移动。请在主屏菜单栏重试。"
         case .rejected: return "macOS 未接受图标移动。该图标可能被系统固定，或有其他菜单栏工具正在控制它。"
         case .cancelled: return "操作已取消，已释放鼠标并恢复展开。"
+        case .dragEventTimedOut: return "系统未及时处理拖动事件，已停止本次移动并释放鼠标。请稍后重试。"
+        case .inputStateChanged: return "检测到与预期不一致的指针或按键状态，已停止本次移动并释放鼠标；可能有其他输入或菜单栏工具干扰。"
         }
     }
 }
@@ -622,7 +625,7 @@ actor MenuBarAccessibility {
         cancellationRequested = false
         guard AXIsProcessTrusted() else { throw MenuBarAccessError.permission }
         guard CGPreflightPostEventAccess() else { throw MenuBarAccessError.eventPermission }
-        guard parkedPointerIsUntouched() else { throw MenuBarAccessError.cancelled }
+        guard parkedPointerIsUntouched() else { throw MenuBarAccessError.inputStateChanged }
         guard let entry = entries[id], let anchor = entries[anchorID] else { throw MenuBarAccessError.disappeared }
         guard let sourceRect = frame(entry.element) else {
             throw geometryFailure("源图标位置不可读取，请刷新列表后重试。", stage: "source-frame-missing", source: nil, anchor: nil)
@@ -642,7 +645,7 @@ actor MenuBarAccessibility {
         guard physicalModifiers.isEmpty, !CGEventSource.buttonState(.combinedSessionState, button: .left),
               !CGEventSource.buttonState(.combinedSessionState, button: .right) else {
             invalidateOverflowPointerLease()
-            throw MenuBarAccessError.cancelled
+            throw MenuBarAccessError.inputStateChanged
         }
         let source = CGPoint(x: sourceRect.midX, y: sourceRect.midY)
         let destination = CGPoint(x: anchorRect.minX - 3, y: anchorRect.midY)
@@ -706,7 +709,9 @@ actor MenuBarAccessibility {
                 invalidateOverflowPointerLease()
             }
             if mouseHeld {
-                emergencyMouseUp.location = pointer
+                // A posted drag event may still be pending. Releasing at its
+                // unconfirmed destination would itself move the pointer again.
+                emergencyMouseUp.location = CGEvent(source: nil)?.location ?? pointer
                 emergencyMouseUp.flags = commandHeld ? .maskCommand : []
                 emergencyMouseUp.post(tap: .cghidEventTap)
             }
@@ -728,7 +733,7 @@ actor MenuBarAccessibility {
               physicalInputIsIdle() else {
             restorePointer = false
             invalidateOverflowPointerLease()
-            throw MenuBarAccessError.cancelled
+            throw MenuBarAccessError.inputStateChanged
         }
         commandDown.post(tap: .cghidEventTap)
         commandHeld = true
@@ -747,27 +752,38 @@ actor MenuBarAccessibility {
         mouseHeld = true
         try await pause(0.10)
         logDragInput(stage: "after-mouse-down", baseline: inputBaseline, source: source, expected: pointer)
+        // moveEvent can settle after the earlier warp sample. Validate a fresh
+        // position before using it as the first drag step's confirmed old point.
+        let startingFlags = CGEventSource.flagsState(.combinedSessionState)
+        guard let startingPointer = CGEvent(source: nil)?.location,
+              hypot(startingPointer.x - source.x, startingPointer.y - source.y) <= DragArrivalPolicy.positionTolerance,
+              startingFlags.intersection([.maskAlternate, .maskShift, .maskControl]).isEmpty,
+              !CGEventSource.buttonState(.combinedSessionState, button: .right) else {
+            restorePointer = false
+            invalidateOverflowPointerLease()
+            throw MenuBarAccessError.inputStateChanged
+        }
         let dragDeadline = ProcessInfo.processInfo.systemUptime + 2
+        var confirmedPointer = startingPointer
         var dragStep = 0
         for (point, event) in dragEvents {
-            guard !cancellationRequested, ProcessInfo.processInfo.systemUptime < dragDeadline else { throw MenuBarAccessError.cancelled }
-            dragStep += 1
-            pointer = point
-            event.post(tap: .cghidEventTap)
-            try await pause(0.014)
-            let flags = CGEventSource.flagsState(.combinedSessionState)
-            if !flags.intersection([.maskAlternate, .maskShift, .maskControl]).isEmpty {
-                logDragInput(stage: "drag-flags-rejected-step-\(dragStep)", baseline: inputBaseline, source: source, expected: pointer)
+            do {
+                guard !cancellationRequested, !Task.isCancelled else { throw MenuBarAccessError.cancelled }
+                guard ProcessInfo.processInfo.systemUptime < dragDeadline else { throw MenuBarAccessError.dragEventTimedOut }
+                dragStep += 1
+                let arrivalDeadline = min(ProcessInfo.processInfo.systemUptime + DragArrivalPolicy.arrivalTimeout,
+                                          dragDeadline)
+                event.post(tap: .cghidEventTap)
+                confirmedPointer = try await waitForDragArrival(previous: confirmedPointer, target: point,
+                    arrivalDeadline: arrivalDeadline, operationDeadline: dragDeadline,
+                    step: dragStep, baseline: inputBaseline, source: source)
+                pointer = point
+            } catch {
+                // Even a short step may be queued when cancellation occurs. Do
+                // not warp or reuse the overflow lease until its arrival is known.
                 restorePointer = false
                 invalidateOverflowPointerLease()
-                throw MenuBarAccessError.cancelled
-            }
-            if let actualPointer = CGEvent(source: nil)?.location,
-               hypot(actualPointer.x - pointer.x, actualPointer.y - pointer.y) > 12 {
-                logDragInput(stage: "drag-position-rejected-step-\(dragStep)", baseline: inputBaseline, source: source, expected: pointer)
-                restorePointer = false
-                invalidateOverflowPointerLease()
-                throw MenuBarAccessError.cancelled
+                throw error
             }
         }
         upEvent.post(tap: .cghidEventTap)
@@ -800,6 +816,44 @@ actor MenuBarAccessibility {
         }
         Self.logger.error("moveFinalValidation rejected=true sourceBefore=\(String(describing: sourceRect), privacy: .public) anchorBefore=\(String(describing: anchorRect), privacy: .public) sourceAfter=\(String(describing: resultFrame), privacy: .public) anchorAfter=\(String(describing: finalAnchorFrame), privacy: .public) destination=\(String(describing: destination), privacy: .public)")
         throw MenuBarAccessError.rejected
+    }
+
+    private func waitForDragArrival(previous: CGPoint, target: CGPoint, arrivalDeadline: TimeInterval, operationDeadline: TimeInterval,
+                                    step: Int, baseline: InputCounterSnapshot, source: CGPoint) async throws -> CGPoint {
+        // Retain normal drag pacing; only a late event requires additional polls.
+        try await pause(min(0.014, max(0, arrivalDeadline - ProcessInfo.processInfo.systemUptime)))
+        var loggedWaiting = false
+        while true {
+            guard !cancellationRequested, !Task.isCancelled else { throw MenuBarAccessError.cancelled }
+            let now = ProcessInfo.processInfo.systemUptime
+            let actual = CGEvent(source: nil)?.location
+            let flags = CGEventSource.flagsState(.combinedSessionState)
+            let unexpectedInput = !flags.intersection([.maskAlternate, .maskShift, .maskControl]).isEmpty ||
+                CGEventSource.buttonState(.combinedSessionState, button: .right)
+            let decision = DragArrivalPolicy.evaluate(previous: previous, target: target, current: actual,
+                now: now, arrivalDeadline: arrivalDeadline, operationDeadline: operationDeadline,
+                hasUnexpectedInput: unexpectedInput)
+            switch decision {
+            case .arrived:
+                // The policy rejects missing coordinates before returning arrived.
+                guard let actual else { throw MenuBarAccessError.invalidGeometry }
+                return actual
+            case .waiting:
+                if !loggedWaiting {
+                    logDragInput(stage: "drag-arrival-wait-step-\(step)", baseline: baseline, source: source, expected: target)
+                    loggedWaiting = true
+                }
+                try await pause(min(0.005, max(0, arrivalDeadline - now)))
+            case .timedOut:
+                logDragInput(stage: "drag-arrival-timeout-step-\(step)", baseline: baseline, source: source, expected: target)
+                throw MenuBarAccessError.dragEventTimedOut
+            case .unexpectedInput:
+                logDragInput(stage: "drag-input-rejected-step-\(step)", baseline: baseline, source: source, expected: target)
+                throw MenuBarAccessError.inputStateChanged
+            case .unavailablePosition:
+                throw MenuBarAccessError.geometryDetail("无法读取拖动中的鼠标位置，已停止本次移动并释放鼠标。请稍后重试。")
+            }
+        }
     }
 
     private func inputCounterSnapshot() -> InputCounterSnapshot {
