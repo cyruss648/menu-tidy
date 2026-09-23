@@ -1,0 +1,15 @@
+.build/
+.swiftpm/
+.local/
+dist/
+.DS_Store
+*.xcuserstate
+__pycache__/
+*.py[cod]
+*.p12
+*.pfx
+*.key
+*.keychain
+*.keychain-db
+.env
+.env.*

@@ -1,0 +1,29 @@
+minimum_pre_commit_version: '3.2.0'
+default_install_hook_types: [pre-commit, pre-push, commit-msg]
+fail_fast: true
+# Generated apps, local identities and dependency/build trees are never source.
+# Do not exclude .git here: commit-msg receives .git/COMMIT_EDITMSG.
+# The source checker independently excludes Git's internal files.
+exclude: '(^|/)(\.build|\.swiftpm|\.local|dist|node_modules|vendor|__pycache__)(/|$)'
+repos:
+  - repo: local
+    hooks:
+      - id: source-checks
+        name: source syntax, whitespace, secrets and file size
+        entry: scripts/check.sh --static --
+        language: system
+        types: [file]
+        stages: [pre-commit]
+      - id: swift-build-and-test
+        name: Swift warnings-as-errors build and core tests
+        entry: scripts/check.sh --swift
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      - id: conventional-commit
+        name: Conventional Commit message
+        entry: python3 scripts/check-commit-message.py
+        language: system
+        always_run: true
+        stages: [commit-msg]
