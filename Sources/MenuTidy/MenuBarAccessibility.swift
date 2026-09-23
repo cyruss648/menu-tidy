@@ -899,6 +899,44 @@ actor MenuBarAccessibility {
         return .geometryDetail(detail)
     }
     private func sourceMatchesHitTest(_ source: AXUIElement, at point: CGPoint, context: String) -> Bool {
+        var visited: [AXUIElement] = []
+        var matched = false
+        defer {
+            let diagnosticContext = context == "source" || context == "anchor" ||
+                context == "overflow-park" || context.hasPrefix("overflow-park-")
+            if !matched && diagnosticContext {
+                // Read only structural AX attributes after failure. Never log
+                // identifiers, descriptions, titles, or application/window names.
+                func structuralRole(_ node: AXUIElement) -> String {
+                    guard let role = text(node, kAXRoleAttribute) else { return "unavailable" }
+                    guard role.hasPrefix("AX"), role.count <= 64,
+                          role.unicodeScalars.allSatisfy({ CharacterSet.letters.contains($0) }) else {
+                        return "nonstandard"
+                    }
+                    return role
+                }
+                var diagnosticSourcePID: pid_t = 0
+                let sourcePIDResult = AXUIElementGetPid(source, &diagnosticSourcePID)
+                let sourceRole = structuralRole(source)
+                let sourceFrame = frame(source)
+                let sourceFrameDescription = sourceFrame.map { NSStringFromRect($0) } ?? "unavailable"
+                let sourceIdentifier = text(source, kAXIdentifierAttribute)
+                Self.logger.error("hitTestFailure context=\(context, privacy: .public) sourcePID=\(diagnosticSourcePID) sourcePIDError=\(sourcePIDResult.rawValue) sourceRole=\(sourceRole, privacy: .public) sourceFrame=\(sourceFrameDescription, privacy: .public) sourceIdentifierPresent=\(sourceIdentifier != nil) chainCount=\(visited.count)")
+                for (depth, node) in visited.enumerated() {
+                    var nodePID: pid_t = 0
+                    let nodePIDResult = AXUIElementGetPid(node, &nodePID)
+                    let nodeRole = structuralRole(node)
+                    let nodeFrame = frame(node)
+                    let nodeFrameDescription = nodeFrame.map { NSStringFromRect($0) } ?? "unavailable"
+                    let nodeIdentifier = text(node, kAXIdentifierAttribute)
+                    let identifiersEqual = sourceIdentifier != nil && sourceIdentifier == nodeIdentifier
+                    let pidsEqual = sourcePIDResult == .success && nodePIDResult == .success && diagnosticSourcePID == nodePID
+                    let framesEqual = sourceFrame != nil && sourceFrame == nodeFrame
+                    let cfEqual = CFEqual(node, source)
+                    Self.logger.error("hitTestFailure context=\(context, privacy: .public) depth=\(depth) nodePID=\(nodePID) nodePIDError=\(nodePIDResult.rawValue) nodeRole=\(nodeRole, privacy: .public) nodeFrame=\(nodeFrameDescription, privacy: .public) nodeIdentifierPresent=\(nodeIdentifier != nil) identifierEqualsSource=\(identifiersEqual) pidEqualsSource=\(pidsEqual) frameEqualsSource=\(framesEqual) cfEqualsSource=\(cfEqual)")
+                }
+            }
+        }
         var hit: AXUIElement?
         let result = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit)
         guard result == .success else {
@@ -912,11 +950,12 @@ actor MenuBarAccessibility {
                 Self.logger.error("hitTest context=\(context, privacy: .public) stage=no-matching-ancestor point=\(String(describing: point), privacy: .public)")
                 return false
             }
-            if CFEqual(node, source) { return true }
+            visited.append(node)
+            if CFEqual(node, source) { matched = true; return true }
             var nodePID: pid_t = 0
             AXUIElementGetPid(node, &nodePID)
             if let identifier = text(source, kAXIdentifierAttribute), identifier == text(node, kAXIdentifierAttribute),
-               nodePID == sourcePID, frame(node) == frame(source) { return true }
+               nodePID == sourcePID, frame(node) == frame(source) { matched = true; return true }
             hit = element(attribute(node, kAXParentAttribute))
         }
         Self.logger.error("hitTest context=\(context, privacy: .public) stage=ancestor-limit-no-match point=\(String(describing: point), privacy: .public)")
