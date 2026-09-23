@@ -923,9 +923,33 @@ actor MenuBarAccessibility {
                 return
             }
         }
-        let identifier = text(node, kAXIdentifierAttribute) ?? children.prefix(2).compactMap { text($0, kAXIdentifierAttribute) }.first
-        let label = text(node, kAXDescriptionAttribute) ?? text(node, kAXTitleAttribute) ??
-            children.prefix(2).compactMap { text($0, kAXDescriptionAttribute) ?? text($0, kAXTitleAttribute) }.first
+        // Read AX objects directly in this actor. Swift 6.2 diagnoses capturing
+        // these non-Sendable objects in nested nil-coalescing autoclosures.
+        var identifier = text(node, kAXIdentifierAttribute)
+        if identifier == nil {
+            for child in children.prefix(2) {
+                if let childIdentifier = text(child, kAXIdentifierAttribute) {
+                    identifier = childIdentifier
+                    break
+                }
+            }
+        }
+        var label = text(node, kAXDescriptionAttribute)
+        if label == nil {
+            label = text(node, kAXTitleAttribute)
+        }
+        if label == nil {
+            for child in children.prefix(2) {
+                if let childDescription = text(child, kAXDescriptionAttribute) {
+                    label = childDescription
+                    break
+                }
+                if let childTitle = text(child, kAXTitleAttribute) {
+                    label = childTitle
+                    break
+                }
+            }
+        }
         var pid: pid_t = 0
         guard AXUIElementGetPid(node, &pid) == .success, let owner = ownersByPID[pid] else {
             logOwnWalk(node, ownersByPID: ownersByPID, source: source, depth: depth, stage: "filtered:pid-or-owner-unavailable")
