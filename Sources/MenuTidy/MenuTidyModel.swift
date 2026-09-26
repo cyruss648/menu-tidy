@@ -16,6 +16,11 @@ struct ManagedItemRow: Identifiable {
     let canMove: Bool
     let detail: String
     let isPending: Bool
+
+    func replacingGroup(_ group: ItemVisibility) -> ManagedItemRow {
+        ManagedItemRow(id: id, name: name, ownerName: ownerName, bundleIdentifier: bundleIdentifier,
+            icon: icon, group: group, isAvailable: isAvailable, canMove: canMove, detail: detail, isPending: isPending)
+    }
 }
 
 private enum MenuTidyManagementError: LocalizedError {
@@ -65,6 +70,11 @@ final class MenuTidyModel: ObservableObject {
     @Published private(set) var panelItemProgress: String?
     @Published private(set) var panelError: String?
     @Published private(set) var panelActivationError: String?
+    @Published private(set) var activePanelItemID: String?
+    @Published private(set) var trayItemErrors: [String: String] = [:]
+    @Published private var trayPlacementQueue = TrayPlacementQueue()
+    @Published private var trayPlacementErrors: [String: String] = [:]
+    @Published private var trayReconnectIDs: Set<String> = []
     @Published private(set) var iconImageWarning: String?
     @Published private(set) var iconImageWarningDetails: String?
     @Published private(set) var panelImages: [String: NSImage] = [:]
@@ -151,6 +161,10 @@ final class MenuTidyModel: ObservableObject {
     private var panelTask: Task<Void, Never>?
     private var panelIncludesAlwaysHidden = false
     private var panelActivationTask: Task<Void, Never>?
+    private var trayPlacementTask: Task<Void, Never>?
+    private var panelIsPreparingNativeAction = false
+    private var trayConnectionAttempts: [String: ObservedItemGroupHistory.Identity] = [:]
+    private var trayDiscoveryNeeded = false
     private var passiveIconCaptureTask: Task<Void, Never>?
     private var passiveIconCaptureID: UUID?
     private var lastPassiveIconCaptureAttempt = -Double.infinity
@@ -160,12 +174,130 @@ final class MenuTidyModel: ObservableObject {
     private var iconImagePreparationIssues: [String] = []
     private var preparingToTerminate = false
     var isPanelItemOperationRunning: Bool { panelActivationTask != nil }
+    var panelInteractionBusy: Bool {
+        isRecoveringPositions || isApplying || isRefreshing || isArranging || isActivatingPanelItem || preparingToTerminate
+    }
     var panelItems: [ManagedItemRow] {
         items.filter { item in
-            item.isAvailable && item.canMove && HiddenItemsPanelPolicy.includes(
-                savedVisibility: rules.rule(for: item.id)?.visibility,
-                observedVisibility: observedGroupForDisplay(id: item.id),
-                includeAlwaysHidden: panelIncludesAlwaysHidden)
+            item.isAvailable && item.canMove &&
+                (trayPlacementIsInTray(id: item.id) || verifiedPositionGroups[item.id].map { $0 != .visible } == true)
+        }
+    }
+
+    func trayPlacementIsPending(id: String) -> Bool {
+        trayPlacementQueue.desired(id: id) != nil || (isApplying && trayReconnectIDs.contains(id))
+    }
+
+    func trayPlacementIsInTray(id: String) -> Bool {
+        if let desired = trayPlacementQueue.desired(id: id) { return desired }
+        return (items.first { $0.id == id }?.group ?? rules.rule(for: id)?.visibility ?? .visible) != .visible
+    }
+
+    func trayPlacementMessage(id: String) -> String? {
+        if let error = trayPlacementErrors[id] ?? itemApplicationIssues[id] { return error }
+        if items.first(where: { $0.id == id })?.isPending == true && !trayPlacementIsPending(id: id) {
+            return "此图标尚未连接到当前托盘，点击重试即可重新确认。"
+        }
+        return nil
+    }
+
+    func openTraySettings() {
+        closeIconPanel()
+        onShowSettings?()
+    }
+
+    func retryTrayPlacement(id: String) { requestTrayPlacement(id: id, inTray: trayPlacementIsInTray(id: id)) }
+
+    /// User intent is saved immediately; only the newest intent for a source
+    /// enters the serial native mutation path. Displaying the tray never waits
+    /// for this queue, and stale completion cannot consume a newer choice.
+    func requestTrayPlacement(id: String, inTray: Bool) {
+        guard !stopping, !preparingToTerminate, !isRecoveringPositions, !isArranging,
+              let row = items.first(where: { $0.id == id && $0.canMove && $0.isAvailable }),
+              snapshots.filter({ $0.id == id }).count == 1 else { return }
+        let group: ItemVisibility = inTray ? .collapsible : .visible
+        do {
+            try pendingDrafts.set(ItemRule(id: id, name: row.name, bundleIdentifier: row.bundleIdentifier,
+                visibility: group), sessionIdentity: draftSessionIdentity(for: id))
+            persistDrafts()
+            guard draftPersistenceIssue == nil else {
+                trayPlacementErrors[id] = draftPersistenceIssue
+                rebuildRows()
+                return
+            }
+        } catch {
+            trayPlacementErrors[id] = "当前图标身份无法确认，选择未执行。请重新检测后再试。"
+            return
+        }
+        trayPlacementErrors.removeValue(forKey: id)
+        itemApplicationIssues.removeValue(forKey: id)
+        if let identity = draftSessionIdentity(for: id) { trayConnectionAttempts[id] = identity }
+        trayPlacementQueue.enqueue(id: id, desiredInTray: inTray)
+        rebuildRows()
+        drainTrayPlacements()
+    }
+
+    private func drainTrayPlacements() {
+        guard trayPlacementTask == nil else { return }
+        trayPlacementTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.trayPlacementTask = nil }
+            while !Task.isCancelled && !self.stopping && !self.preparingToTerminate {
+                if self.isRecoveringPositions || self.positionRecoveryMessage != nil {
+                    for id in self.trayPlacementQueue.pendingIDs {
+                        self.trayPlacementErrors[id] = "请先完成位置恢复，再重试此图标。"
+                    }
+                    self.trayPlacementQueue.cancelAllPending()
+                    return
+                }
+                // Read-only discovery and an open native menu may finish
+                // before the next mutation. No extra AX operation is launched.
+                if self.panelInteractionBusy {
+                    try? await Task.sleep(for: .milliseconds(80))
+                    continue
+                }
+                guard let request = self.trayPlacementQueue.claimNext() else { return }
+                self.applyItemRules(requestedItemIDs: [request.id], preservePanel: true)
+                if self.isApplying { await self.workTask?.value }
+                let desiredGroup: ItemVisibility = request.desiredInTray ? .collapsible : .visible
+                let confirmed = self.rules.rule(for: request.id)?.visibility == desiredGroup &&
+                    self.actualGroups[request.id] == desiredGroup
+                _ = self.trayPlacementQueue.finish(token: request.token)
+                if self.trayPlacementQueue.desired(id: request.id) == nil {
+                    if confirmed {
+                        self.trayPlacementErrors.removeValue(forKey: request.id)
+                    } else {
+                        self.trayPlacementErrors[request.id] = self.itemApplicationIssues[request.id] ??
+                            self.positionRecoveryMessage ?? self.managementError ??
+                            "未能确认此图标的显示位置。原选择已保留，可重试。"
+                    }
+                }
+                self.rebuildRows()
+            }
+        }
+    }
+
+    /// Reconnect saved intent once per process lifetime. A manual refresh of
+    /// the same processes does not restart rejected work or create a retry loop.
+    private func reconnectDiscoveredTrayItems() {
+        guard usesPositionHiding, hasCompletedSetup, !panelInteractionBusy, trayPlacementTask == nil,
+              accessibilityGranted, menuBarPositionAccessAvailable, positionRecoveryMessage == nil,
+              !stopping, !preparingToTerminate else { return }
+        let ids = items.compactMap { row -> String? in
+            guard row.isAvailable, row.canMove, row.isPending,
+                  let identity = draftSessionIdentity(for: row.id),
+                  trayConnectionAttempts[row.id] != identity else { return nil }
+            trayConnectionAttempts[row.id] = identity
+            return row.id
+        }
+        guard !ids.isEmpty else { return }
+        trayReconnectIDs = Set(ids)
+        Self.diagnosticLogger.notice("tray reconnectStarted=true items=\(ids.count)")
+        applyItemRules(requestedItemIDs: Set(ids), preservePanel: true)
+        let reconnectTask = workTask
+        Task { [weak self] in
+            await reconnectTask?.value
+            self?.trayReconnectIDs = []
         }
     }
     var permissionSettingsName: String { ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 ? "设备控制和数据访问" : "辅助功能" }
@@ -204,6 +336,7 @@ final class MenuTidyModel: ObservableObject {
 
     func cancelCurrentOperation() {
         guard canCancelCurrentOperation, operationState.requestCancellation() else { return }
+        trayPlacementQueue.cancelAllPending()
         managementMessage = "正在停止本次操作并完成必要的位置恢复…"
         // Keep the operation and busy gates until its awaited cleanup returns.
         // A detached cancellation message could reach the AX actor after the
@@ -285,6 +418,10 @@ final class MenuTidyModel: ObservableObject {
                     self.refreshPermissions()
                 }
                 self.schedulePassiveIconCapture()
+                if self.trayDiscoveryNeeded && !self.panelInteractionBusy {
+                    self.trayDiscoveryNeeded = false
+                    self.refreshMenuItems()
+                }
             }
         }
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
@@ -293,6 +430,7 @@ final class MenuTidyModel: ObservableObject {
                     self?.pruneObservedGroupHistory()
                     self?.rebuildRows()
                     self?.refreshEnvironment()
+                    self?.trayDiscoveryNeeded = true
                 }
             })
         }
@@ -431,7 +569,7 @@ final class MenuTidyModel: ObservableObject {
         let wasGranted = accessibilityGranted
         accessibilityGranted = AXIsProcessTrusted()
         screenCaptureGranted = CGPreflightScreenCaptureAccess()
-        if !screenCaptureGranted && isPanelPresented { closeIconPanel() }
+        if !screenCaptureGranted { panelImages = [:] }
         if !accessibilityGranted && wasGranted {
             permissionCheckMessage = "macOS 已撤销当前应用的辅助功能访问，请重新授权。"
             workTask?.cancel()
@@ -520,7 +658,7 @@ final class MenuTidyModel: ObservableObject {
     func refreshMenuItems(collapseWhenFinished: Bool = false, prepareOverflow: Bool = false) {
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         guard accessibilityGranted else { managementError = "先在权限页开启辅助功能权限，再读取菜单栏图标。"; return }
-        closeIconPanel()
+        if prepareOverflow { closeIconPanel() }
         isRefreshing = true
         managementError = nil
         let preparesIconInventory = prepareOverflow && screenCaptureGranted
@@ -542,6 +680,7 @@ final class MenuTidyModel: ObservableObject {
                    !self.settingsVisible, !self.contextMenuVisible, !self.isPanelPresented {
                     self.collapseIfSafe()
                 }
+                if scanSucceeded && !Task.isCancelled { self.reconnectDiscoveredTrayItems() }
             }
             do {
                 await self.passiveIconCaptureTask?.value
@@ -879,18 +1018,27 @@ final class MenuTidyModel: ObservableObject {
         applyState()
     }
 
-    func applyItemRules(onlySavedRules: Bool = false) {
+    func applyItemRules(onlySavedRules: Bool = false, requestedItemIDs: Set<String>? = nil,
+                        preservePanel: Bool = false) {
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
-        closeIconPanel()
+        if !preservePanel { closeIconPanel() }
+        panelTask?.cancel()
+        panelTask = nil
         guard accessibilityGranted else { requestAccessibility(); return }
         refreshEnvironment()
         guard environmentIssue == nil else { managementError = "请先退出其他菜单栏整理器，再应用分类，以免两个工具同时移动图标。"; return }
         let requestedIDs = items.filter {
-            $0.isPending && $0.isAvailable && $0.canMove && (!onlySavedRules || rowDraftIDs[$0.id] == nil)
+            $0.isPending && $0.isAvailable && $0.canMove && (!onlySavedRules || rowDraftIDs[$0.id] == nil) &&
+                (requestedItemIDs == nil || requestedItemIDs?.contains($0.id) == true)
         }.map(\.id)
         let requestedIDSet = Set(requestedIDs)
         guard !requestedIDs.isEmpty else { return }
-        itemApplicationIssues = [:]
+        let fixedRules = requestedItemIDs.map { _ in
+            items.filter { requestedIDSet.contains($0.id) }.map {
+                ItemRule(id: $0.id, name: $0.name, bundleIdentifier: $0.bundleIdentifier, visibility: $0.group)
+            }
+        }
+        for id in requestedIDs { itemApplicationIssues.removeValue(forKey: id) }
         let previousState = state
         let previousTemporaryReveal = temporarilyRevealingAll
         let previousBeforeTemporaryReveal = beforeTemporaryRevealCollapsed
@@ -928,7 +1076,7 @@ final class MenuTidyModel: ObservableObject {
                 await self.passiveIconCaptureTask?.value
                 try self.checkOperationDeadline()
                 stage = "应用后台排序"
-                if !(try await self.applyStoredPositionRules(requestedIDs: requestedIDs)) {
+                if !(try await self.applyStoredPositionRules(requestedIDs: requestedIDs, confirmedRules: fixedRules)) {
                     try await self.access.validateBackgroundMoveSupport(ids: requestedIDs)
                     try self.checkOperationDeadline()
                     self.applyState()
@@ -957,6 +1105,7 @@ final class MenuTidyModel: ObservableObject {
                     stage = "修复定位项后重新扫描"
                     try await self.scanNow()
                     let pending = self.items.filter { requestedIDSet.contains($0.id) && $0.isAvailable && $0.canMove && $0.isPending }
+                        .map { row in row.replacingGroup(fixedRules?.first(where: { $0.id == row.id })?.visibility ?? row.group) }
                     guard Set(pending.map(\.id)) == requestedIDSet else { throw MenuBarAccessError.invalidGeometry }
                     for (index, row) in pending.enumerated() {
                         stage = "移动「\(row.name)」至\(row.group.title)"
@@ -988,8 +1137,12 @@ final class MenuTidyModel: ObservableObject {
                     try await self.scanNow()
                     if failureMessage == nil {
                         stage = "确认全部待应用分类的实际结果"
-                        if self.items.contains(where: {
-                            requestedIDSet.contains($0.id) && self.itemApplicationIssues[$0.id] == nil && $0.isPending
+                        if self.items.contains(where: { row in
+                            guard requestedIDSet.contains(row.id), self.itemApplicationIssues[row.id] == nil else { return false }
+                            if let fixed = fixedRules?.first(where: { $0.id == row.id }) {
+                                return self.actualGroups[row.id] != fixed.visibility
+                            }
+                            return row.isPending
                         }) {
                             throw MenuBarAccessError.rejected
                         }
@@ -1034,7 +1187,7 @@ final class MenuTidyModel: ObservableObject {
     /// macOS 27 owns status-item order in a shared preference store. This path
     /// is selected before the unrelated AXPosition/overflow-action preflight.
     /// A written preference is committed only after fresh native order checks.
-    private func applyStoredPositionRules(requestedIDs: [String]) async throws -> Bool {
+    private func applyStoredPositionRules(requestedIDs: [String], confirmedRules: [ItemRule]? = nil) async throws -> Bool {
         pendingPositionRecoveries = positionStore.pendingTransactions
         if let issue = positionStore.recoveryJournalIssue {
             positionRecoveryMessage = issue
@@ -1047,7 +1200,7 @@ final class MenuTidyModel: ObservableObject {
             throw MenuTidyManagementError.positionApplication("上次布局恢复尚未确认，请先重试恢复或确认保留当前布局。")
         }
         guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 else { return false }
-        if usesPositionHiding { return try await applyPositionHidingRules(requestedIDs: requestedIDs) }
+        if usesPositionHiding { return try await applyPositionHidingRules(requestedIDs: requestedIDs, confirmedRules: confirmedRules) }
         let initialPositions: [String: Double]
         do { initialPositions = try positionStore.readPositions() }
         catch {
@@ -1078,7 +1231,8 @@ final class MenuTidyModel: ObservableObject {
                 let result = try await access.prepareBackgroundPositionCandidates(
                     ids: [id], positions: initialPositions, owners: menuBarScanInputs().owners)
                 guard let candidate = result.first else { throw MenuBarAccessError.disappeared }
-                prepared.append((row, candidate))
+                let fixedGroup = confirmedRules?.first(where: { $0.id == row.id })?.visibility ?? row.group
+                prepared.append((row.replacingGroup(fixedGroup), candidate))
                 leases.append(candidate)
             } catch {
                 if Task.isCancelled || (error as? MenuBarPositionBindingError)?.reason == .cancelled {
@@ -1292,6 +1446,7 @@ final class MenuTidyModel: ObservableObject {
             do {
                 let candidate = try await prepareStablePositionCandidates(ids: [rule.id])
                 scope.preparedCandidates += candidate
+                if rule.visibility != .visible { try await access.validateItemActionSupport(id: rule.id) }
                 try checkPreflight()
                 supportedIDs.insert(rule.id)
             } catch let error as MenuBarPositionBindingError {
@@ -1302,13 +1457,22 @@ final class MenuTidyModel: ObservableObject {
                 issues[rule.id] = error.reason == .ambiguousKey
                     ? "此应用有多个排序记录，无法安全自动匹配。请使用菜单栏 ⌘ 拖拽整理。"
                     : error.localizedDescription
+            } catch let error as MenuBarAccessError {
+                try checkPreflight()
+                switch error {
+                case .actionUnavailable, .actionRejected:
+                    issues[rule.id] = "此图标暂未提供可用的托盘打开接口，未将它隐藏。可保留常驻菜单栏后直接使用。"
+                default: throw error
+                }
             }
         }
         guard let plan = BatchApplicationPlan(requestedIDs: requestedRules.map(\.id),
             supportedIDs: supportedIDs, issues: issues), plan.uninspectedIDs.isEmpty else {
             throw MenuBarAccessError.disappeared
         }
-        itemApplicationIssues = issues
+        // A one-item placement must not erase another source's diagnosis.
+        for rule in requestedRules { itemApplicationIssues.removeValue(forKey: rule.id) }
+        itemApplicationIssues.merge(issues) { _, current in current }
         let actionable = Set(plan.actionableIDs)
         scope.requestedRules = requestedRules.filter { actionable.contains($0.id) }
         // A skipped existing hidden item still needs final proof. Never drop
@@ -2524,7 +2688,6 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func toggleVisibility() {
-        guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing else { return }
         if isArranging { finishArrangement(); return }
         if isPanelPresented { closeIconPanel(); return }
         if temporarilyRevealingAll {
@@ -2535,7 +2698,6 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func controlClicked(event: NSEvent?) {
-        guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing else { return }
         cancelPassiveIconCapture()
         if isArranging {
             if event?.type != .leftMouseDown && event?.type != .rightMouseDown { finishArrangement() }
@@ -2545,7 +2707,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func showIconPanelFromControl() {
-        guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
+        guard !isArranging, !preparingToTerminate else { return }
         showIconPanel(includeAlwaysHidden: false)
     }
 
@@ -2730,26 +2892,25 @@ final class MenuTidyModel: ObservableObject {
     private func showIconPanel(includeAlwaysHidden: Bool) {
         cancelPassiveIconCapture()
         refreshPermissions()
-        guard accessibilityGranted else { requestAccessibility(); onShowSettings?(); return }
-        guard screenCaptureGranted else {
-            panelError = "实时图标栏需要屏幕录制权限，请在「权限与设置」中授权。"
-            onShowSettings?()
-            return
-        }
         closeIconPanel()
         panelIncludesAlwaysHidden = includeAlwaysHidden
         temporarilyRevealingAll = false
         beforeTemporaryRevealCollapsed = nil
-        collapseIfSafe()
+        if !panelInteractionBusy { collapseIfSafe() }
         isPanelPresented = true
         resetIdleTime()
         controlRouter.presentationChanged(isPresented: true)
         panelError = nil
+        // Cache lookup never captures or enumerates windows. Without screen
+        // permission the tray still opens using labelled application icons.
+        panelImages = (try? iconCapture.cachedImages(matching: snapshots)) ?? [:]
         statusBar?.apply(collapsed: true, arranging: false)
         let controller = iconPanel ?? HiddenItemsPanelController()
         iconPanel = controller
         let anchor = snapshots.first { $0.ownIdentifier == "menu-tidy-toggle" }?.frame
         controller.show(model: self, anchor: anchor)
+        Self.diagnosticLogger.notice("tray presented=true items=\(self.panelItems.count) cachedImages=\(self.panelImages.count)")
+        guard screenCaptureGranted, !panelInteractionBusy else { return }
         panelTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -2763,16 +2924,15 @@ final class MenuTidyModel: ObservableObject {
                     self.recomputeIconImageWarning()
                     self.panelUsesCachedImages = self.iconCapture.usesCachedImages
                     self.panelLastCaptureDate = self.iconCapture.lastCacheDate
-                    let missing = ids.count - images.count
-                    self.panelError = missing > 0 ? "有 \(missing) 个图标尚未取得图像。可先收起此图标栏，再展开系统溢出区并保持片刻；应用会在图标可见且身份确认后自动补采。" : nil
+                    self.panelError = nil
                     try await Task.sleep(for: .milliseconds(750))
                 }
             } catch is CancellationError {
                 return
             } catch {
                 guard self.isPanelPresented && !Task.isCancelled else { return }
-                self.panelImages = [:]
-                self.panelError = error.localizedDescription
+                self.panelImages = (try? self.iconCapture.cachedImages(matching: self.snapshots)) ?? [:]
+                self.panelError = nil
             }
         }
     }
@@ -2787,6 +2947,13 @@ final class MenuTidyModel: ObservableObject {
         statusBar?.apply(collapsed: isCollapsed, arranging: isArranging)
     }
 
+    func dismissIconPanelForFocusChange() {
+        // Preparing the target may momentarily transfer focus. Keep its local
+        // progress/error available until a real native presentation is known.
+        guard !panelIsPreparingNativeAction else { return }
+        closeIconPanel()
+    }
+
     /// Use one native AX action. A managed item is temporarily placed beside
     /// our control, then returned to its hidden weight after its presentation closes.
     func activatePanelItem(id: String) {
@@ -2795,8 +2962,12 @@ final class MenuTidyModel: ObservableObject {
               panelItems.contains(where: { $0.id == id }) else { return }
         refreshPermissions()
         guard accessibilityGranted else { requestAccessibility(); return }
-        closeIconPanel()
+        panelTask?.cancel()
+        panelTask = nil
         isActivatingPanelItem = true
+        activePanelItemID = id
+        panelIsPreparingNativeAction = true
+        trayItemErrors.removeValue(forKey: id)
         panelActivationError = nil
         panelError = nil
         panelItemProgress = "正在打开目标图标…"
@@ -2809,16 +2980,23 @@ final class MenuTidyModel: ObservableObject {
             var pressAttempted = false
             var presentationClosed = false
             var canRestore = true
+            var suspendedPanelToken: UUID?
             defer {
                 self.panelActivationTask = nil
                 self.isActivatingPanelItem = false
+                self.activePanelItemID = nil
+                self.panelIsPreparingNativeAction = false
                 self.panelItemProgress = nil
+                if let suspendedPanelToken, self.isPanelPresented, !self.preparingToTerminate, !self.stopping {
+                    self.iconPanel?.restoreAfterNativePresentationFailure(token: suspendedPanelToken)
+                }
                 self.statusBar?.apply(collapsed: self.isCollapsed, arranging: self.isArranging)
             }
             do {
                 await self.passiveIconCaptureTask?.value
                 try Task.checkCancellation()
                 try await self.scanNow()
+                try await self.access.validateItemActionSupport(id: id)
                 if self.usesPositionHiding,
                    let controlID = self.snapshots.first(where: { $0.ownIdentifier == "menu-tidy-toggle" })?.id {
                     candidates = try await self.access.prepareBackgroundPositionCandidates(ids: [id, controlID],
@@ -2834,10 +3012,15 @@ final class MenuTidyModel: ObservableObject {
                         revealVerified = true
                     }
                 }
+                // Yield the popup layer before the source opens its own menu.
+                // Keep the existing tray view so failures can return in place.
+                suspendedPanelToken = self.iconPanel?.suspendForNativePresentation()
                 let baseline = try await self.access.prepareItemPresentation(id: id)
                 pressAttempted = true
                 presentation = try await self.access.pressItem(id: id, baseline: baseline)
                 if let presentation {
+                    self.panelIsPreparingNativeAction = false
+                    self.closeIconPanel()
                     Self.diagnosticLogger.notice("backgroundItemAction presentationConfirmed=true")
                     if revealedKey != nil {
                         // Popovers are often exposed as AXWindow. Moving their
@@ -2948,6 +3131,9 @@ final class MenuTidyModel: ObservableObject {
                 await cleanup.value
             }
             await self.access.discardBackgroundPositionCandidates(candidates)
+            if let error = self.panelActivationError ?? self.positionRecoveryMessage {
+                self.trayItemErrors[id] = error
+            }
         }
     }
 
@@ -3360,7 +3546,8 @@ final class MenuTidyModel: ObservableObject {
     }
     func showSystemLoginSettings() { SMAppService.openSystemSettingsLoginItems() }
     var requiresTerminationCleanup: Bool {
-        preparingToTerminate || isApplying || isRefreshing || isRecoveringPositions || panelActivationTask != nil || passiveIconCaptureTask != nil ||
+        preparingToTerminate || isApplying || isRefreshing || isRecoveringPositions || trayPlacementTask != nil ||
+            panelActivationTask != nil || passiveIconCaptureTask != nil ||
             !positionStore.managedHiddenEntries.isEmpty || !positionStore.pendingTransactions.isEmpty ||
             positionLayoutRecoveryNeeded
     }
@@ -3376,16 +3563,20 @@ final class MenuTidyModel: ObservableObject {
         let previousWork = workTask
         let previousActivation = panelActivationTask
         let previousCapture = passiveIconCaptureTask
+        let previousPlacement = trayPlacementTask
         visibilityDiagnosticsStopped = true
         cancelPassiveIconCapture()
         cancelVisibilityDiagnostics()
         closeIconPanel()
         previousWork?.cancel()
         previousActivation?.cancel()
+        previousPlacement?.cancel()
+        trayPlacementQueue.cancelAllPending()
         await access.cancel()
         await previousWork?.value
         await previousActivation?.value
         await previousCapture?.value
+        await previousPlacement?.value
         do {
             for transaction in positionStore.pendingTransactions {
                 let rollback = try positionStore.rollback(transaction)
@@ -3419,6 +3610,8 @@ final class MenuTidyModel: ObservableObject {
         visibilityDiagnosticsStopped = true
         cancelVisibilityDiagnostics()
         workTask?.cancel()
+        trayPlacementTask?.cancel()
+        trayPlacementQueue.cancelAllPending()
         timer?.invalidate()
         timer = nil
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }

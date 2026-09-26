@@ -110,6 +110,13 @@ final class MenuBarIconCapture {
         })
     }
 
+    /// Synchronous presentation data for the first tray frame. This shares the
+    /// same permission, environment and process-lifetime checks as capture.
+    func cachedImages(matching snapshots: [MenuBarItemSnapshot]) throws -> [String: NSImage] {
+        let ids = try availableCachedImageIDs(matching: snapshots)
+        return cachedIcons.filter { ids.contains($0.key) }.mapValues(\.image)
+    }
+
     func refreshBindings(snapshots: [MenuBarItemSnapshot]) async throws {
         guard #available(macOS 14.0, *) else { throw CaptureError.unsupportedSystem }
         try validateCaptureState()

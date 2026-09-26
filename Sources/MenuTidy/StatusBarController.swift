@@ -152,15 +152,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         } else {
             stateDescription = collapsed ? "已收起" : "已展开"
         }
-        let actionDescription: String
-        if model?.isApplying == true || model?.isRefreshing == true || model?.isActivatingPanelItem == true {
-            actionDescription = "请稍候"
-        } else {
-            actionDescription = arranging ? "点击完成拖拽并收起" :
-                (model?.isPanelPresented == true ? "点击收起图标栏" : "点击展开图标栏")
-        }
-        let controlDescription = "Menu Tidy「···」 · \(stateDescription)"
-        let symbol = arranging ? "arrow.left.and.right" : (model?.isPanelPresented == true ? "chevron.up" : "ellipsis")
+        let actionDescription = arranging ? "点击完成拖拽并收起" :
+            (model?.isPanelPresented == true ? "点击收起托盘" : "点击展开托盘")
+        let controlDescription = "Menu Tidy 托盘 · \(stateDescription)"
+        let symbol = arranging ? "arrow.left.and.right" : (model?.isPanelPresented == true ? "chevron.up" : "chevron.down")
         control.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: controlDescription)
         control.button?.image?.isTemplate = true
         control.button?.toolTip = "\(controlDescription) · \(actionDescription) · 右键打开管理菜单"
@@ -361,16 +356,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 menu.addItem(error)
             }
         } else {
-            addItem(menu, title: model?.isPanelPresented == true ? "收起图标栏" : "展开隐藏图标栏", action: #selector(toggle),
-                    enabled: !busy)
-            addItem(menu, title: "在菜单栏拖拽分组", action: #selector(arrange), enabled: !busy)
+            addItem(menu, title: model?.isPanelPresented == true ? "收起托盘" : "打开托盘", action: #selector(toggle))
         }
-        addItem(menu, title: !usesPanelVisibility && model?.temporarilyRevealingAll == true
-                    ? "结束临时显示" : "临时显示全部（含始终隐藏）",
-                action: #selector(revealAll), enabled: !busy && !isArranging)
-        addItem(menu, title: usesPanelVisibility ? "收起图标栏" : "收起现有菜单栏分组",
-                action: #selector(collapseNativeGroups), enabled: !busy && !isArranging)
-        addItem(menu, title: "管理菜单栏图标…", action: #selector(settings))
+        if !usesPanelVisibility {
+            addItem(menu, title: "收起现有菜单栏分组", action: #selector(collapseNativeGroups), enabled: !busy && !isArranging)
+        }
+        addItem(menu, title: "选择常驻与托盘图标…", action: #selector(settings))
         menu.addItem(.separator())
         addItem(menu, title: "设置…", action: #selector(settings), key: ",")
         addItem(menu, title: "检查更新…", action: #selector(checkForUpdates),

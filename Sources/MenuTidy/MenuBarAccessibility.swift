@@ -1019,6 +1019,18 @@ actor MenuBarAccessibility {
 
     /// Invoke the original item's accessible action without opening the native
     /// hidden section or sending a click to an unverified screen coordinate.
+    func validateItemActionSupport(id: String) throws {
+        try Task.checkCancellation()
+        guard AXIsProcessTrusted(), let entry = entries[id], entry.snapshot.canMove,
+              liveOwnerMatches(entry) else { throw MenuBarAccessError.disappeared }
+        let actions = copyAXActions(entry.element)
+        guard actions.error == .success else { throw MenuBarAccessError.actionRejected }
+        guard actions.names.contains(kAXPressAction) || actions.names.contains(kAXShowMenuAction) else {
+            throw MenuBarAccessError.actionUnavailable
+        }
+        guard liveOwnerMatches(entry) else { throw MenuBarAccessError.disappeared }
+    }
+
     @discardableResult
     func pressItem(id: String, baseline suppliedBaseline: MenuBarPresentationBaseline? = nil) async throws -> MenuBarItemPresentation? {
         let baseline = try suppliedBaseline ?? prepareItemPresentation(id: id)
