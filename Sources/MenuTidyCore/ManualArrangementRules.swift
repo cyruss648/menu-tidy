@@ -28,4 +28,27 @@ public enum ManualArrangementRules {
         }
         return (updatedSaved, updatedDrafts)
     }
+
+    /// A native arrangement has already established its own intent. GUI drafts
+    /// may still be displayed, but cannot replace those observed categories.
+    /// Require complete, unique current rows before sending either intent to
+    /// the background backend; missing or changed ownership remains unknown.
+    public static func applicationRules(
+        requestedIDs: [String], displayed: [ItemRule], confirmed: [ItemRule]? = nil
+    ) -> [ItemRule]? {
+        let requested = Set(requestedIDs)
+        guard !requested.isEmpty, requested.count == requestedIDs.count,
+              displayed.count == requested.count,
+              Set(displayed.map(\.id)) == requested else { return nil }
+        let available = Dictionary(uniqueKeysWithValues: displayed.map { ($0.id, $0) })
+        let intended = confirmed ?? displayed
+        guard intended.count == requested.count,
+              Set(intended.map(\.id)) == requested,
+              intended.allSatisfy({ rule in
+                  available[rule.id]?.bundleIdentifier == rule.bundleIdentifier
+              }) else { return nil }
+        let byID = Dictionary(uniqueKeysWithValues: intended.map { ($0.id, $0) })
+        return requestedIDs.compactMap { byID[$0] }
+    }
+
 }

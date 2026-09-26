@@ -40,6 +40,42 @@ final class ItemManagementTests: XCTestCase {
         }
     }
 
+    func testLayoutManagementEndsAtThePreviouslySelectedPhysicalSection() {
+        // A read or a window reopen uses the stored visibility. Only actual
+        // layout management overrides it, and ending that override restores it.
+        for initiallyCollapsed in [false, true] {
+            var state = VisibilityState()
+            if initiallyCollapsed { state.collapse() }
+            for managesLayout in [false, true, true, false, false] {
+                let result = MenuBarSectionPolicy.separatorVisibility(
+                    isCollapsed: state.mode == .collapsed,
+                    hasAlwaysHidden: true,
+                    isManaging: managesLayout,
+                    temporarilyRevealingAll: false
+                )
+                XCTAssertEqual(result.collapseRegular, !managesLayout && initiallyCollapsed)
+                XCTAssertEqual(result.collapseAlways, !managesLayout && !initiallyCollapsed)
+                XCTAssertEqual(state.mode, initiallyCollapsed ? .collapsed : .expanded)
+            }
+        }
+    }
+
+    func testTemporaryRevealCanOutliveLayoutManagementAndThenRestoreTheSelectedBoundary() {
+        for initiallyCollapsed in [false, true] {
+            for (managing, revealing) in [(true, false), (true, true), (false, true), (false, false)] {
+                let result = MenuBarSectionPolicy.separatorVisibility(
+                    isCollapsed: initiallyCollapsed,
+                    hasAlwaysHidden: true,
+                    isManaging: managing,
+                    temporarilyRevealingAll: revealing
+                )
+                XCTAssertEqual(result.collapseRegular, !managing && !revealing && initiallyCollapsed)
+                XCTAssertEqual(result.collapseAlways, !managing && !revealing && !initiallyCollapsed)
+                XCTAssertFalse(result.collapseRegular && result.collapseAlways)
+            }
+        }
+    }
+
     func testUpdatingAnItemReplacesItsRuleWithoutLosingOtherItems() {
         let first = ItemRule(id: "app.one.status", name: "旧名称", bundleIdentifier: "app.one", visibility: .visible)
         let other = ItemRule(id: "app.two.status", name: "第二个应用", bundleIdentifier: "app.two", visibility: .alwaysHidden)

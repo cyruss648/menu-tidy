@@ -6,16 +6,7 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 release_version="$1"
-python3 - "$release_version" <<'PY'
-import plistlib,re,sys
-from pathlib import Path
-version = sys.argv[1]
-if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version):
-    raise SystemExit('Version must be semver without a v prefix')
-info = plistlib.loads(Path('Resources/Info.plist').read_bytes())
-if info['CFBundleShortVersionString'] != version:
-    raise SystemExit('Version does not match Resources/Info.plist')
-PY
+python3 scripts/release-preflight.py --tag "v$release_version" --local-only
 gh auth status --hostname github.com >/dev/null
 if [ -n "$(git status --porcelain)" ]; then
   echo 'Commit all changes before releasing.' >&2
@@ -47,6 +38,11 @@ fi
 release_notes="$(mktemp)"
 trap 'rm -f "$release_notes"' EXIT
 python3 scripts/release-notes.py "$release_tag" > "$release_notes"
-git tag -a "$release_tag" -F "$release_notes"
+python3 scripts/release-preflight.py --tag "$release_tag"
+if [ -n "$(git status --porcelain)" ] || [ "$(git rev-parse HEAD)" != "$release_head" ] || [ "$(git branch --show-current)" != main ]; then
+  echo 'The checkout changed during release checks; restart the release from a clean, verified main commit.' >&2
+  exit 1
+fi
+git tag -a "$release_tag" "$release_head" -F "$release_notes"
 git push origin "refs/tags/$release_tag"
-printf 'Tag pushed: %s. GitHub Actions will build and publish the preview release.\n' "$release_tag"
+printf 'Tag pushed: %s. GitHub Actions will build and publish to the matching stable or preview channel.\n' "$release_tag"

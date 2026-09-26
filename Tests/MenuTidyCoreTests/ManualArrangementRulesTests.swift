@@ -135,4 +135,51 @@ final class ManualArrangementRulesTests: XCTestCase {
         XCTAssertEqual(reordered.saved, once.saved)
         XCTAssertEqual(reordered.drafts, once.drafts)
     }
+
+    func testBackendKeepsObservedIntentWhenGUIStillDisplaysDifferentDraft() {
+        let previous = rule("item.one", .visible)
+        let draft = rule(previous.id, .alwaysHidden)
+        let observed = rule(previous.id, .collapsible)
+        let reconciled = ManualArrangementRules.reconcile(saved: book(previous), drafts: book(draft), observed: [observed])
+
+        let targets = ManualArrangementRules.applicationRules(requestedIDs: [previous.id],
+            displayed: Array(reconciled.drafts.rules.values), confirmed: [observed])
+
+        XCTAssertEqual(targets, [observed])
+        XCTAssertEqual(reconciled.saved.rule(for: previous.id), observed)
+        XCTAssertEqual(reconciled.drafts.rule(for: previous.id), draft)
+    }
+
+    func testExplicitGUIApplyStillUsesDisplayedDraftAndRequestedOrder() {
+        let first = rule("item.first", .collapsible)
+        let second = rule("item.second", .alwaysHidden)
+        XCTAssertEqual(ManualArrangementRules.applicationRules(requestedIDs: [second.id, first.id],
+            displayed: [first, second]), [second, first])
+    }
+
+    func testConfirmedApplicationCannotGuessMissingOrDuplicateTargets() {
+        let first = rule("item.first", .collapsible)
+        let second = rule("item.second", .alwaysHidden)
+        let ids = [first.id, second.id]
+        XCTAssertNil(ManualArrangementRules.applicationRules(requestedIDs: ids,
+            displayed: [first, second], confirmed: [first]))
+        XCTAssertNil(ManualArrangementRules.applicationRules(requestedIDs: ids,
+            displayed: [first, second], confirmed: [first, first]))
+        XCTAssertNil(ManualArrangementRules.applicationRules(requestedIDs: ids,
+            displayed: [first, first], confirmed: [first, second]))
+        XCTAssertNil(ManualArrangementRules.applicationRules(requestedIDs: [first.id, first.id],
+            displayed: [first], confirmed: [first]))
+    }
+
+    func testConfirmedApplicationRejectsChangedOwnerButAllowsRenamedRow() {
+        let confirmed = rule("session:one", .collapsible)
+        let renamedDraft = rule(confirmed.id, .alwaysHidden, name: "新名称")
+        XCTAssertEqual(ManualArrangementRules.applicationRules(requestedIDs: [confirmed.id],
+            displayed: [renamedDraft], confirmed: [confirmed]), [confirmed])
+        let differentOwner = ItemRule(id: confirmed.id, name: confirmed.name,
+            bundleIdentifier: "example.other", visibility: .collapsible)
+        XCTAssertNil(ManualArrangementRules.applicationRules(requestedIDs: [confirmed.id],
+            displayed: [differentOwner], confirmed: [confirmed]))
+    }
+
 }

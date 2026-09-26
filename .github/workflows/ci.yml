@@ -2,7 +2,7 @@ name: Build and release
 
 on:
   push:
-    branches: ['**']
+    branches: ['**', '!updates']
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -76,6 +76,22 @@ jobs:
       - name: Build and package native application
         run: ./scripts/package.sh
 
+      - name: Fetch pinned Sparkle publishing tools
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.validate_signing)
+        run: python3 scripts/fetch-sparkle-tools.py --output "$RUNNER_TEMP/sparkle-tools"
+
+      - name: Sign and independently verify the update archive
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.validate_signing)
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          # Manual signing validation uses the app's version, never the branch name.
+          UPDATE_TAG="$(python3 -c 'import plistlib; print("v" + plistlib.load(open("Resources/Info.plist", "rb"))["CFBundleShortVersionString"])')"
+          python3 scripts/generate-update-feed.py sign \
+            --artifacts dist --arch "$EXPECTED_ARCH" --tag "$UPDATE_TAG" \
+            --commit "$RELEASE_COMMIT" --sign-tool "$RUNNER_TEMP/sparkle-tools/bin/sign_update"
+
       - name: Upload application and verification files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -84,6 +100,7 @@ jobs:
             dist/*.zip
             dist/*.zip.sha256
             dist/*.zip.metadata.json
+            dist/*.zip.eddsa.json
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -93,16 +110,22 @@ jobs:
         run: python3 scripts/ci-signing.py cleanup
 
   release:
-    name: Publish verified prerelease
+    name: Publish signed release and update feeds
     needs: build
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    runs-on: macos-15
+    timeout-minutes: 15
+    # Different tags must not concurrently read and overwrite the updates branch.
+    concurrency:
+      group: menu-tidy-publish-updates
+      cancel-in-progress: false
     permissions:
       contents: write
     env:
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_COMMIT: ${{ github.sha }}
+      GH_TOKEN: ${{ github.token }}
+      FEED_DIRECTORY: ${{ runner.temp }}/menu-tidy-updates
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -116,72 +139,62 @@ jobs:
           path: artifacts
           digest-mismatch: error
 
-      - name: Verify complete release payload and provenance
+      - name: Fetch pinned Sparkle publishing tools
+        run: python3 scripts/fetch-sparkle-tools.py --output "$RUNNER_TEMP/sparkle-tools"
+
+      - name: Read the latest published update channels
         run: |
+          gh auth setup-git
+          git init "$FEED_DIRECTORY"
+          git -C "$FEED_DIRECTORY" remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          # Status 2 specifically means the branch does not exist. Network or auth
+          # failures must not be mistaken for the first release.
+          set +e
+          git -C "$FEED_DIRECTORY" ls-remote --exit-code origin refs/heads/updates > "$RUNNER_TEMP/feed-ref"
+          ref_status=$?
+          set -e
+          if [ "$ref_status" -eq 0 ]; then
+            git -C "$FEED_DIRECTORY" fetch --depth=1 origin refs/heads/updates
+            git -C "$FEED_DIRECTORY" checkout -b updates FETCH_HEAD
+          elif [ "$ref_status" -eq 2 ]; then
+            git -C "$FEED_DIRECTORY" checkout --orphan updates
+          else
+            echo 'Cannot read the updates branch; refusing publication.' >&2
+            exit 1
+          fi
+
+      - name: Verify payload and prepare signed feeds without publishing
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          python3 scripts/release-notes.py "$RELEASE_TAG" > "$RUNNER_TEMP/release-notes.md"
+          python3 scripts/generate-update-feed.py generate \
+            --artifacts artifacts --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" \
+            --sign-tool "$RUNNER_TEMP/sparkle-tools/bin/sign_update" \
+            --feeds "$FEED_DIRECTORY" --notes "$RUNNER_TEMP/release-notes.md"
           python3 - <<'PY'
-          import hashlib
-          import json
           import os
           import plistlib
-          import re
           from pathlib import Path
-
-          info = plistlib.loads(Path('Resources/Info.plist').read_bytes())
-          version = info['CFBundleShortVersionString']
-          if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version):
-              raise SystemExit('Invalid application version')
-          if os.environ['RELEASE_TAG'] != 'v' + version:
-              raise SystemExit('Tag and application version differ')
-          directory = Path('artifacts')
-          expected = set()
-          requirements = []
-          for arch in ('arm64', 'x86_64'):
-              name = f'Menu-Tidy-{version}-macos-{arch}.zip'
-              expected.update((name, name + '.sha256', name + '.metadata.json'))
-              archive = directory / name
-              checksum = (directory / (name + '.sha256')).read_text().strip().split(maxsplit=1)
-              digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-              if checksum != [digest, name]:
-                  raise SystemExit(f'Archive checksum or checksum filename mismatch: {name}')
-              metadata = json.loads((directory / (name + '.metadata.json')).read_text())
-              required = {
-                  'version': version,
-                  'build': info['CFBundleVersion'],
-                  'architecture': arch,
-                  'minimumMacOS': info['LSMinimumSystemVersion'],
-                  'bundleIdentifier': info['CFBundleIdentifier'],
-                  'commit': os.environ['RELEASE_COMMIT'],
-                  'archive': name,
-                  'sha256': digest,
-              }
-              if any(metadata.get(key) != value for key, value in required.items()):
-                  raise SystemExit(f'Package metadata does not match this release: {name}')
-              if metadata.get('dirty') is not False:
-                  raise SystemExit(f'Package was not built from a clean checkout: {name}')
-              requirement = metadata.get('designatedRequirement', '')
-              if not re.search(r'certificate leaf = H"[0-9A-Fa-f]{40}"', requirement):
-                  raise SystemExit(f'Package lacks a certificate-pinned signing identity: {name}')
-              requirements.append(requirement)
-          if requirements[0] != requirements[1]:
-              raise SystemExit('The two architectures do not have the same signing requirement')
-          if {path.name for path in directory.iterdir()} != expected:
-              raise SystemExit('Release payload contains missing or unexpected files')
-          print(f'Verified both architectures for {version} at {os.environ["RELEASE_COMMIT"]}')
+          version = plistlib.loads(Path('Resources/Info.plist').read_bytes())['CFBundleShortVersionString']
+          channel = 'preview' if '-' in version else 'stable'
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('UPDATE_CHANNEL=' + channel + '\n')
           PY
-          (cd artifacts && sha256sum --check ./*.zip.sha256)
-          python3 scripts/release-notes.py "$RELEASE_TAG" > "$RUNNER_TEMP/release-notes.md"
-          test -s "$RUNNER_TEMP/release-notes.md"
 
-      - name: Create complete draft, then publish as prerelease
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Create complete draft, then publish the appropriate release channel
         run: |
           if gh release view "$RELEASE_TAG" --json tagName > /dev/null 2>&1; then
             echo "A release for $RELEASE_TAG already exists; refusing to replace it." >&2
             exit 1
           fi
+          if [ "$UPDATE_CHANNEL" = preview ]; then
+            release_flags=(--prerelease --latest=false)
+          else
+            release_flags=(--latest)
+          fi
           gh release create "$RELEASE_TAG" artifacts/* \
-            --verify-tag --draft --prerelease --latest=false \
+            --verify-tag --draft "${release_flags[@]}" \
             --title "Menu Tidy $RELEASE_TAG" \
             --notes-file "$RUNNER_TEMP/release-notes.md"
           gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease,assets \
@@ -194,8 +207,18 @@ jobs:
           expected = {path.name: path.stat().st_size for path in Path('artifacts').iterdir()}
           assets = {asset['name']: asset['size'] for asset in release['assets']}
           if (release['tagName'] != os.environ['RELEASE_TAG']
-                  or release['isDraft'] is not True or release['isPrerelease'] is not True
+                  or release['isDraft'] is not True
+                  or release['isPrerelease'] != (os.environ['UPDATE_CHANNEL'] == 'preview')
                   or assets != expected or len(release['assets']) != len(expected)):
               raise SystemExit('Draft release is incomplete; refusing to publish')
           PY
-          gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
+          gh release edit "$RELEASE_TAG" --draft=false "${release_flags[@]}"
+
+      - name: Advance feeds only after release assets are public
+        run: |
+          git -C "$FEED_DIRECTORY" config user.name 'github-actions[bot]'
+          git -C "$FEED_DIRECTORY" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C "$FEED_DIRECTORY" add -- "$UPDATE_CHANNEL/appcast-arm64.xml" "$UPDATE_CHANNEL/appcast-x86_64.xml"
+          git -C "$FEED_DIRECTORY" commit -m "chore(updates): publish $RELEASE_TAG"
+          # No force push: an unexpected external writer causes a safe failure.
+          git -C "$FEED_DIRECTORY" push origin HEAD:refs/heads/updates

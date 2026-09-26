@@ -79,6 +79,60 @@ final class MenuItemIdentityTests: XCTestCase {
         XCTAssertEqual(try decode(identity), ["example.app", "stable-item-42"])
     }
 
+    func testPositionIdentityPreservesExactKeyWithoutProcessOrDisplayIdentity() throws {
+        let makeIdentity: (String?, String) -> String? = MenuItemIdentity.persistentPositionID
+        let key = "status:example.app::primary"
+        let first = try XCTUnwrap(makeIdentity("example.app", key))
+        XCTAssertEqual(first, makeIdentity("example.app", key))
+        XCTAssertNotEqual(first, makeIdentity("example.app", "status:example.app::replacement"))
+        XCTAssertEqual(MenuItemIdentity.positionKey(inPersistentID: first, bundleIdentifier: "example.app"), key)
+        XCTAssertEqual(try decode(first), ["menu-bar-position-v1", "example.app", key])
+    }
+
+    func testPositionIdentityCannotCollideWithExistingAccessibilityIdentity() throws {
+        let key = "status:example.app::primary"
+        let position = try XCTUnwrap(MenuItemIdentity.persistentPositionID(bundleIdentifier: "example.app", positionKey: key))
+        let accessibility = try XCTUnwrap(MenuItemIdentity.persistentID(bundleIdentifier: "example.app",
+            accessibilityIdentifier: key, occurrenceCount: 1))
+        XCTAssertNotEqual(position, accessibility)
+        XCTAssertNil(MenuItemIdentity.positionKey(inPersistentID: accessibility, bundleIdentifier: "example.app"))
+        XCTAssertNil(MenuItemIdentity.positionKey(inPersistentID: "session:42:old", bundleIdentifier: "example.app"))
+    }
+
+    func testPositionIdentityRejectsMissingOrInexactOwnerAndEmptyAutosaveName() {
+        for (bundle, key) in [(nil as String?, "status:example.app::primary"),
+                              ("", "status:::primary"),
+                              ("example.app", "status:example.other::primary"),
+                              ("example.app", "status:example.application::primary"),
+                              ("example.app", "status:example.app::"),
+                              ("example.app", "primary")] {
+            XCTAssertNil(MenuItemIdentity.persistentPositionID(bundleIdentifier: bundle, positionKey: key))
+        }
+    }
+
+    func testRetainedPositionIdentityRejectsDifferentOwnerUnsupportedVersionAndNoncanonicalData() throws {
+        let identity = try XCTUnwrap(MenuItemIdentity.persistentPositionID(bundleIdentifier: "example.app",
+            positionKey: "status:example.app::primary"))
+        XCTAssertNil(MenuItemIdentity.positionKey(inPersistentID: identity, bundleIdentifier: "example.other"))
+        XCTAssertNil(MenuItemIdentity.positionKey(inPersistentID: identity, bundleIdentifier: nil))
+        for invalid in [identity.replacingOccurrences(of: "menu-bar-position-v1", with: "menu-bar-position-v2"),
+                        "item: [\"menu-bar-position-v1\",\"example.app\",\"status:example.app::primary\"]",
+                        "item:[\"menu-bar-position-v1\",\"example.app\"]",
+                        "item:not-json"] {
+            XCTAssertNil(MenuItemIdentity.positionKey(inPersistentID: invalid, bundleIdentifier: "example.app"))
+        }
+    }
+
+    func testPositionIdentityKeepsPunctuationAndUnicodeKeysExact() throws {
+        let bundle = "example.菜单栏"
+        let key = "status:\(bundle)::状态 🛰️ / café / cafe\u{301} / \"quoted\" \\ value"
+        let identity = try XCTUnwrap(MenuItemIdentity.persistentPositionID(bundleIdentifier: bundle, positionKey: key))
+        XCTAssertEqual(MenuItemIdentity.positionKey(inPersistentID: identity, bundleIdentifier: bundle), key)
+        let other = try XCTUnwrap(MenuItemIdentity.persistentPositionID(bundleIdentifier: bundle,
+            positionKey: key + "::another"))
+        XCTAssertNotEqual(identity, other)
+    }
+
     private func decode(_ identity: String) throws -> [String] {
         try JSONDecoder().decode([String].self, from: Data(identity.dropFirst("item:".count).utf8))
     }

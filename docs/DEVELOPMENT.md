@@ -1,6 +1,6 @@
 # 开发指南
 
-Menu Tidy 使用 Swift 6、SwiftUI、AppKit 和 Swift Package Manager。应用目标声明 macOS 13 起可部署；声明的最低版本、CI 构建平台与真实交互验收是不同范围，请分别查看配置和[验收记录](README.md#验收记录)。
+Menu Tidy 使用 Swift 6、SwiftUI、AppKit 和 Swift Package Manager，自更新依赖固定为 Sparkle 2.10.0。应用目标声明 macOS 13 起可部署；声明的最低版本、CI 构建平台与真实交互验收是不同范围，请分别查看配置和[验收记录](README.md#验收记录)。
 
 ## 环境准备
 
@@ -111,6 +111,18 @@ CODE_SIGN_IDENTITY=- ./scripts/build.sh release
 
 签名验证、辅助功能授权和 Apple 公证是不同事项。固定本地身份便于本机调试，不等同于 Developer ID 分发或公证。不要把本地开发私钥或钥匙串上传到公开仓库；公开发布包的签名与公证状态应在 Release 中说明。
 
+## 自更新开发
+
+应用通过共享的 `UpdateController` 接入 Sparkle 标准更新界面，设置与菜单不能各自创建更新器。默认自动检查，自动下载并在退出时安装默认关闭；后续偏好交由 Sparkle 持久化，不在每次启动时重置。演示和诊断入口不启动更新服务。
+
+SwiftPM 负责解析固定版本，应用打包还必须嵌入 `Sparkle.framework`，保留符号链接与可执行权限，并配置 `@executable_path/../Frameworks`。签名脚本按内部 helper、framework、外层应用的顺序签名；只编译可执行文件不能替代应用包验证。
+
+`Resources/Info.plist` 保存更新公钥与签名要求，最终应用包使用与自身架构、版本通道相符的 feed。归档和 feed 使用独立于 macOS 代码签名证书的 EdDSA 密钥。签名密钥不属于普通 push 或 PR 构建输入；缺少发布密钥应停止签名流程，不生成无签名更新作为替代。
+
+更新安装须经过应用原有退出流程，不能绕过当前分类操作、未结束排序事务或退出恢复。开发验证应覆盖更新偏好重启保留、操作期间等待、取消退出、下载或签名失败，以及旧应用真正被替换并重新启动后的状态。构建和签名自检不能证明这条升级链已成功。
+
+本机已安装开发版 build 28；旧 build 24 没有更新器，首次仍需安装含更新器的版本。隔离 bundle 的真实签名升级、安装重启及测试偏好保留已通过，`SPARKLE_PRIVATE_KEY` 也已按用户明确授权配置至 GitHub Actions。主应用的忙碌清理、线上更新与分组功能仍待验收，发布条件尚未满足。具体配置、工具接口与验收范围见[应用内更新说明](AUTO-UPDATE.md)。
+
 ## 变更日志
 
 `changelog.sh` 将预览输出到标准输出，不覆盖已有手写首发说明：
@@ -118,10 +130,11 @@ CODE_SIGN_IDENTITY=- ./scripts/build.sh release
 ```sh
 ./scripts/changelog.sh --unreleased
 ./scripts/changelog.sh --latest
-./scripts/changelog.sh --tag v0.4.0
+# 对应标签创建后，可查看该版本的提交摘要
+./scripts/changelog.sh --tag v0.5.0
 ```
 
-版本号、构建号、tag 与 Release 标题需要保持一致。准备发布时，应复核面向用户的变化、已知限制和升级说明，不把纯内部诊断记录直接作为 Release 说明。
+应用版本和构建号的唯一来源是 `Resources/Info.plist`：当前开发目标为 `0.5.0 / build 28`，尚未发布；只有完成验收后才可创建对应标签 `v0.5.0`。`0.4.1 / build 11` 保留为未发布的诊断历史，其修复已纳入 0.5.0。版本号、构建号、tag 与 Release 标题需要保持一致，构建号必须递增。准备发布时，应复核面向用户的变化、已知限制和升级说明，不把纯内部诊断记录直接作为 Release 说明。
 
 ## 打包与发布入口
 
@@ -137,23 +150,23 @@ CODE_SIGN_IDENTITY=- ./scripts/build.sh release
 - 对应 `.zip.sha256` 校验文件。
 - 对应 `.zip.metadata.json`，记录版本、构建号、架构、提交、工作区状态、二进制哈希及签名等信息。
 
-这是当前机器的原生包；单次本地打包不会生成另一架构或 Universal Binary。下载或解压前，可在产物所在目录验证校验文件，例如 Apple Silicon 0.4.0 包：
+这是当前机器的原生包；单次本地打包不会生成另一架构或 Universal Binary。下载或解压前，可在产物所在目录验证校验文件，例如 Apple Silicon 0.5.0 包：
 
 ```sh
-shasum -a 256 -c Menu-Tidy-0.4.0-macos-arm64.zip.sha256
+shasum -a 256 -c Menu-Tidy-0.5.0-macos-arm64.zip.sha256
 ```
 
-维护者发布还需要已登录的 GitHub CLI（`gh`）和仓库推送权限。先更新 Info.plist 的版本与构建号、准备 `CHANGELOG.md` 对应版本说明，将更改提交并推送 `main`，等待该提交的 CI 通过，再执行：
+维护者发布还需要已登录的 GitHub CLI（`gh`）、仓库推送权限及经授权配置的代码签名和 Sparkle 签名 secrets。以下是完成验收后的流程示例，当前未通过的验收和未配置的密钥不能用推送标签绕过。先更新 Info.plist 的版本与构建号、准备 `CHANGELOG.md` 对应版本说明，将更改提交并推送 `main`，等待该提交的 CI 通过，再执行：
 
 ```sh
 # 只预览发布说明，不推送
-python3 scripts/release-notes.py v0.4.0
+python3 scripts/release-notes.py v0.5.0
 
-# 执行本地完整检查，创建并推送 v0.4.0 注解标签
-./scripts/release.sh 0.4.0
+# 执行本地完整检查，创建并推送 v0.5.0 注解标签
+./scripts/release.sh 0.5.0
 ```
 
-`release.sh` 检查资源版本、GitHub 登录、干净工作区、当前分支为 `main` 且 HEAD 等于 `origin/main`，然后运行 `check.sh --full`。成功后推送标签，触发 GitHub Actions 双架构构建及预览版发布。它会实际推送，不能用作无副作用的预览；既有标签不覆盖。
+`release.sh` 检查资源版本、GitHub 登录、干净工作区、当前分支为 `main` 且 HEAD 等于 `origin/main`，然后运行 `check.sh --full`。成功后推送标签，触发 GitHub Actions 双架构构建、归档签名、Release 和签名 feed 发布。不带预发布后缀的版本进入 `stable`，带后缀的版本进入 `preview`；例如 `0.5.0` 属于 stable，不因仍在开发而自动成为 prerelease。脚本会实际推送，不能用作无副作用的预览；既有标签不覆盖。
 
 当前公开产物使用项目专用自签名证书，**不是 Apple Developer ID，也未经过 Apple 公证**。这是与本地开发身份分开的发布配置。CI 平台、签名材料管理及发布流程详见[发布指南](RELEASING.md)，不要把仓库自动构建通过等同于 macOS 13、Intel 或多显示器交互已实测。
 
@@ -166,10 +179,14 @@ python3 scripts/release-notes.py v0.4.0
 | `Sources/MenuTidy/MenuBarAccessibility.swift` | 独立 actor 中的 AX 元素、几何判断、原生拖动和清理 |
 | `Sources/MenuTidy/StatusBarController.swift` | 菜单栏控制项、两个分组边界及显示状态 |
 | `Sources/MenuTidy/Main.swift` | 应用生命周期、设置窗口和重复打开恢复 |
+| `Sources/MenuTidy/UpdateController.swift` | 共享更新器、更新偏好、检查状态与安装等待 |
+| `Sources/MenuTidy/UpdateSettingsView.swift` | 更新设置与反馈 |
 | `Sources/MenuTidyCore/` | 状态机、自动收起、布局、规则和稳定身份等纯逻辑 |
 | `Tests/MenuTidyCoreTests/` | 无系统权限依赖的核心测试 |
 | `Resources/` | Info.plist 与应用图标 |
 | `scripts/` | 检查、构建、安装、签名和发布工具 |
+
+更新发布使用 `scripts/fetch-sparkle-tools.py` 获取固定官方工具，`scripts/generate-update-feed.py` 签名和校验归档、生成签名 feed。工具不会自行推送分支或创建 Release；发布由工作流协调，完整命令与权限边界见[发布指南](RELEASING.md)。
 
 修改分组逻辑时，应保持以下边界：
 

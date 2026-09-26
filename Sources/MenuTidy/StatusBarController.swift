@@ -1,9 +1,11 @@
 import AppKit
 import MenuTidyCore
+import OSLog
 
 /// Native status items define groups; boundaries become visible during Command-drag arrangement.
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
+    private static let blockerLogger = Logger(subsystem: "dev.hdh.MenuTidy", category: "PositionBlocker")
     private weak var model: MenuTidyModel?
     private let control: NSStatusItem
     private let divider: NSStatusItem
@@ -31,7 +33,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if let button = control.button {
             button.target = self
             button.action = #selector(controlClicked)
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.sendAction(on: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp])
             button.setAccessibilityIdentifier("menu-tidy-toggle")
         }
         if let button = divider.button {
@@ -64,7 +66,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                                  object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                // A changed display topology must never strand hidden items.
+                // A changed display topology invalidates the measured budget.
+                self?.clearPositionHidingBlocker()
                 self?.model?.recoverVisibility()
             }
         }
@@ -78,11 +81,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     func validateOrder() -> Bool {
         // On macOS 27 the status views can be remote-hosted and their local window
-        // frames are zero. Only reject an order when real geometry is available.
-        if let controlFrame = control.button?.window?.frame,
-           let dividerFrame = divider.button?.window?.frame,
-           controlFrame.height > 0, dividerFrame.height > 0,
-           controlFrame.midY == dividerFrame.midY, dividerFrame.midX >= controlFrame.midX {
+        // frames are zero. A collapsed spacer's midpoint also does not represent
+        // its item order. Unknown geometry must not create or clear a warning.
+        func isShortStatusFrame(_ frame: CGRect) -> Bool {
+            [frame.minX, frame.minY, frame.width, frame.height].allSatisfy(\.isFinite) &&
+                frame.width > 0 && frame.width <= 44 && frame.height > 0 && frame.height <= 64
+        }
+        guard let controlFrame = control.button?.window?.frame,
+              let dividerFrame = divider.button?.window?.frame,
+              isShortStatusFrame(controlFrame), isShortStatusFrame(dividerFrame),
+              controlFrame.midY == dividerFrame.midY else { return true }
+        if dividerFrame.midX >= controlFrame.midX {
             model?.layoutIssue = "菜单栏分组位置需要恢复。请右键点击 Menu Tidy「···」，打开「管理菜单栏图标」检查并应用分组。重新打开应用也可以恢复显示。"
             return false
         }
@@ -93,12 +102,18 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func apply(collapsed: Bool, arranging: Bool) {
         isCollapsed = collapsed
         isArranging = arranging
+        if arranging || model?.usesPositionHiding != true {
+            positionHidingBlockerWidth = nil
+            positionHidingBlockerReservation = nil
+        }
         // macOS 27 discards grossly oversized items. A boundary that fits within
         // the native right-hand region instead pushes left neighbours to overflow.
         let sections = MenuBarSectionPolicy.separatorVisibility(isCollapsed: collapsed,
             hasAlwaysHidden: model?.hasAlwaysHiddenItems ?? false,
-            isManaging: arranging || (model?.isApplying ?? false) || (model?.isRefreshing ?? false),
+            // Reading items does not grant permission to expose hidden groups.
+            isManaging: arranging || (model?.isApplying ?? false),
             temporarilyRevealingAll: model?.temporarilyRevealingAll ?? false)
+        areGroupBoundariesExpanded = !sections.collapseRegular && !sections.collapseAlways
         let font = NSFont.systemFont(ofSize: 11, weight: .medium)
         let regularTitle = "← 收起"
         let alwaysTitle = "← 常隐"
@@ -106,12 +121,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             max(44, (title as NSString).size(withAttributes: [.font: font]).width + 12)
         }
         divider.length = arranging ? markerWidth(regularTitle) :
-            (sections.collapseRegular ? collapsedLength() : MenuBarLayout.expandedLength)
+            (model?.usesPositionHiding == true ? (positionHidingBlockerWidth ?? MenuBarLayout.expandedLength) :
+                (sections.collapseRegular ? collapsedLength() : MenuBarLayout.expandedLength))
+        if !arranging && positionHidingBlockerWidth != nil { areGroupBoundariesExpanded = false }
         divider.button?.font = font
         divider.button?.title = arranging ? regularTitle : ""
         divider.button?.isEnabled = !sections.collapseRegular
         alwaysDivider.length = arranging ? markerWidth(alwaysTitle) :
-            (sections.collapseAlways ? collapsedLength() : MenuBarLayout.expandedLength)
+            (sections.collapseAlways && model?.usesPositionHiding != true ? collapsedLength() : MenuBarLayout.expandedLength)
         alwaysDivider.button?.font = font
         alwaysDivider.button?.title = arranging ? alwaysTitle : ""
         alwaysDivider.button?.isEnabled = !sections.collapseAlways
@@ -121,25 +138,146 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             stateDescription = "正在应用分组"
         } else if model?.isRefreshing == true {
             stateDescription = "正在读取图标"
+
+        } else if model?.isActivatingPanelItem == true {
+            stateDescription = "正在请求图标操作"
         } else if arranging {
             stateDescription = model?.managementError == nil ? "正在拖拽分组" : "拖拽结果待确认，右键查看原因"
+        } else if model?.usesPositionHiding == true {
+            stateDescription = model?.isPanelPresented == true ? "图标栏已展开" : "图标栏已收起"
+        } else if model?.isPanelPresented == true {
+            stateDescription = "图标栏已展开"
         } else if model?.temporarilyRevealingAll == true {
             stateDescription = "临时显示全部图标"
         } else {
             stateDescription = collapsed ? "已收起" : "已展开"
         }
         let actionDescription: String
-        if model?.isApplying == true || model?.isRefreshing == true {
+        if model?.isApplying == true || model?.isRefreshing == true || model?.isActivatingPanelItem == true {
             actionDescription = "请稍候"
         } else {
             actionDescription = arranging ? "点击完成拖拽并收起" :
-                (model?.temporarilyRevealingAll == true ? "点击结束临时显示" : "点击\(collapsed ? "展开" : "收起")")
+                (model?.isPanelPresented == true ? "点击收起图标栏" : "点击展开图标栏")
         }
         let controlDescription = "Menu Tidy「···」 · \(stateDescription)"
-        control.button?.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: controlDescription)
+        let symbol = arranging ? "arrow.left.and.right" : (model?.isPanelPresented == true ? "chevron.up" : "ellipsis")
+        control.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: controlDescription)
         control.button?.image?.isTemplate = true
         control.button?.toolTip = "\(controlDescription) · \(actionDescription) · 右键打开管理菜单"
         control.button?.setAccessibilityLabel("\(controlDescription)；\(actionDescription)")
+    }
+
+    private(set) var areGroupBoundariesExpanded = false
+
+    /// Requested width, not the hosted physical width. The model must pair it
+    /// with a current strictly verified frame of this exact divider.
+    var positionHidingBlockerRequestedWidth: CGFloat { divider.length }
+    private(set) var positionHidingBlockerWidth: CGFloat?
+
+    struct PositionHidingBlockerReservation: Equatable, Sendable {
+        fileprivate let id: UUID
+        let originalRequestedWidth: CGFloat
+        let reservedRequestedWidth: CGFloat
+    }
+    private var positionHidingBlockerReservation: PositionHidingBlockerReservation?
+
+    /// Changes only our divider. A successful plan does not establish hiding:
+    /// the model must re-read the divider, control, and affected native items.
+    /// Failed validation preserves an existing blocker; shrinking is explicit.
+    /// Capture expectedRequestedWidth before awaiting the frame query to reject
+    /// calibration against a length that changed while the query was pending.
+    @discardableResult
+    func setPositionHidingBlocker(verifiedFrame: CGRect, expectedRequestedWidth: CGFloat? = nil) -> Bool {
+        if let expectedRequestedWidth,
+           !expectedRequestedWidth.isFinite || expectedRequestedWidth != divider.length {
+            Self.blockerLogger.notice("positionBlocker planned=false stage=request-changed")
+            return false
+        }
+        guard modernMenuBar, model?.usesPositionHiding == true, !isArranging,
+              let leftEdge = positionHidingBlockerLeftEdge(for: verifiedFrame, allowLeadingOverflow: true) else {
+            Self.blockerLogger.notice("positionBlocker planned=false stage=unavailable-primary-geometry")
+            return false
+        }
+        let requested = divider.length
+        guard let width = MenuBarBlockerGeometry.fittedWidth(frameRight: Double(verifiedFrame.maxX),
+                  leftEdge: Double(leftEdge), requested: Double(requested), actual: Double(verifiedFrame.width)) else {
+            Self.blockerLogger.notice("positionBlocker planned=false stage=insufficient-verified-budget requested=\(requested) actual=\(verifiedFrame.width) frameRight=\(verifiedFrame.maxX) leftEdge=\(leftEdge)")
+            return false
+        }
+        positionHidingBlockerWidth = CGFloat(width)
+        divider.length = CGFloat(width)
+        areGroupBoundariesExpanded = false
+        Self.blockerLogger.notice("positionBlocker planned=true requestedBefore=\(requested) actualBefore=\(verifiedFrame.width) frameRight=\(verifiedFrame.maxX) leftEdge=\(leftEdge) leadingReserve=\(MenuBarBlockerGeometry.leadingReserve) requestedAfter=\(width)")
+        return true
+    }
+
+    /// Call synchronously immediately before the single preference reveal.
+    /// targetHostWidth comes from that exact item's previously verified hosted
+    /// frame, never an application icon size or guessed position placeholder.
+    func beginPositionHidingBlockerReservation(targetHostWidth: CGFloat,
+                                               verifiedDividerFrame: CGRect,
+                                               expectedRequestedWidth: CGFloat) -> PositionHidingBlockerReservation? {
+        guard modernMenuBar, model?.usesPositionHiding == true, !isArranging,
+              positionHidingBlockerReservation == nil,
+              let activeWidth = positionHidingBlockerWidth,
+              activeWidth == divider.length, expectedRequestedWidth == divider.length,
+              positionHidingBlockerLeftEdge(for: verifiedDividerFrame) != nil,
+              let reserved = MenuBarBlockerGeometry.reservedWidth(requested: Double(activeWidth),
+                  actual: Double(verifiedDividerFrame.width), targetHostWidth: Double(targetHostWidth)) else {
+            Self.blockerLogger.notice("positionBlocker reservation=false stage=unconfirmed-or-insufficient-budget")
+            return nil
+        }
+        let reservation = PositionHidingBlockerReservation(id: UUID(), originalRequestedWidth: activeWidth,
+            reservedRequestedWidth: CGFloat(reserved))
+        positionHidingBlockerReservation = reservation
+        positionHidingBlockerWidth = CGFloat(reserved)
+        divider.length = CGFloat(reserved)
+        Self.blockerLogger.notice("positionBlocker reservation=true requestedBefore=\(activeWidth) requestedAfter=\(reserved) targetHostWidth=\(targetHostWidth)")
+        return reservation
+    }
+
+    /// Call synchronously after the conditional preference restore. No stale
+    /// token can reapply a width after arrangement or a display change cleared it.
+    @discardableResult
+    func endPositionHidingBlockerReservation(_ reservation: PositionHidingBlockerReservation) -> Bool {
+        guard modernMenuBar, model?.usesPositionHiding == true, !isArranging,
+              positionHidingBlockerReservation == reservation else { return false }
+        positionHidingBlockerReservation = nil
+        positionHidingBlockerWidth = reservation.originalRequestedWidth
+        divider.length = reservation.originalRequestedWidth
+        Self.blockerLogger.notice("positionBlocker reservationRestored=true requested=\(reservation.originalRequestedWidth)")
+        return true
+    }
+
+    private func positionHidingBlockerLeftEdge(for frame: CGRect, allowLeadingOverflow: Bool = false) -> CGFloat? {
+        guard let screen = NSScreen.screens.first,
+              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let rightArea = screen.auxiliaryTopRightArea,
+              [rightArea.minX, rightArea.maxX, rightArea.width,
+               frame.minX, frame.minY, frame.width, frame.height].allSatisfy(\.isFinite),
+              rightArea.width > 0, rightArea.minX >= screen.frame.minX,
+              rightArea.maxX <= screen.frame.maxX,
+              frame.width > 0, frame.height > 0, frame.height <= 64 else { return nil }
+        let bounds = CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+        // Translate AppKit global screen coordinates to this CG display origin.
+        let left = bounds.minX + rightArea.minX - screen.frame.minX
+        let right = bounds.minX + rightArea.maxX - screen.frame.minX
+        let height = min(64, max(28, screen.safeAreaInsets.top, NSStatusBar.system.thickness))
+        guard [bounds.minX, bounds.minY, bounds.width, bounds.height, left, right].allSatisfy(\.isFinite),
+              bounds.width > 0, bounds.height > 0,
+              frame.minX >= bounds.minX, frame.width <= bounds.width,
+              frame.maxX > left, frame.maxX <= right,
+              (allowLeadingOverflow || frame.minX >= left),
+              frame.minY >= bounds.minY - 1, frame.maxY <= bounds.minY + height + 1 else { return nil }
+        return left
+    }
+
+    func clearPositionHidingBlocker() {
+        let hadPlan = positionHidingBlockerWidth != nil
+        positionHidingBlockerWidth = nil
+        positionHidingBlockerReservation = nil
+        divider.length = MenuBarLayout.expandedLength
+        if hadPlan { Self.blockerLogger.notice("positionBlocker cleared=true") }
     }
 
     private func collapsedLength() -> CGFloat {
@@ -157,11 +295,33 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                                               rightAreaWidth: nil, modernMenuBar: false)
     }
 
+    /// Ask the hosted menu bar to consume updated position preferences. This
+    /// only changes our own item and never posts input or activates a window.
+    func refreshPreferredPositions() async throws {
+        try Task.checkCancellation()
+        try await Task.sleep(for: .milliseconds(50))
+        let original = control.length
+        // Hosted status buttons can be wider than their requested length. A
+        // +1 request below that minimum does not invalidate the host layout.
+        let rendered = control.button?.frame.width ?? original
+        control.length = max(44, rendered, original) + 1
+        defer { control.length = original }
+        // MenuBarAgent consumes this layout invalidation in another process.
+        // Keep the changed size across several display frames so an immediate
+        // restore is not coalesced with it into one unchanged layout request.
+        try await Task.sleep(for: .milliseconds(100))
+        control.length = original
+        try await Task.sleep(for: .milliseconds(50))
+        try Task.checkCancellation()
+    }
+
     @objc private func controlClicked() {
-        guard NSApp.currentEvent?.modifierFlags.contains(.command) != true else { return }
-        if NSApp.currentEvent?.type == .rightMouseUp || NSApp.currentEvent?.modifierFlags.intersection([.option, .control]).isEmpty == false {
+        let event = NSApp.currentEvent
+        guard event?.modifierFlags.contains(.command) != true else { return }
+        if event?.type == .rightMouseDown || event?.type == .rightMouseUp || event?.modifierFlags.intersection([.option, .control]).isEmpty == false {
+            guard event?.type != .leftMouseDown, event?.type != .rightMouseDown else { return }
             showMenu()
-        } else { model?.toggleVisibility() }
+        } else { model?.controlClicked(event: event) }
     }
     @objc private func dividerClicked() {
         guard NSApp.currentEvent?.modifierFlags.contains(.command) != true else { return }
@@ -171,7 +331,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private func showMenu() {
         let menu = NSMenu()
         menu.delegate = self
-        let busy = model?.isApplying == true || model?.isRefreshing == true
+        let busy = model?.isApplying == true || model?.isRefreshing == true || model?.isActivatingPanelItem == true
+        let usesPanelVisibility = model?.usesPositionHiding == true && !isArranging
         if isArranging {
             addItem(menu, title: "完成拖拽并收起", action: #selector(finishArrangement), enabled: !busy)
             addItem(menu, title: "退出拖拽，保持全部展开", action: #selector(leaveArrangement), enabled: !busy)
@@ -185,15 +346,20 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 menu.addItem(error)
             }
         } else {
-            addItem(menu, title: isCollapsed ? "展开隐藏图标" : "收起隐藏图标", action: #selector(toggle),
-                    enabled: !busy && model?.temporarilyRevealingAll != true)
+            addItem(menu, title: model?.isPanelPresented == true ? "收起图标栏" : "展开隐藏图标栏", action: #selector(toggle),
+                    enabled: !busy)
             addItem(menu, title: "在菜单栏拖拽分组", action: #selector(arrange), enabled: !busy)
         }
-        addItem(menu, title: model?.temporarilyRevealingAll == true ? "结束临时显示" : "临时显示全部（含始终隐藏）",
+        addItem(menu, title: !usesPanelVisibility && model?.temporarilyRevealingAll == true
+                    ? "结束临时显示" : "临时显示全部（含始终隐藏）",
                 action: #selector(revealAll), enabled: !busy && !isArranging)
+        addItem(menu, title: usesPanelVisibility ? "收起图标栏" : "收起现有菜单栏分组",
+                action: #selector(collapseNativeGroups), enabled: !busy && !isArranging)
         addItem(menu, title: "管理菜单栏图标…", action: #selector(settings))
         menu.addItem(.separator())
         addItem(menu, title: "设置…", action: #selector(settings), key: ",")
+        addItem(menu, title: "检查更新…", action: #selector(checkForUpdates),
+                enabled: (NSApp.delegate as? AppDelegate)?.updates?.canCheckForUpdates == true)
         addItem(menu, title: "退出 Menu Tidy", action: #selector(quit), key: "q")
         if let button = control.button {
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
@@ -211,11 +377,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func arrange() { model?.beginArrangement() }
     @objc private func finishArrangement() { model?.finishArrangement() }
     @objc private func leaveArrangement() { model?.leaveArrangementExpanded() }
+    @objc private func collapseNativeGroups() { model?.collapseNativeGroups() }
     @objc private func revealAll() {
-        if model?.temporarilyRevealingAll == true { model?.endTemporaryReveal() }
+        if model?.usesPositionHiding == true && !isArranging { model?.revealAllTemporarily() }
+        else if model?.temporarilyRevealingAll == true { model?.endTemporaryReveal() }
         else { model?.revealAllTemporarily() }
     }
     @objc private func settings() { model?.onShowSettings?() }
+    @objc private func checkForUpdates() { (NSApp.delegate as? AppDelegate)?.updates?.checkForUpdates() }
     @objc private func quit() { model?.quit() }
     func menuWillOpen(_ menu: NSMenu) { model?.contextMenuVisible = true }
     func menuDidClose(_ menu: NSMenu) { model?.contextMenuVisible = false }
@@ -223,7 +392,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func stop() {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
-        divider.length = MenuBarLayout.expandedLength
+        clearPositionHidingBlocker()
         alwaysDivider.length = MenuBarLayout.expandedLength
         // Preserve only our own placement hints: removal can clear them on some OSes.
         let defaults = UserDefaults.standard

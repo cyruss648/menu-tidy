@@ -117,10 +117,39 @@ def write_manifest(fingerprint):
     MANIFEST.chmod(0o600)
 
 
+def sign_update_helpers(app, identity, keychain=None):
+    """Sign nested code inside-out, preserving each component's own identifier."""
+    framework = app / "Contents/Frameworks/Sparkle.framework"
+    if not framework.exists():
+        return
+    version = framework / "Versions/B"
+    parts = (
+        (version / "XPCServices/Installer.xpc", True),
+        (version / "XPCServices/Downloader.xpc", True),
+        (version / "Autoupdate", True),
+        (version / "Updater.app", True),
+        (framework, False),
+    )
+    for component, runtime in parts:
+        if not component.exists():
+            raise SigningError(f"Sparkle 组件缺失：{component.name}")
+        arguments = [CODESIGN, "--force", "--sign", identity, "--timestamp=none"]
+        if keychain:
+            arguments += ["--keychain", str(keychain)]
+        if runtime:
+            arguments += ["--options", "runtime"]
+        # Preserve the upstream Downloader's actual entitlements, without
+        # adding sandbox permissions. Every helper retains its own bundle ID.
+        if component.name == "Downloader.xpc":
+            arguments += ["--preserve-metadata=entitlements"]
+        run(arguments + [str(component)], label=f"签名 Sparkle {component.name}")
+
+
 def sign_local(app, fingerprint, password):
     security_command(["unlock-keychain", "-p", password, str(KEYCHAIN)], secret=True,
                      label="解锁 Menu Tidy 专属钥匙串")
     try:
+        sign_update_helpers(app, fingerprint, KEYCHAIN)
         run([CODESIGN, "--force", "--sign", fingerprint, "--keychain", str(KEYCHAIN),
              "--timestamp=none", "--requirements", "=designated => " + requirement(fingerprint),
              str(app)], label="本地证书签名")
@@ -269,6 +298,7 @@ def sign(app):
             arguments += ["--requirements", "=designated => " + explicit_requirement]
         if identity == "-":
             warn_ad_hoc()
+        sign_update_helpers(app, identity, keychain)
         run(arguments + [str(app)], label="显式指定的身份签名")
         print("已使用显式 CODE_SIGN_IDENTITY；签名失败时不会退回临时签名。")
     elif keychain is not None:
@@ -281,6 +311,7 @@ def sign(app):
         raise SigningError("本地签名初始化未完成，已停止构建签名；请参见 docs/LOCAL-SIGNING.md。")
     else:
         warn_ad_hoc()
+        sign_update_helpers(app, "-")
         run([CODESIGN, "--force", "--sign", "-", str(app)], label="临时开发签名")
 
 

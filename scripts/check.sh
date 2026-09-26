@@ -24,7 +24,11 @@ case "$mode" in
   *) usage >&2; exit 2 ;;
 esac
 
-if [ "$mode" = '--full' ]; then python3 scripts/check-source.py; fi
+if [ "$mode" = '--full' ]; then
+  python3 scripts/check-source.py
+  printf '%s\n' 'RUN: Python source gate regression tests'
+  python3 -B -m unittest discover -s scripts/tests -p 'test_*.py'
+fi
 if [ "$(uname -s)" != 'Darwin' ]; then
   printf '%s\n' 'ERROR: Swift app checks require macOS and its SDK; use --static for portable source checks.' >&2
   exit 1

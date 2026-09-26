@@ -8,18 +8,20 @@ fi
 ./scripts/build.sh release
 python3 - <<'PY'
 import hashlib
+import importlib.util
 import json
 import platform
 import plistlib
-import re
 import subprocess
 from pathlib import Path
 
 app = Path('dist/Menu Tidy.app')
 info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
 version = info['CFBundleShortVersionString']
-if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version):
-    raise SystemExit('Invalid release version')
+spec = importlib.util.spec_from_file_location('update_feed', Path('scripts/generate-update-feed.py'))
+feed = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(feed)
+feed.version_parts(version)
 arch = platform.machine()
 if arch not in ('arm64', 'x86_64'):
     raise SystemExit(f'Unsupported architecture: {arch}')
@@ -46,6 +48,8 @@ metadata = {
     'swift': subprocess.check_output(['swift', '--version'], text=True).strip(),
     'designatedRequirement': '\n'.join(line for line in (signature.stdout + signature.stderr).splitlines()
                                       if line.startswith('designated =>')),
+    'sparklePublicKey': info.get('SUPublicEDKey'),
+    'sparkleFeedURL': info.get('SUFeedURL'),
     'notarized': False,
 }
 Path(str(archive) + '.metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
