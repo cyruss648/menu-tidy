@@ -186,28 +186,43 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// Failed validation preserves an existing blocker; shrinking is explicit.
     /// Capture expectedRequestedWidth before awaiting the frame query to reject
     /// calibration against a length that changed while the query was pending.
+    /// Preflight verifies the host and display, not the final free width. The
+    /// divider moves after targets leave ordinary positions, so its current
+    /// right edge cannot predict the available space in the resulting layout.
+    func canPreparePositionHidingBlocker(verifiedFrame: CGRect,
+                                         expectedRequestedWidth: CGFloat) -> Bool {
+        modernMenuBar && model?.usesPositionHiding == true && !isArranging &&
+            expectedRequestedWidth.isFinite && expectedRequestedWidth == divider.length &&
+            divider.length >= MenuBarLayout.expandedLength && verifiedFrame.width >= divider.length &&
+            positionHidingBlockerLeftEdge(for: verifiedFrame, allowLeadingOverflow: true) != nil
+    }
+
+    /// Fit only against the native layout after target positions are staged.
+    /// A planned width remains a proposal until fresh layout evidence.
+    func positionHidingBlockerPlan(verifiedFrame: CGRect,
+                                  expectedRequestedWidth: CGFloat? = nil) -> CGFloat? {
+        if let expectedRequestedWidth,
+           !expectedRequestedWidth.isFinite || expectedRequestedWidth != divider.length { return nil }
+        guard modernMenuBar, model?.usesPositionHiding == true, !isArranging,
+              let leftEdge = positionHidingBlockerLeftEdge(for: verifiedFrame, allowLeadingOverflow: true),
+              let width = MenuBarBlockerGeometry.fittedWidth(frameRight: Double(verifiedFrame.maxX),
+                  leftEdge: Double(leftEdge), requested: Double(divider.length),
+                  actual: Double(verifiedFrame.width)) else { return nil }
+        return CGFloat(width)
+    }
+
     @discardableResult
     func setPositionHidingBlocker(verifiedFrame: CGRect, expectedRequestedWidth: CGFloat? = nil) -> Bool {
-        if let expectedRequestedWidth,
-           !expectedRequestedWidth.isFinite || expectedRequestedWidth != divider.length {
-            Self.blockerLogger.notice("positionBlocker planned=false stage=request-changed")
-            return false
-        }
-        guard modernMenuBar, model?.usesPositionHiding == true, !isArranging,
-              let leftEdge = positionHidingBlockerLeftEdge(for: verifiedFrame, allowLeadingOverflow: true) else {
-            Self.blockerLogger.notice("positionBlocker planned=false stage=unavailable-primary-geometry")
+        guard let width = positionHidingBlockerPlan(verifiedFrame: verifiedFrame,
+                                                   expectedRequestedWidth: expectedRequestedWidth) else {
+            Self.blockerLogger.notice("positionBlocker planned=false stage=unavailable-or-insufficient-geometry")
             return false
         }
         let requested = divider.length
-        guard let width = MenuBarBlockerGeometry.fittedWidth(frameRight: Double(verifiedFrame.maxX),
-                  leftEdge: Double(leftEdge), requested: Double(requested), actual: Double(verifiedFrame.width)) else {
-            Self.blockerLogger.notice("positionBlocker planned=false stage=insufficient-verified-budget requested=\(requested) actual=\(verifiedFrame.width) frameRight=\(verifiedFrame.maxX) leftEdge=\(leftEdge)")
-            return false
-        }
-        positionHidingBlockerWidth = CGFloat(width)
-        divider.length = CGFloat(width)
+        positionHidingBlockerWidth = width
+        if requested != width { divider.length = width }
         areGroupBoundariesExpanded = false
-        Self.blockerLogger.notice("positionBlocker planned=true requestedBefore=\(requested) actualBefore=\(verifiedFrame.width) frameRight=\(verifiedFrame.maxX) leftEdge=\(leftEdge) leadingReserve=\(MenuBarBlockerGeometry.leadingReserve) requestedAfter=\(width)")
+        Self.blockerLogger.notice("positionBlocker planned=true requestedBefore=\(requested) actualBefore=\(verifiedFrame.width) frameRight=\(verifiedFrame.maxX) requestedAfter=\(width)")
         return true
     }
 

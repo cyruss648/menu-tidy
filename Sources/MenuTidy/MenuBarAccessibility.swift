@@ -121,7 +121,7 @@ enum MenuBarOverflowError: LocalizedError, Sendable {
 
 enum MenuBarAccessError: LocalizedError, Sendable {
     case permission, eventPermission, disappeared, invalidGeometry, differentScreen, rejected, cancelled
-    case dragEventTimedOut, inputStateChanged
+    case dragEventTimedOut, inputStateChanged, scanTimedOut
     case actionUnavailable, actionRejected
     case geometryDetail(String)
     var errorDescription: String? {
@@ -136,6 +136,7 @@ enum MenuBarAccessError: LocalizedError, Sendable {
         case .actionUnavailable: return "该图标暂不支持后台打开菜单，需在原生菜单栏手动打开。没有模拟鼠标点击。"
         case .actionRejected: return "目标应用未接受本次菜单操作。没有补发点击；请稍后重试，或在原生菜单栏手动打开。"
         case .cancelled: return "操作已取消；未发送鼠标或键盘事件。"
+        case .scanTimedOut: return "菜单栏读取未及时完成，已停止本次扫描并保留原列表。请关闭正在展开的菜单后刷新列表。"
         case .dragEventTimedOut: return "系统未及时处理拖动事件，已停止本次移动并释放鼠标。请稍后重试。"
         case .inputStateChanged: return "检测到输入状态发生变化，已停止本次操作；未接管鼠标。"
         }
@@ -319,6 +320,10 @@ actor MenuBarAccessibility {
         let deadline = ProcessInfo.processInfo.systemUptime + 0.5
     }
     private var entries: [String: Entry] = [:]
+    private var scanReadBudget: AccessibilityScanBudget?
+    private var scanCanContinue: Bool {
+        scanReadBudget?.canPublish(at: ProcessInfo.processInfo.systemUptime, cancelled: Task.isCancelled) ?? true
+    }
     private var positionCandidateBindings: [UUID: PositionCandidateBinding] = [:]
     private var systemModuleContinuity: [String: SystemModuleContinuitySeed] = [:]
     private var positionKeyChallenges: [UUID: PositionKeyChallengeBinding] = [:]
@@ -371,6 +376,13 @@ actor MenuBarAccessibility {
             throw MenuBarAccessError.permission
         }
         self.menuBands = menuBands
+        scanReadBudget = AccessibilityScanBudget(startedAt: ProcessInfo.processInfo.systemUptime)
+        let previousContinuity = systemModuleContinuity
+        var published = false
+        defer {
+            scanReadBudget = nil
+            if !published { systemModuleContinuity = previousContinuity }
+        }
         // A MenuBarAgent subtree can contain remote AX elements whose PID belongs
         // to the originating application. Never attribute those to the host, and
         // require a launch timestamp so a reused PID cannot inherit old entries.
@@ -380,6 +392,7 @@ actor MenuBarAccessibility {
         var totalBudget = 2500
         for owner in owners {
             try Task.checkCancellation()
+            guard scanCanContinue else { throw MenuBarAccessError.scanTimedOut }
             guard totalBudget > 0 else { break }
             var ownerBudget = min(160, totalBudget)
             let initialBudget = ownerBudget
@@ -595,7 +608,10 @@ actor MenuBarAccessibility {
                 Self.logger.notice("systemModuleContinuity retainedSnapshot=false stage=read-unconfirmed")
             }
         }
+        try Task.checkCancellation()
+        guard scanCanContinue else { throw MenuBarAccessError.scanTimedOut }
         entries = updated
+        published = true
         let observed = unique.compactMap { candidate in
             updated.values.first { CFEqual($0.element, candidate.element) }?.snapshot
         }
@@ -4102,6 +4118,7 @@ actor MenuBarAccessibility {
 
     private func sourceMatchesHitTest(_ source: AXUIElement, at point: CGPoint, context: String,
                                       onFailure: ((HitTestFailure) -> Void)? = nil) -> Bool {
+        guard scanCanContinue else { return false }
         var visited: [AXUIElement] = []
         var matched = false
         defer {
@@ -4226,6 +4243,7 @@ actor MenuBarAccessibility {
     private func walk(_ node: AXUIElement, ownersByPID: [pid_t: MenuBarOwner], source: CandidateSource,
                       enumerationRootPID: pid_t, depth: Int, remaining: inout Int, into output: inout [Candidate],
                       ancestors: [AXUIElement] = []) {
+        guard scanCanContinue else { return }
         guard depth < 7, remaining > 0, !Task.isCancelled else {
             logOwnWalk(node, ownersByPID: ownersByPID, source: source, depth: depth,
                 stage: depth >= 7 ? "filtered:depth-limit" : (remaining <= 0 ? "filtered:node-budget" : "filtered:cancelled"))
@@ -4899,6 +4917,14 @@ actor MenuBarAccessibility {
     }
 
     private func copyAttribute(_ element: AXUIElement, _ name: String) -> (error: AXError, value: CFTypeRef?) {
+        if let budget = scanReadBudget {
+            guard let timeout = budget.timeout(at: ProcessInfo.processInfo.systemUptime,
+                                               cancelled: Task.isCancelled) else { return (.cannotComplete, nil) }
+            // AX messaging timeouts are per object. Configuring only an
+            // application's root leaves its descendants on the system default.
+            let configured = AXUIElementSetMessagingTimeout(element, Float(timeout))
+            guard configured == .success else { return (configured, nil) }
+        }
         var pid: pid_t = 0
         let pidResult = AXUIElementGetPid(element, &pid)
         guard pidResult == .success else { return (pidResult, nil) }

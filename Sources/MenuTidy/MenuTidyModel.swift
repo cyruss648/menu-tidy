@@ -21,9 +21,12 @@ struct ManagedItemRow: Identifiable {
 private enum MenuTidyManagementError: LocalizedError {
     case anchorCount(identifier: String, count: Int)
     case positionApplication(String)
+    case operationTimedOut
 
     var errorDescription: String? {
         switch self {
+        case .operationTimedOut:
+            return "系统未能及时提供可验证的结果，已停止继续尝试。已确认的结果和未应用的选择均会保留。"
         case .positionApplication(let detail):
             return detail
         case .anchorCount(let identifier, let count):
@@ -76,6 +79,8 @@ final class MenuTidyModel: ObservableObject {
     @Published private(set) var isApplying = false { didSet { if isApplying { cancelPassiveIconCapture() } } }
     @Published private(set) var managementMessage: String?
     @Published private(set) var managementError: String?
+    @Published private(set) var itemApplicationIssues: [String: String] = [:]
+    @Published private var operationState = ManagementOperationState()
     @Published private(set) var temporarilyRevealingAll = false
     @Published private(set) var hasPendingChanges = false
     @Published private(set) var actionablePendingCount = 0
@@ -126,6 +131,7 @@ final class MenuTidyModel: ObservableObject {
     private var drafts = ItemRuleBook()
     private var pendingDrafts = PendingDraftStore()
     private var rowDraftIDs: [String: UUID] = [:]
+    private var applicationIcons: [String: NSImage] = [:]
     private var snapshots: [MenuBarItemSnapshot] = []
     private var actualGroups: [String: ItemVisibility] = [:]
     private var lastKnownObservedGroups = ObservedItemGroupHistory()
@@ -165,6 +171,45 @@ final class MenuTidyModel: ObservableObject {
     var permissionSettingsName: String { ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 ? "设备控制和数据访问" : "辅助功能" }
     var applicationPath: String { Bundle.main.bundleURL.path }
     var hasAlwaysHiddenItems: Bool { usesNativeAlwaysSection || rules.rules.values.contains { $0.visibility == .alwaysHidden } }
+    var operationStartedAt: Date? { operationState.active?.startedAt }
+    var operationElapsedSeconds: TimeInterval { operationState.elapsed(uptime: ProcessInfo.processInfo.systemUptime) }
+    var operationCancellationRequested: Bool { operationState.active?.cancellationRequested == true }
+    var canCancelCurrentOperation: Bool {
+        operationState.active != nil && !operationCancellationRequested && !preparingToTerminate && !isRecoveringPositions
+    }
+    var explicitDraftCount: Int { items.filter { $0.isPending && rowDraftIDs[$0.id] != nil }.count }
+    var savedRulesNeedingVerificationCount: Int { items.filter { $0.isPending && rowDraftIDs[$0.id] == nil }.count }
+    private var operationDeadline: TimeInterval? { operationState.active?.deadline }
+
+    private func beginOperation(kind: ManagementOperationKind, itemCount: Int = 0) -> UUID {
+        let token = operationState.begin(kind: kind, itemCount: itemCount,
+            at: Date(), uptime: ProcessInfo.processInfo.systemUptime)
+        Self.diagnosticLogger.notice("managementOperation started kind=\(String(describing: kind), privacy: .public) items=\(itemCount)")
+        return token
+    }
+
+    private func finishOperation(token: UUID) {
+        guard let active = operationState.active, active.id == token else { return }
+        let elapsed = operationState.elapsed(uptime: ProcessInfo.processInfo.systemUptime)
+        Self.diagnosticLogger.notice("managementOperation finished kind=\(String(describing: active.kind), privacy: .public) elapsed=\(elapsed) cancelled=\(active.cancellationRequested) failed=\(self.managementError != nil) recoveryPending=\(self.positionRecoveryMessage != nil)")
+        operationState.finish(token: token)
+    }
+
+    private func checkOperationDeadline(budget: ManagementOperationBudget = .foreground) throws {
+        try Task.checkCancellation()
+        if budget == .foreground, operationState.hasExpired(uptime: ProcessInfo.processInfo.systemUptime) {
+            throw MenuTidyManagementError.operationTimedOut
+        }
+    }
+
+    func cancelCurrentOperation() {
+        guard canCancelCurrentOperation, operationState.requestCancellation() else { return }
+        managementMessage = "正在停止本次操作并完成必要的位置恢复…"
+        // Keep the operation and busy gates until its awaited cleanup returns.
+        // A detached cancellation message could reach the AX actor after the
+        // next operation starts, so cancellation travels with the owning Task.
+        workTask?.cancel()
+    }
 
     init() {
         defaults = CommandLine.arguments.contains("--demo-items") ? UserDefaults(suiteName: "dev.hdh.MenuTidy.demo")! : .standard
@@ -373,7 +418,7 @@ final class MenuTidyModel: ObservableObject {
                 positionLayoutRecoveryNeeded = false
                 positionRecoveryFrames.removeAll()
                 positionRecoveryMessage = nil
-                managementMessage = "已恢复本应用仍在管理的隐藏位置，并保留外部改动；未确认的分类仍是草稿。"
+                managementMessage = "已恢复本应用仍在管理的隐藏位置，并保留外部改动；未确认的分类仍待处理。"
             } catch {
                 await refreshAfterHiddenFailure(error)
                 positionRecoveryMessage = error.localizedDescription
@@ -480,9 +525,10 @@ final class MenuTidyModel: ObservableObject {
         managementError = nil
         let preparesIconInventory = prepareOverflow && screenCaptureGranted
         let refreshesManagedIcons = preparesIconInventory && usesPositionHiding
+        let operationToken = beginOperation(kind: preparesIconInventory ? .refreshImages : .refresh)
         managementMessage = preparesIconInventory
             ? "正在读取原始图标；仅请求系统提供的后台接口，不移动鼠标。"
-            : "正在读取菜单栏图标，保持当前分组的展开／收起状态。"
+            : "正在更新图标列表，保留现有分组与选择。"
         applyState()
         workTask = Task { [weak self] in
             guard let self else { return }
@@ -490,11 +536,8 @@ final class MenuTidyModel: ObservableObject {
             var inventoryIssues: [String] = []
             defer {
                 self.isRefreshing = false
+                self.finishOperation(token: operationToken)
                 self.applyState()
-                if !prepareOverflow, self.usesPositionHiding, scanSucceeded, !Task.isCancelled, !self.preparingToTerminate,
-                   self.items.contains(where: { $0.isPending && self.rowDraftIDs[$0.id] == nil && self.rules.rule(for: $0.id) != nil }) {
-                    self.applyItemRules(onlySavedRules: true)
-                }
                 if collapseWhenFinished, scanSucceeded, !Task.isCancelled, !self.stopping,
                    !self.settingsVisible, !self.contextMenuVisible, !self.isPanelPresented {
                     self.collapseIfSafe()
@@ -503,7 +546,7 @@ final class MenuTidyModel: ObservableObject {
             do {
                 await self.passiveIconCaptureTask?.value
                 try self.checkImageRefreshCancellation()
-                try await Task.sleep(for: .milliseconds(350))
+                try self.checkOperationDeadline()
                 if preparesIconInventory && !refreshesManagedIcons {
                     do {
                         try await self.scanManagementAnchors()
@@ -516,12 +559,13 @@ final class MenuTidyModel: ObservableObject {
                 }
                 try self.checkImageRefreshCancellation()
                 try await self.scanNow()
-                await self.access.inspectNonintrusiveCapabilities()
-                if self.screenCaptureGranted {
+                try self.checkOperationDeadline()
+                // List refresh is read-only. ScreenCaptureKit and temporary
+                // native presentation belong only to explicit image refresh.
+                if preparesIconInventory {
                     if refreshesManagedIcons {
                         let issues = try await self.refreshManagedHiddenIconImages()
                         inventoryIssues.append(contentsOf: issues)
-                        if !issues.isEmpty { self.managementError = issues.joined(separator: "\n") }
                         // Temporary weights have been restored; resume normal
                         // evidence checks before the remaining passive capture.
                         try self.checkImageRefreshCancellation()
@@ -546,12 +590,16 @@ final class MenuTidyModel: ObservableObject {
                         unobservedConfiguredCount: coverage.unobservedConfiguredCount,
                         issues: inventoryIssues)
                 }
+                try self.checkOperationDeadline()
                 try Task.checkCancellation()
                 guard !self.stopping else { throw MenuBarAccessError.cancelled }
                 scanSucceeded = true
                 self.managementMessage = self.items.isEmpty
                     ? "没有读到菜单栏项目。请退出全屏、展开其他整理器后重试。"
-                    : "主屏读取到 \(self.items.filter(\.isAvailable).count) 个项目。选择分类后点击「应用并收起」；空间不足时，请通过系统溢出入口查看图标。"
+                    : "列表已更新，共 \(self.items.filter(\.isAvailable).count) 个项目。" +
+                        (self.savedRulesNeedingVerificationCount > 0
+                            ? "有 \(self.savedRulesNeedingVerificationCount) 项已保存分组待验证，可明确应用后检查；刷新列表不会自动修改位置。"
+                            : "现有分组与待应用选择已保留。")
             } catch {
                 do {
                     try self.checkImageRefreshCancellation(error)
@@ -559,7 +607,7 @@ final class MenuTidyModel: ObservableObject {
                 } catch {
                     // Cancellation is handled once here, not converted into an
                     // unsupported capability or a failed classification.
-                    self.managementMessage = nil
+                    self.managementMessage = "本次刷新已停止，现有列表与选择已保留。"
                 }
             }
             if preparesIconInventory && !refreshesManagedIcons { await self.access.restoreSystemOverflowAfterManagement() }
@@ -584,7 +632,8 @@ final class MenuTidyModel: ObservableObject {
             return counts[item.id] == 1 && item.canMove && item.ownIdentifier == nil &&
                 (saved == .collapsible || saved == .alwaysHidden)
         }
-        let deadline = ProcessInfo.processInfo.systemUptime + min(90, max(20, Double(targets.count) * 6))
+        let deadline = min(operationDeadline ?? .infinity,
+            ProcessInfo.processInfo.systemUptime + min(90, max(20, Double(targets.count) * 6)))
         var issues: [String] = []
         isRefreshingManagedIcons = true
         defer { isRefreshingManagedIcons = false }
@@ -652,11 +701,12 @@ final class MenuTidyModel: ObservableObject {
                         guard restored.isComplete else { throw MenuBarAccessError.rejected }
                         // Cancellation of refresh never cancels restoration.
                         // Verify native hiding when AX remains available; this
-                        // read-only wait has its own fixed five-second limit.
+                        // read-only wait has its own fixed three-second limit,
+                        // independent of an expired foreground refresh budget.
                         if AXIsProcessTrusted(), self.accessibilityGranted,
                            !self.stopping, !self.preparingToTerminate {
                             _ = try await self.waitForPositionVisibility(id: item.id, visible: false,
-                                candidates: retainedCandidates, hadVerifiedReveal: hadVisibleProof)
+                                candidates: retainedCandidates, hadVerifiedReveal: hadVisibleProof, budget: .cleanup)
                         }
                         Self.diagnosticLogger.notice("managedIconRefresh hiddenPositionRestored=true ordinal=\(index + 1)")
                         return Optional<Error>.none
@@ -689,6 +739,7 @@ final class MenuTidyModel: ObservableObject {
 
     private func checkManagedIconRefreshPermission() throws {
         try checkImageRefreshCancellation()
+        try checkOperationDeadline()
         guard accessibilityGranted, AXIsProcessTrusted() else { throw MenuBarAccessError.permission }
         guard screenCaptureGranted, CGPreflightScreenCaptureAccess() else {
             throw MenuBarIconCapture.CaptureError.permissionRequired
@@ -762,6 +813,7 @@ final class MenuTidyModel: ObservableObject {
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging, let row = items.first(where: { $0.id == id }), row.canMove, row.isAvailable,
               snapshots.filter({ $0.id == id }).count == 1 else { return }
         cancelPassiveIconCapture()
+        itemApplicationIssues.removeValue(forKey: id)
         managementError = nil
         let identity = draftSessionIdentity(for: id)
         do {
@@ -785,6 +837,9 @@ final class MenuTidyModel: ObservableObject {
     func discardDraft(id: UUID) {
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         cancelPassiveIconCapture()
+        if let itemID = rowDraftIDs.first(where: { $0.value == id })?.key {
+            itemApplicationIssues.removeValue(forKey: itemID)
+        }
         pendingDrafts.remove(id: id)
         persistDrafts()
         rebuildRows()
@@ -835,12 +890,15 @@ final class MenuTidyModel: ObservableObject {
         }.map(\.id)
         let requestedIDSet = Set(requestedIDs)
         guard !requestedIDs.isEmpty else { return }
+        itemApplicationIssues = [:]
         let previousState = state
         let previousTemporaryReveal = temporarilyRevealingAll
         let previousBeforeTemporaryReveal = beforeTemporaryRevealCollapsed
+        cancelPassiveIconCapture()
         isApplying = true
+        let operationToken = beginOperation(kind: .apply, itemCount: requestedIDs.count)
         managementError = nil
-        managementMessage = "正在检查后台分组能力，不移动鼠标。"
+        managementMessage = "正在检查全部图标和菜单栏空间…"
         workTask = Task { [weak self] in
             guard let self else { return }
             var succeeded = false
@@ -848,6 +906,7 @@ final class MenuTidyModel: ObservableObject {
             var failureMessage: String?
             defer {
                 self.isApplying = false
+                self.finishOperation(token: operationToken)
                 if !succeeded {
                     self.state = previousState
                     self.temporarilyRevealingAll = previousTemporaryReveal
@@ -855,20 +914,23 @@ final class MenuTidyModel: ObservableObject {
                 } else {
                     self.collapseIfSafe()
                     if self.isCollapsed {
-                        self.managementMessage = "本次分类位置已确认并保存，已请求收起。点击菜单栏「···」可打开图标栏。" +
+                        let skipped = requestedIDSet.intersection(self.itemApplicationIssues.keys).count
+                        self.managementMessage = "已应用并确认 \(requestedIDs.count - skipped) 项分类。" +
+                            (skipped > 0 ? "另有 \(skipped) 项未自动应用，选择已保留；可筛选查看原因。" : "点击菜单栏「···」可打开图标栏。") +
                             (self.offlineDrafts.isEmpty ? "" : "另有 \(self.offlineDrafts.count) 条离线草稿保留，未参与本次应用。")
                     }
                 }
                 self.rebuildRows()
                 self.applyState()
+                if succeeded { self.schedulePassiveIconCapture() }
             }
             do {
                 await self.passiveIconCaptureTask?.value
-                try Task.checkCancellation()
+                try self.checkOperationDeadline()
                 stage = "应用后台排序"
                 if !(try await self.applyStoredPositionRules(requestedIDs: requestedIDs)) {
                     try await self.access.validateBackgroundMoveSupport(ids: requestedIDs)
-                    try Task.checkCancellation()
+                    try self.checkOperationDeadline()
                     self.applyState()
                     stage = "等待菜单栏展开"
                     try await Task.sleep(for: .milliseconds(400))
@@ -898,7 +960,7 @@ final class MenuTidyModel: ObservableObject {
                     guard Set(pending.map(\.id)) == requestedIDSet else { throw MenuBarAccessError.invalidGeometry }
                     for (index, row) in pending.enumerated() {
                         stage = "移动「\(row.name)」至\(row.group.title)"
-                        try Task.checkCancellation()
+                        try self.checkOperationDeadline()
                         self.managementMessage = "正在整理 \(index + 1)/\(pending.count)：将「\(row.name)」设为\(row.group.title)。不会接管鼠标。"
                         let anchor = row.group == .alwaysHidden ? anchors.always : (row.group == .collapsible ? anchors.regular : anchors.control)
                         try await self.access.move(id: row.id, before: anchor)
@@ -926,7 +988,9 @@ final class MenuTidyModel: ObservableObject {
                     try await self.scanNow()
                     if failureMessage == nil {
                         stage = "确认全部待应用分类的实际结果"
-                        if self.items.contains(where: { requestedIDSet.contains($0.id) && $0.isPending }) {
+                        if self.items.contains(where: {
+                            requestedIDSet.contains($0.id) && self.itemApplicationIssues[$0.id] == nil && $0.isPending
+                        }) {
                             throw MenuBarAccessError.rejected
                         }
                     }
@@ -938,14 +1002,19 @@ final class MenuTidyModel: ObservableObject {
                 failureMessage = MenuBarAccessError.cancelled.localizedDescription
             }
 
-            if let failureMessage {
+            if self.operationCancellationRequested {
+                self.managementError = nil
+                self.managementMessage = self.positionRecoveryMessage == nil
+                    ? "本次应用已停止。已确认的分类保留，其余选择仍待处理。"
+                    : "本次应用已停止。仍有位置需要恢复，请使用上方恢复入口；分类选择已保留。"
+            } else if let failureMessage {
                 self.managementError = "\(failureMessage) 本次分类尚未全部生效：已确认的项目已保存，其余选择仍待应用。不支持后台调整的图标仍保留为待应用，不会回退到模拟拖动。"
                 self.managementMessage = nil
+            } else if requestedIDSet.isSubset(of: Set(self.itemApplicationIssues.keys)) {
+                self.managementMessage = "本次没有可自动整理的项目，未修改图标位置。选择已保留，可筛选「未自动应用」查看原因。"
             } else {
-                if self.screenCaptureGranted {
-                    do { try await self.prepareIconImages() }
-                    catch { self.panelError = error.localizedDescription }
-                }
+                // Screenshots are optional presentation data. Successful
+                // grouping completes without waiting for another capture pass.
                 self.hasCompletedSetup = true
                 self.defaults.set(true, forKey: "hasCompletedSetup")
                 self.temporarilyRevealingAll = false
@@ -1000,7 +1069,7 @@ final class MenuTidyModel: ObservableObject {
         var prepared: [(row: ManagedItemRow, candidate: MenuBarPositionCandidate)] = []
         var failures: [String] = []
         for id in requestedIDs {
-            try Task.checkCancellation()
+            try checkOperationDeadline()
             guard let row = items.first(where: { $0.id == id && $0.isAvailable && $0.canMove }) else {
                 failures.append("有一个待应用图标已退出或身份变化")
                 continue
@@ -1055,7 +1124,7 @@ final class MenuTidyModel: ObservableObject {
         }
 
         for (index, entry) in prepared.enumerated() {
-            try Task.checkCancellation()
+            try checkOperationDeadline()
             managementMessage = "正在整理 \(index + 1)/\(prepared.count)：\(entry.row.name)。不会接管鼠标。"
             let anchor = entry.row.group == .alwaysHidden ? always :
                 (entry.row.group == .collapsible ? regular : control)
@@ -1090,8 +1159,7 @@ final class MenuTidyModel: ObservableObject {
         guard recovery.isComplete else {
             throw MenuTidyManagementError.positionApplication("上次隐藏操作仍有待恢复记录，请先恢复位置。")
         }
-        statusBar.apply(collapsed: true, arranging: false)
-        try await statusBar.refreshPreferredPositions()
+        try checkOperationDeadline()
         try await scanNow()
         let controls = snapshots.filter { $0.ownIdentifier == "menu-tidy-toggle" }
         guard controls.count == 1, let controlID = controls.first?.id else { throw MenuBarAccessError.disappeared }
@@ -1113,19 +1181,34 @@ final class MenuTidyModel: ObservableObject {
             requestedRules: requestedRules, bootstrap: statusBar.positionHidingBlockerWidth == nil)
         let outcome: Result<Bool, Error>
         do {
-            outcome = .success(try await applyStagedPositionHidingRules(requestedIDs: requestedIDs,
-                controlID: controlID, statusBar: statusBar, scope: scope))
+            try await preflightPositionHidingTargets(controlID: controlID, statusBar: statusBar, scope: scope)
+            try checkOperationDeadline()
+            if scope.requestedRules.isEmpty {
+                outcome = .success(true)
+            } else {
+                scope.didBeginApplication = true
+                outcome = .success(try await applyStagedPositionHidingRules(requestedIDs: scope.requestedRules.map(\.id),
+                    controlID: controlID, statusBar: statusBar, scope: scope))
+            }
         } catch {
-            invalidateHiddenPositionEvidence()
-            for id in requestedIDs {
-                verifiedPositionGroups.removeValue(forKey: id)
-                verifiedPositionEvidence.removeValue(forKey: id)
-                actualGroups.removeValue(forKey: id)
+            if scope.didBeginApplication {
+                invalidateHiddenPositionEvidence()
+                for id in requestedIDs {
+                    verifiedPositionGroups.removeValue(forKey: id)
+                    verifiedPositionEvidence.removeValue(forKey: id)
+                    actualGroups.removeValue(forKey: id)
+                }
+            } else {
+                // A rejected read-only preflight does not invalidate unrelated
+                // accepted groups. Still revoke proof changed by another app.
+                await reconcileVerifiedPositionEvidence()
+                actualGroups = verifiedPositionGroups
             }
             rebuildRows()
             outcome = .failure(error)
         }
         let layoutChanged = await restoreUnverifiedStagedHiddenPositions(scope)
+        await access.discardBackgroundPositionCandidates(scope.preparedCandidates)
         switch outcome {
         case .success(let result):
             guard !layoutChanged else {
@@ -1140,8 +1223,10 @@ final class MenuTidyModel: ObservableObject {
     private final class HiddenStagingScope {
         let previouslyManagedKeys: Set<String>
         let priorTargets: [PositionHidingBatchTarget]
-        let requestedRules: [ItemRule]
+        var requestedRules: [ItemRule]
         let bootstrap: Bool
+        var didBeginApplication = false
+        var preparedCandidates: [MenuBarPositionCandidate] = []
         var newlyStagedKeysByID: [String: String] = [:]
         var stagedTargets: [String: PositionHidingBatchTarget] = [:]
         var confirmedIDs: Set<String> = []
@@ -1184,51 +1269,143 @@ final class MenuTidyModel: ObservableObject {
         throw MenuBarAccessError.rejected
     }
 
+    /// Fail before the first target write when the boundary host, a source, or
+    /// an exact preference key is unavailable. Ordinary Apply never probes unknown
+    /// keys by repeatedly moving an application to discover its identity.
+    private func preflightPositionHidingTargets(controlID: String, statusBar: StatusBarController,
+        scope: HiddenStagingScope) async throws {
+        let deadline = min(operationDeadline ?? .infinity, ProcessInfo.processInfo.systemUptime + 4)
+        func checkPreflight() throws {
+            try checkOperationDeadline()
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                throw MenuTidyManagementError.positionApplication("系统未能及时完成检查，尚未修改本次图标位置。请稍后刷新列表。")
+            }
+        }
+        try checkPreflight()
+        scope.preparedCandidates = try await prepareStablePositionCandidates(ids: [controlID])
+        let requestedRules = scope.requestedRules
+        var supportedIDs: Set<String> = []
+        var issues: [String: String] = [:]
+        for (index, rule) in requestedRules.enumerated() {
+            try checkPreflight()
+            managementMessage = "正在检查 \(index + 1)/\(requestedRules.count)：\(rule.name)"
+            do {
+                let candidate = try await prepareStablePositionCandidates(ids: [rule.id])
+                scope.preparedCandidates += candidate
+                try checkPreflight()
+                supportedIDs.insert(rule.id)
+            } catch let error as MenuBarPositionBindingError {
+                // Cancellation and exhausted time are operation outcomes, not
+                // evidence that an application is unsupported.
+                try checkPreflight()
+                if error.reason == .cancelled { throw MenuBarAccessError.cancelled }
+                issues[rule.id] = error.reason == .ambiguousKey
+                    ? "此应用有多个排序记录，无法安全自动匹配。请使用菜单栏 ⌘ 拖拽整理。"
+                    : error.localizedDescription
+            }
+        }
+        guard let plan = BatchApplicationPlan(requestedIDs: requestedRules.map(\.id),
+            supportedIDs: supportedIDs, issues: issues), plan.uninspectedIDs.isEmpty else {
+            throw MenuBarAccessError.disappeared
+        }
+        itemApplicationIssues = issues
+        let actionable = Set(plan.actionableIDs)
+        scope.requestedRules = requestedRules.filter { actionable.contains($0.id) }
+        // A skipped existing hidden item still needs final proof. Never drop
+        // its recovery record merely to allow the rest of the batch through.
+        let accountableKeys = Set(scope.priorTargets.map(\.key))
+            .union(scope.preparedCandidates.filter { actionable.contains($0.id) }.map(\.key))
+        guard scope.previouslyManagedKeys.isSubset(of: accountableKeys) else {
+            throw MenuTidyManagementError.positionApplication("现有隐藏项中仍有无法确认身份的项目，请先恢复原排序，再应用支持的分类。选择已保留。")
+        }
+        guard !scope.requestedRules.isEmpty else { return }
+        for prior in scope.priorTargets where !actionable.contains(prior.rule.id) {
+            try checkPreflight()
+            do {
+                let candidates = try await prepareStablePositionCandidates(ids: [prior.rule.id])
+                scope.preparedCandidates += candidates
+                guard candidates.count == 1, let candidate = candidates.first,
+                      prior.matches(candidate) else { throw MenuBarAccessError.disappeared }
+            } catch {
+                try checkPreflight()
+                throw MenuTidyManagementError.positionApplication("现有隐藏项「\(prior.rule.name)」的身份无法重新确认，尚未修改本次图标。请先恢复原排序，再重新应用。")
+            }
+        }
+        let visibleIDs = Set(scope.requestedRules.filter { $0.visibility == .visible }.map(\.id))
+        let restoringKeys = Set(scope.preparedCandidates.filter { visibleIDs.contains($0.id) }.map(\.key))
+        let needsBoundary = !scope.previouslyManagedKeys.subtracting(restoringKeys).isEmpty ||
+            scope.requestedRules.contains { $0.visibility != .visible }
+        // Restoring the last hidden item removes the blocker. A broken current
+        // hiding boundary must not prevent that request from making it visible.
+        if needsBoundary {
+            try checkPreflight()
+            guard let dividerID = snapshots.first(where: { $0.ownIdentifier == "menu-tidy-divider" })?.id else {
+                throw MenuBarAccessError.disappeared
+            }
+            scope.preparedCandidates += try await prepareStablePositionCandidates(ids: [dividerID])
+            let requested = statusBar.positionHidingBlockerRequestedWidth
+            guard let frame = await access.currentOwnDividerHostFrame(),
+                  statusBar.canPreparePositionHidingBlocker(verifiedFrame: frame, expectedRequestedWidth: requested) else {
+                throw MenuTidyManagementError.positionApplication("当前菜单栏的隐藏边界尚不可用，尚未修改图标位置。请先关闭菜单弹窗，再刷新列表。")
+            }
+        }
+        var keys: Set<String> = []
+        for rule in scope.requestedRules {
+            try checkPreflight()
+            guard let target = scope.preparedCandidates.first(where: { $0.id == rule.id }),
+                  let identity = draftSessionIdentity(for: rule.id), keys.insert(target.key).inserted else {
+                throw MenuBarAccessError.disappeared
+            }
+            var expected = PositionHidingBatchTarget(rule: rule, identity: identity,
+                key: target.key, hadVerifiedReveal: scope.priorTargets.contains { $0.matches(target) && $0.hadVerifiedReveal })
+            guard expected.matches(target) else { throw MenuBarAccessError.disappeared }
+            if rule.visibility != .visible {
+                // A currently visible source already supplies the transition
+                // seed and footprint. Do not hide/reveal/hide it just to take a
+                // screenshot before finally applying its requested group.
+                let inspection = await access.inspectVisibility(id: rule.id)
+                if inspection.centerHit, let frame = await access.verifiedVisibleHostFrame(id: rule.id) {
+                    expected.hadVerifiedReveal = true
+                    verifiedHostedFootprints[rule.id] = VerifiedHostedFootprint(identity: identity, width: frame.width)
+                }
+                if expected.hadVerifiedReveal || !scope.bootstrap {
+                    try await access.ensureSystemModuleContinuityBeforeHiding(id: rule.id)
+                }
+            }
+            scope.stagedTargets[rule.id] = expected
+        }
+        try checkPreflight()
+        try await access.validateBackgroundPositionCandidates(scope.preparedCandidates,
+            positions: positionStore.readPositions(), owners: menuBarScanInputs().owners)
+        try checkPreflight()
+    }
+
     private func stageRequestedHiddenPositions(requestedIDs: [String], controlID: String,
         scope: HiddenStagingScope, failures: inout [String]) async throws -> [String: String] {
-        // Capture exact identities before writing. Neither these weights nor
-        // the intermediate captures are accepted rules until final batch proof.
         var stagedKeys: [String: String] = [:]
         for id in requestedIDs {
-            try Task.checkCancellation()
-            guard let rule = scope.requestedRules.first(where: { $0.id == id }),
-                  rule.visibility != .visible else { continue }
-            var candidates: [MenuBarPositionCandidate] = []
+            try checkOperationDeadline()
+            guard let expected = scope.stagedTargets[id], expected.rule.visibility != .visible else { continue }
+            let candidates = scope.preparedCandidates.filter { $0.id == id || $0.id == controlID }
             do {
-                do {
-                    candidates = try await prepareStablePositionCandidates(ids: [id, controlID])
-                } catch let error as MenuBarPositionBindingError where error.reason == .ambiguousKey {
-                    try await resolvePositionKey(id: id, controlID: controlID)
-                    candidates = try await prepareStablePositionCandidates(ids: [id, controlID])
-                }
-                guard let target = candidates.first(where: { $0.id == id }),
-                      let identity = draftSessionIdentity(for: id),
-                      !scope.stagedTargets.values.contains(where: { $0.key == target.key && $0.rule.id != id }) else {
-                    throw MenuBarAccessError.disappeared
-                }
-                let expected = PositionHidingBatchTarget(rule: rule, identity: identity,
-                    key: target.key, hadVerifiedReveal: false)
-                guard expected.matches(target) else { throw MenuBarAccessError.disappeared }
-                if !scope.bootstrap {
-                    // An existing blocker can remove a newly hidden system
-                    // item from the AX tree before per-item capture begins.
-                    // Confirm recoverable original identity before writing.
-                    try await access.ensureSystemModuleContinuityBeforeHiding(id: id)
-                }
-                scope.stagedTargets[id] = expected
+                guard let target = candidates.first(where: { $0.id == id }), expected.matches(target),
+                      draftSessionIdentity(for: id) == expected.identity else { throw MenuBarAccessError.disappeared }
+                try await access.validateBackgroundPositionCandidates(candidates,
+                    positions: positionStore.readPositions(), owners: menuBarScanInputs().owners)
+                try checkOperationDeadline()
                 stagedKeys[id] = target.key
                 if !scope.previouslyManagedKeys.contains(target.key) {
                     scope.newlyStagedKeysByID[id] = target.key
                 }
-                try Task.checkCancellation()
                 let result = try positionStore.hide(key: target.key)
                 guard result.isComplete else { throw MenuBarAccessError.rejected }
             } catch {
                 await refreshAfterHiddenFailure(error)
-                failures.append("「\(rule.name)」暂未准备好隐藏：\(error.localizedDescription)")
+                failures.append("「\(expected.rule.name)」暂未准备好隐藏：\(error.localizedDescription)")
+                // An unexpected runtime change stops this batch immediately.
+                // The enclosing scope restores every unaccepted new write.
+                break
             }
-            await access.discardBackgroundPositionCandidates(candidates)
-            try Task.checkCancellation()
         }
         return stagedKeys
     }
@@ -1243,22 +1420,31 @@ final class MenuTidyModel: ObservableObject {
         }
         if !stagedKeys.isEmpty {
             try await completeHiddenLayoutRefresh(true)
-            if !scope.bootstrap { try await fitPositionHidingBlocker() }
+            // A bootstrap source without a measured footprint still needs a
+            // narrow divider for its first reveal. Otherwise fit immediately
+            // against the real staged layout, before per-item processing.
+            if !scope.bootstrap || scope.stagedTargets.values.allSatisfy({
+                $0.rule.visibility == .visible || $0.hadVerifiedReveal
+            }) {
+                try await fitPositionHidingBlocker()
+            }
         }
         var completedTargets: [String: PositionHidingBatchTarget] = [:]
-        for rule in scope.requestedRules {
+        for (index, rule) in scope.requestedRules.enumerated() {
             let id = rule.id
-            try Task.checkCancellation()
+            try checkOperationDeadline()
+            managementMessage = "正在应用 \(index + 1)/\(scope.requestedRules.count)：\(rule.name)"
+            if rule.visibility != .visible, let expected = scope.stagedTargets[id], expected.hadVerifiedReveal {
+                // The exact source was seen before staging. The final batch
+                // proves its disappearance; an extra reveal and capture adds
+                // no grouping evidence and needlessly disturbs native layout.
+                completedTargets[id] = expected
+                continue
+            }
             var candidates: [MenuBarPositionCandidate] = []
             var managedKey: String? = stagedKeys[id]
             do {
-                do {
-                    candidates = try await prepareStablePositionCandidates(ids: [id, controlID])
-                } catch let error as MenuBarPositionBindingError where error.reason == .ambiguousKey {
-                    managementMessage = "正在确认「\(rule.name)」的位置记录；不会移动鼠标。"
-                    try await resolvePositionKey(id: id, controlID: controlID)
-                    candidates = try await prepareStablePositionCandidates(ids: [id, controlID])
-                }
+                candidates = try await prepareStablePositionCandidates(ids: [id, controlID])
                 guard let target = candidates.first(where: { $0.id == id }),
                       let control = candidates.first(where: { $0.id == controlID }),
                       let identity = draftSessionIdentity(for: id) else { throw MenuBarAccessError.disappeared }
@@ -1280,9 +1466,10 @@ final class MenuTidyModel: ObservableObject {
                         try await performStoredPositionMove(target, before: control, validating: candidates) {
                             _ = try await self.waitForPositionVisibility(id: id, visible: true, candidates: candidates)
                         }
-                    } else {
-                        _ = try await waitForPositionVisibility(id: id, visible: true, candidates: candidates)
                     }
+                    // With no new move, the final two full-batch observations
+                    // provide the fresh proof. Do not rescan the entire menu
+                    // bar for every already-visible item here.
                 } else {
                     guard scope.bootstrap || statusBar.positionHidingBlockerWidth != nil else {
                         throw MenuTidyManagementError.positionApplication("原有隐藏边界已失效，本次操作已停止，请重新应用分组。")
@@ -1301,13 +1488,7 @@ final class MenuTidyModel: ObservableObject {
                     let visibleFrame = try await waitForPositionVisibility(id: id, visible: true, candidates: candidates)
                     guard draftSessionIdentity(for: id) == expected.identity else { throw MenuBarAccessError.disappeared }
                     expected.hadVerifiedReveal = true
-                    if screenCaptureGranted {
-                        if let item = snapshots.first(where: { $0.id == id }), let visibleFrame {
-                            try await iconCapture.refreshBindings(snapshots: snapshots)
-                            let confirmed = snapshotForVerifiedIconCapture(item, frame: visibleFrame)
-                            _ = try await captureAndVerifyIconImages([confirmed])
-                        } else { throw MenuBarAccessError.disappeared }
-                    }
+                    _ = visibleFrame // Actual visibility is required; screenshot availability is independent.
                     let concealed = try restoreTemporaryManagedItem(key: target.key)
                     guard concealed.isComplete else { throw MenuBarAccessError.rejected }
                     try await statusBar.refreshPreferredPositions()
@@ -1343,14 +1524,14 @@ final class MenuTidyModel: ObservableObject {
                 throw MenuTidyManagementError.positionApplication("「\(rule.name)」：\(originalError.localizedDescription)")
             }
             await access.discardBackgroundPositionCandidates(candidates)
-            try Task.checkCancellation()
+            try checkOperationDeadline()
             guard !positionLayoutRecoveryNeeded else { throw MenuBarAccessError.rejected }
         }
         guard Set(completedTargets.keys) == Set(requestedIDs) else { throw MenuBarAccessError.disappeared }
         // No temporary preference writes follow this final fit. Earlier
         // successful captures did not commit a rule or remove a user draft.
+        managementMessage = "正在确认全部图标的最终显示结果…"
         if !positionStore.managedHiddenEntries.isEmpty { try await fitPositionHidingBlocker() }
-        try await scanNow()
         var expected = Dictionary(uniqueKeysWithValues: scope.priorTargets.map { ($0.rule.id, $0) })
         expected.merge(completedTargets) { _, requested in requested }
         let evidence = try await verifyFinalHiddenPositions(expected: expected)
@@ -1376,6 +1557,7 @@ final class MenuTidyModel: ObservableObject {
         }
         for rule in scope.requestedRules {
             rules.set(rule)
+            itemApplicationIssues.removeValue(forKey: rule.id)
             pendingDrafts.removeVerified(rule, sessionIdentity: expected[rule.id]?.identity)
         }
         persistRules()
@@ -1471,23 +1653,28 @@ final class MenuTidyModel: ObservableObject {
               Set(positionStore.managedHiddenEntries.map(\.key)) == hiddenKeys else {
             throw MenuTidyManagementError.positionApplication("受管理隐藏项尚未全部取得明确的验证目标，不能确认整批已生效。")
         }
+        // Two complete rounds share two scans. The previous implementation
+        // performed a separate five-second polling loop (and boundary fit) for
+        // every item before starting a final pass, multiplying batch latency.
         var evidence: [String: VerifiedPositionEvidence] = [:]
-        for id in expected.keys.sorted() {
-            try Task.checkCancellation()
-            guard let target = expected[id] else { throw MenuBarAccessError.disappeared }
-            evidence[id] = try await verifyPositionHidingBatchTarget(target, controlID: controlID, waitForStable: true)
-        }
-        // All preference mutations and the final fit precede these checks.
-        // A read-only last pass also rejects a later item's layout obscuring
-        // an earlier visible item, or bringing an earlier hidden item back.
-        try await scanNow()
-        for id in expected.keys.sorted() {
-            try Task.checkCancellation()
-            guard let target = expected[id], let previous = evidence[id] else { throw MenuBarAccessError.disappeared }
-            let current = try await verifyPositionHidingBatchTarget(target, controlID: controlID, waitForStable: false)
-            guard current.identity == previous.identity, current.key == previous.key,
-                  current.value == previous.value else { throw MenuBarAccessError.rejected }
-            evidence[id] = current
+        for round in 0..<2 {
+            try checkOperationDeadline()
+            if round > 0 { try await Task.sleep(for: .milliseconds(120)) }
+            try await scanNow()
+            var currentRound: [String: VerifiedPositionEvidence] = [:]
+            for id in expected.keys.sorted() {
+                try checkOperationDeadline()
+                guard let target = expected[id] else { throw MenuBarAccessError.disappeared }
+                let current = try await verifyPositionHidingBatchTarget(target, controlID: controlID, waitForStable: false)
+                if round > 0 {
+                    guard let previous = evidence[id], current.identity == previous.identity,
+                          current.key == previous.key, current.value == previous.value else {
+                        throw MenuBarAccessError.rejected
+                    }
+                }
+                currentRound[id] = current
+            }
+            evidence = currentRound
         }
         passed = true
         return evidence
@@ -1549,7 +1736,12 @@ final class MenuTidyModel: ObservableObject {
     }
 
     private func completeHiddenLayoutRefresh(_ required: Bool) async throws {
-        guard required else { return }
+        // The preference may already equal its original value (for example,
+        // after an external restore), so removing the final ledger entry can
+        // require no write while our now-unneeded native blocker still exists.
+        let removesBlocker = positionStore.managedHiddenEntries.isEmpty &&
+            (statusBar?.positionHidingBlockerWidth != nil || activeBlockerReservation != nil)
+        guard required || removesBlocker else { return }
         if positionStore.managedHiddenEntries.isEmpty {
             statusBar?.clearPositionHidingBlocker()
             activeBlockerReservation = nil
@@ -1566,12 +1758,13 @@ final class MenuTidyModel: ObservableObject {
 
     /// Only our own divider changes size. Position preferences stay journaled;
     /// host geometry is re-read after every asynchronous layout refresh.
-    private func fitPositionHidingBlocker(reposition: Bool = true) async throws {
+    private func fitPositionHidingBlocker(reposition: Bool = true,
+                                          budget: ManagementOperationBudget = .foreground) async throws {
         guard let statusBar, usesPositionHiding, !positionStore.managedHiddenEntries.isEmpty else { return }
         var transaction: MenuBarPositionStore.Transaction?
         var candidates: [MenuBarPositionCandidate] = []
         do {
-            try await scanNow()
+            try checkOperationDeadline(budget: budget)
             if reposition {
                 guard let dividerID = snapshots.first(where: { $0.ownIdentifier == "menu-tidy-divider" })?.id,
                       let controlID = snapshots.first(where: { $0.ownIdentifier == "menu-tidy-toggle" })?.id else {
@@ -1584,14 +1777,20 @@ final class MenuTidyModel: ObservableObject {
             }
             var fitted = false
             for _ in 0..<3 {
-                try await scanNow()
+                try checkOperationDeadline(budget: budget)
                 let requested = statusBar.positionHidingBlockerRequestedWidth
                 if let frame = await access.currentOwnDividerHostFrame(),
-                   statusBar.setPositionHidingBlocker(verifiedFrame: frame, expectedRequestedWidth: requested) {
-                    // Resizing this divider already invalidates its host.
-                    // Nudging the control as well changes the budget while we
-                    // measure it and can make an otherwise fitting item spill.
-                    try await Task.sleep(for: .milliseconds(250))
+                   let plan = statusBar.positionHidingBlockerPlan(verifiedFrame: frame,
+                       expectedRequestedWidth: requested) {
+                    guard statusBar.setPositionHidingBlocker(verifiedFrame: frame,
+                        expectedRequestedWidth: requested) else { throw MenuBarAccessError.invalidGeometry }
+                    if plan == requested {
+                        // No length changed. The strict host query already
+                        // re-read this exact source and physical frame twice.
+                        fitted = true
+                        break
+                    }
+                    try await Task.sleep(for: .milliseconds(120))
                     if let actual = await access.currentOwnDividerHostFrame(),
                        actual.width >= statusBar.positionHidingBlockerRequestedWidth,
                        abs(actual.maxX - frame.maxX) <= 1 {
@@ -1599,7 +1798,7 @@ final class MenuTidyModel: ObservableObject {
                         break
                     }
                 }
-                try await Task.sleep(for: .milliseconds(120))
+                try await Task.sleep(for: .milliseconds(80))
             }
             guard fitted else {
                 throw MenuTidyManagementError.positionApplication("菜单栏布局尚未确认稳定，未能建立可靠的隐藏边界。本次选择已保留，可重新应用。")
@@ -1769,20 +1968,29 @@ final class MenuTidyModel: ObservableObject {
     private func waitForPositionVisibility(id: String, visible: Bool,
                                            candidates: [MenuBarPositionCandidate],
                                            until outerDeadline: TimeInterval? = nil,
-                                           hadVerifiedReveal: Bool = false) async throws -> CGRect? {
+                                           hadVerifiedReveal: Bool = false,
+                                           budget: ManagementOperationBudget = .foreground) async throws -> CGRect? {
         guard let target = candidates.first(where: { $0.id == id }),
               let control = candidates.first(where: { $0.id != id }) else { throw MenuBarAccessError.disappeared }
         if usesPositionHiding, statusBar?.positionHidingBlockerWidth != nil {
-            try await fitPositionHidingBlocker(reposition: false)
+            try await fitPositionHidingBlocker(reposition: false, budget: budget)
         }
         let started = ProcessInfo.processInfo.systemUptime
-        let deadline = min(started + 5, outerDeadline ?? .infinity)
+        let deadline = budget.deadline(startedUptime: started, timeLimit: 3,
+            operationDeadline: operationDeadline, outerDeadline: outerDeadline)
         var refreshedAgain = false
+        var scanned = false
         var matches = 0
         var matchedFrame: CGRect?
         while ProcessInfo.processInfo.systemUptime < deadline {
-            try Task.checkCancellation()
-            try await scanNow()
+            try checkOperationDeadline(budget: budget)
+            // Fresh AX geometry/identity is read below on every observation.
+            // Refresh the inventory once if native layout needs another nudge,
+            // instead of enumerating every running app on each 120 ms poll.
+            if !scanned {
+                try await scanNow()
+                scanned = true
+            }
             let positions = try positionStore.readPositions()
             try await access.validateBackgroundPositionCandidates(candidates,
                 positions: positions, owners: menuBarScanInputs().owners)
@@ -1813,6 +2021,7 @@ final class MenuTidyModel: ObservableObject {
             if !agrees && !refreshedAgain && ProcessInfo.processInfo.systemUptime - started > 1 {
                 refreshedAgain = true
                 try await statusBar?.refreshPreferredPositions()
+                scanned = false
             }
             matches = agrees ? matches + 1 : 0
             matchedFrame = inspection.frame
@@ -2098,31 +2307,35 @@ final class MenuTidyModel: ObservableObject {
         }
         if usesPositionHiding && !isArranging {
             if !isApplying && !isActivatingPanelItem && !isRefreshingManagedIcons {
-                let currentPositions = try? positionStore.readPositions()
-                verifiedPositionGroups = verifiedPositionGroups.filter { id, _ in
-                    guard let evidence = verifiedPositionEvidence[id],
-                          currentPositions?[evidence.key] == evidence.value,
-                          Self.observedOwnerIsCurrent(evidence.identity),
-                          let current = newSnapshots.first(where: { $0.id == id }),
-                          observedItemIdentity(current) == evidence.identity else { return false }
-                    return true
-                }
-                // A direct hit is positive evidence of reappearance even if
-                // the preferred position and owner have not changed. Do not
-                // keep presenting a historical success as current state.
-                for (id, group) in verifiedPositionGroups where group != .visible {
-                    let observed = await access.inspectVisibility(id: id)
-                    if observed.centerHit {
-                        verifiedPositionGroups.removeValue(forKey: id)
-                        Self.diagnosticLogger.notice("positionHiding historicalProofRevoked=true reason=visible-again")
-                    }
-                }
-                verifiedPositionEvidence = verifiedPositionEvidence.filter { verifiedPositionGroups[$0.key] != nil }
+                await reconcileVerifiedPositionEvidence()
             }
             actualGroups = verifiedPositionGroups
         }
         rememberObservedGroups(scannedOwners: owners)
         rebuildRows()
+    }
+
+    /// Reconcile historical acceptance using read-only current evidence. This
+    /// is also safe after a preflight failure that performed no layout writes.
+    private func reconcileVerifiedPositionEvidence() async {
+        let currentPositions = try? positionStore.readPositions()
+        verifiedPositionGroups = verifiedPositionGroups.filter { id, _ in
+            guard let evidence = verifiedPositionEvidence[id],
+                  currentPositions?[evidence.key] == evidence.value,
+                  Self.observedOwnerIsCurrent(evidence.identity),
+                  let current = snapshots.first(where: { $0.id == id }),
+                  observedItemIdentity(current) == evidence.identity else { return false }
+            return true
+        }
+        // A direct hit revokes hidden proof even when weights are unchanged.
+        for (id, group) in verifiedPositionGroups where group != .visible {
+            let observed = await access.inspectVisibility(id: id)
+            if observed.centerHit {
+                verifiedPositionGroups.removeValue(forKey: id)
+                Self.diagnosticLogger.notice("positionHiding historicalProofRevoked=true reason=visible-again")
+            }
+        }
+        verifiedPositionEvidence = verifiedPositionEvidence.filter { verifiedPositionGroups[$0.key] != nil }
     }
 
     private static func observedOwnerIsCurrent(_ identity: ObservedItemGroupHistory.Identity) -> Bool {
@@ -2229,7 +2442,7 @@ final class MenuTidyModel: ObservableObject {
                     details.append("当前实际分组位置未确认；选择显示方式后应用。")
                 }
             }
-            let icon = item.bundleIdentifier.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }.map { NSWorkspace.shared.icon(forFile: $0.path) }
+            let icon = applicationIcon(for: item.bundleIdentifier)
             return ManagedItemRow(id: item.id, name: item.name, ownerName: item.ownerName, bundleIdentifier: item.bundleIdentifier,
                 icon: icon, group: group, isAvailable: true, canMove: item.canMove, detail: details.joined(separator: " · "),
                 isPending: item.canMove && counts[item.id] == 1 &&
@@ -2248,6 +2461,17 @@ final class MenuTidyModel: ObservableObject {
         items = result.sorted { $0.isAvailable != $1.isAvailable ? $0.isAvailable : $0.ownerName.localizedStandardCompare($1.ownerName) == .orderedAscending }
         actionablePendingCount = items.filter { $0.isPending && $0.isAvailable && $0.canMove }.count
         hasPendingChanges = actionablePendingCount > 0 || !offlineDrafts.isEmpty
+    }
+
+    /// Repeated layout observations rebuild rows frequently. App icons are
+    /// display metadata; looking them up again must not lengthen each check.
+    private func applicationIcon(for bundleIdentifier: String?) -> NSImage? {
+        guard let bundleIdentifier else { return nil }
+        if let cached = applicationIcons[bundleIdentifier] { return cached }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else { return nil }
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        applicationIcons[bundleIdentifier] = icon
+        return icon
     }
 
     private func draftSessionIdentity(for id: String) -> ObservedItemGroupHistory.Identity? {
@@ -2707,7 +2931,7 @@ final class MenuTidyModel: ObservableObject {
                                       }
                                   }) else { throw MenuBarAccessError.disappeared }
                             _ = try await self.waitForPositionVisibility(id: id, visible: false,
-                                candidates: verificationCandidates, hadVerifiedReveal: hadVisibleProof)
+                                candidates: verificationCandidates, hadVerifiedReveal: hadVisibleProof, budget: .cleanup)
                         }
                         Self.diagnosticLogger.notice("backgroundItemAction hiddenPositionRestored=true")
                     } catch {
