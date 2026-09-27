@@ -167,4 +167,109 @@ final class TrayPlacementQueueTests: XCTestCase {
         XCTAssertTrue(queue.pendingIDs.isEmpty)
         XCTAssertNil(queue.active)
     }
+
+    func testExplicitRepairIntentDoesNotLeakIntoAnotherItemsOrdinaryPlacement() throws {
+        var queue = TrayPlacementQueue()
+        queue.enqueue(id: "ambiguous", desiredInTray: true, resolveAmbiguousKey: true)
+        queue.enqueue(id: "ordinary", desiredInTray: true)
+
+        let repair = try XCTUnwrap(queue.claimNext())
+        XCTAssertEqual(repair.id, "ambiguous")
+        XCTAssertTrue(repair.resolveAmbiguousKey)
+        queue.finish(token: repair.token)
+        let ordinary = try XCTUnwrap(queue.claimNext())
+        XCTAssertEqual(ordinary.id, "ordinary")
+        XCTAssertFalse(ordinary.resolveAmbiguousKey)
+    }
+
+    func testOrdinarySelectionRevokesQueuedRepairEvenWhenPlacementIsUnchanged() throws {
+        var queue = TrayPlacementQueue()
+        queue.enqueue(id: "a", desiredInTray: true, resolveAmbiguousKey: true)
+        queue.enqueue(id: "b", desiredInTray: false)
+        queue.enqueue(id: "a", desiredInTray: true)
+
+        XCTAssertEqual(queue.pendingIDs, ["a", "b"])
+        let ordinary = try XCTUnwrap(queue.claimNext())
+        XCTAssertEqual(ordinary.id, "a")
+        XCTAssertTrue(ordinary.desiredInTray)
+        XCTAssertFalse(ordinary.resolveAmbiguousKey)
+    }
+
+    func testExplicitRepairReplacesEntireQueuedIntentWithoutChangingFIFO() throws {
+        var queue = TrayPlacementQueue()
+        queue.enqueue(id: "a", desiredInTray: false)
+        queue.enqueue(id: "b", desiredInTray: false)
+        queue.enqueue(id: "a", desiredInTray: true, resolveAmbiguousKey: true)
+
+        XCTAssertEqual(queue.pendingIDs, ["a", "b"])
+        XCTAssertEqual(queue.desired(id: "a"), true)
+        let repair = try XCTUnwrap(queue.claimNext())
+        XCTAssertEqual(repair.id, "a")
+        XCTAssertTrue(repair.desiredInTray)
+        XCTAssertTrue(repair.resolveAmbiguousKey)
+    }
+
+    func testActiveRepairAndNewerOrdinaryIntentKeepIndependentFlagsAcrossCompletion() throws {
+        var queue = TrayPlacementQueue()
+        queue.enqueue(id: "a", desiredInTray: true, resolveAmbiguousKey: true)
+        let repair = try XCTUnwrap(queue.claimNext())
+        queue.enqueue(id: "a", desiredInTray: false)
+
+        XCTAssertEqual(queue.active, repair)
+        XCTAssertTrue(queue.active?.resolveAmbiguousKey == true)
+        XCTAssertEqual(queue.desired(id: "a"), false)
+        queue.finish(token: repair.token)
+        let ordinary = try XCTUnwrap(queue.claimNext())
+        XCTAssertFalse(ordinary.desiredInTray)
+        XCTAssertFalse(ordinary.resolveAmbiguousKey)
+
+        queue.enqueue(id: "a", desiredInTray: true, resolveAmbiguousKey: true)
+        XCTAssertFalse(queue.finish(token: repair.token))
+        XCTAssertEqual(queue.active, ordinary)
+        queue.finish(token: ordinary.token)
+        let laterRepair = try XCTUnwrap(queue.claimNext())
+        XCTAssertTrue(laterRepair.desiredInTray)
+        XCTAssertTrue(laterRepair.resolveAmbiguousKey)
+        XCTAssertNotEqual(laterRepair.token, repair.token)
+    }
+
+    func testFailedRepairDoesNotRetryUnlessLaterExplicitRepairWasQueued() throws {
+        var queue = TrayPlacementQueue()
+        queue.enqueue(id: "a", desiredInTray: true, resolveAmbiguousKey: true)
+        let failed = try XCTUnwrap(queue.claimNext())
+        queue.finish(token: failed.token)
+        XCTAssertNil(queue.claimNext())
+
+        queue.enqueue(id: "a", desiredInTray: true)
+        let ordinary = try XCTUnwrap(queue.claimNext())
+        XCTAssertFalse(ordinary.resolveAmbiguousKey)
+        queue.enqueue(id: "a", desiredInTray: true, resolveAmbiguousKey: true)
+        queue.finish(token: ordinary.token)
+        let repair = try XCTUnwrap(queue.claimNext())
+        XCTAssertTrue(repair.resolveAmbiguousKey)
+        queue.finish(token: repair.token)
+        XCTAssertNil(queue.claimNext())
+    }
+
+    func testCancelDropsQueuedRepairFlagsWhilePreservingActiveRepairUntilCleanup() throws {
+        var queue = TrayPlacementQueue()
+        queue.enqueue(id: "a", desiredInTray: true, resolveAmbiguousKey: true)
+        let active = try XCTUnwrap(queue.claimNext())
+        queue.enqueue(id: "a", desiredInTray: false, resolveAmbiguousKey: true)
+        queue.enqueue(id: "b", desiredInTray: true, resolveAmbiguousKey: true)
+        queue.cancelAllPending()
+
+        XCTAssertEqual(queue.active, active)
+        XCTAssertTrue(queue.active?.resolveAmbiguousKey == true)
+        XCTAssertTrue(queue.pendingIDs.isEmpty)
+        XCTAssertNil(queue.desired(id: "b"))
+        queue.enqueue(id: "b", desiredInTray: true)
+        XCTAssertNil(queue.claimNext())
+        queue.finish(token: active.token)
+        let ordinary = try XCTUnwrap(queue.claimNext())
+        XCTAssertEqual(ordinary.id, "b")
+        XCTAssertFalse(ordinary.resolveAmbiguousKey)
+        queue.finish(token: ordinary.token)
+        XCTAssertNil(queue.claimNext())
+    }
 }

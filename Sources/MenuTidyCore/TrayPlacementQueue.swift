@@ -7,20 +7,35 @@ public struct TrayPlacementQueue: Sendable {
         public let token: UUID
         public let id: String
         public let desiredInTray: Bool
+        public let resolveAmbiguousKey: Bool
+
+        public init(token: UUID, id: String, desiredInTray: Bool, resolveAmbiguousKey: Bool = false) {
+            self.token = token
+            self.id = id
+            self.desiredInTray = desiredInTray
+            self.resolveAmbiguousKey = resolveAmbiguousKey
+        }
+    }
+
+    private struct Intent: Sendable {
+        let desiredInTray: Bool
+        let resolveAmbiguousKey: Bool
     }
 
     public private(set) var active: Request?
     private var pendingOrder: [String] = []
-    private var pendingValues: [String: Bool] = [:]
+    private var pendingIntents: [String: Intent] = [:]
 
     public init() {}
 
     /// Updating an already queued item preserves its first place in the FIFO.
     /// A new choice for the active item is queued separately; the active request
     /// remains an immutable description of the operation already in flight.
-    public mutating func enqueue(id: String, desiredInTray: Bool) {
-        if pendingValues[id] == nil { pendingOrder.append(id) }
-        pendingValues[id] = desiredInTray
+    /// Key resolution belongs only to this explicit intent: an ordinary later
+    /// choice replaces it even when the desired placement itself is unchanged.
+    public mutating func enqueue(id: String, desiredInTray: Bool, resolveAmbiguousKey: Bool = false) {
+        if pendingIntents[id] == nil { pendingOrder.append(id) }
+        pendingIntents[id] = Intent(desiredInTray: desiredInTray, resolveAmbiguousKey: resolveAmbiguousKey)
     }
 
     public var pendingIDs: [String] { pendingOrder }
@@ -28,17 +43,18 @@ public struct TrayPlacementQueue: Sendable {
     /// UI displays the newer queued choice while an older placement completes.
     /// nil means this queue has no intent for the item; consult saved rules then.
     public func desired(id: String) -> Bool? {
-        if let pending = pendingValues[id] { return pending }
+        if let pending = pendingIntents[id] { return pending.desiredInTray }
         return active.flatMap { $0.id == id ? $0.desiredInTray : nil }
     }
 
     /// Only one native placement may be claimed until its matching completion.
     public mutating func claimNext() -> Request? {
         guard active == nil, let id = pendingOrder.first,
-              let desiredInTray = pendingValues[id] else { return nil }
+              let intent = pendingIntents[id] else { return nil }
         pendingOrder.removeFirst()
-        pendingValues.removeValue(forKey: id)
-        let request = Request(token: UUID(), id: id, desiredInTray: desiredInTray)
+        pendingIntents.removeValue(forKey: id)
+        let request = Request(token: UUID(), id: id, desiredInTray: intent.desiredInTray,
+            resolveAmbiguousKey: intent.resolveAmbiguousKey)
         active = request
         return request
     }
@@ -57,6 +73,6 @@ public struct TrayPlacementQueue: Sendable {
     /// The caller must cancel and await that operation before finishing its token.
     public mutating func cancelAllPending() {
         pendingOrder.removeAll(keepingCapacity: true)
-        pendingValues.removeAll(keepingCapacity: true)
+        pendingIntents.removeAll(keepingCapacity: true)
     }
 }

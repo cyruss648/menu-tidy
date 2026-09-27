@@ -339,6 +339,7 @@ struct SettingsView: View {
         let message = model.trayPlacementMessage(id: item.id)
         let needsConfirmation = trayItemNeedsConfirmation(item)
         let confirmTitle = model.pendingDraftID(for: item.id) == nil ? "重新连接" : "继续设置"
+        let retryTitle = message == nil ? confirmTitle : model.trayPlacementRetryTitle(id: item.id)
         return HStack(spacing: 12) {
             itemIcon(item)
             VStack(alignment: .leading, spacing: 5) {
@@ -369,9 +370,9 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if !pending && (message != nil || needsConfirmation) && item.canMove {
-                Button(message == nil ? confirmTitle : "重试") { model.retryTrayPlacement(id: item.id) }
+                Button(retryTitle) { model.retryTrayPlacement(id: item.id) }
                     .disabled(trayControlsDisabled)
-                    .accessibilityLabel("\(message == nil ? confirmTitle : "重试")\(item.name)")
+                    .accessibilityLabel("\(retryTitle)\(item.name)")
             }
             Picker("\(item.name)的显示位置", selection: Binding(
                 get: { model.trayPlacementIsInTray(id: item.id) },

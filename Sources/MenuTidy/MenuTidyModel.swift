@@ -75,6 +75,7 @@ final class MenuTidyModel: ObservableObject {
     @Published private var trayPlacementQueue = TrayPlacementQueue()
     @Published private var trayPlacementErrors: [String: String] = [:]
     @Published private var trayReconnectIDs: Set<String> = []
+    @Published private var itemsNeedingPositionKeyResolution: Set<String> = []
     @Published private(set) var iconImageWarning: String?
     @Published private(set) var iconImageWarningDetails: String?
     @Published private(set) var panelImages: [String: NSImage] = [:]
@@ -206,12 +207,20 @@ final class MenuTidyModel: ObservableObject {
         onShowSettings?()
     }
 
-    func retryTrayPlacement(id: String) { requestTrayPlacement(id: id, inTray: trayPlacementIsInTray(id: id)) }
+    func trayPlacementRetryTitle(id: String) -> String {
+        trayPlacementNeedsIdentification(id: id) ? "识别并连接" : "重试"
+    }
+
+    func trayPlacementNeedsIdentification(id: String) -> Bool { itemsNeedingPositionKeyResolution.contains(id) }
+
+    func retryTrayPlacement(id: String) {
+        requestTrayPlacement(id: id, inTray: trayPlacementIsInTray(id: id), resolveAmbiguousKey: true)
+    }
 
     /// User intent is saved immediately; only the newest intent for a source
     /// enters the serial native mutation path. Displaying the tray never waits
     /// for this queue, and stale completion cannot consume a newer choice.
-    func requestTrayPlacement(id: String, inTray: Bool) {
+    func requestTrayPlacement(id: String, inTray: Bool, resolveAmbiguousKey: Bool = false) {
         guard !stopping, !preparingToTerminate, !isRecoveringPositions, !isArranging,
               let row = items.first(where: { $0.id == id && $0.canMove && $0.isAvailable }),
               snapshots.filter({ $0.id == id }).count == 1 else { return }
@@ -232,7 +241,7 @@ final class MenuTidyModel: ObservableObject {
         trayPlacementErrors.removeValue(forKey: id)
         itemApplicationIssues.removeValue(forKey: id)
         if let identity = draftSessionIdentity(for: id) { trayConnectionAttempts[id] = identity }
-        trayPlacementQueue.enqueue(id: id, desiredInTray: inTray)
+        trayPlacementQueue.enqueue(id: id, desiredInTray: inTray, resolveAmbiguousKey: resolveAmbiguousKey)
         rebuildRows()
         drainTrayPlacements()
     }
@@ -257,7 +266,8 @@ final class MenuTidyModel: ObservableObject {
                     continue
                 }
                 guard let request = self.trayPlacementQueue.claimNext() else { return }
-                self.applyItemRules(requestedItemIDs: [request.id], preservePanel: true)
+                self.applyItemRules(requestedItemIDs: [request.id], preservePanel: true,
+                    resolveAmbiguousKeyFor: request.resolveAmbiguousKey ? request.id : nil)
                 if self.isApplying { await self.workTask?.value }
                 let desiredGroup: ItemVisibility = request.desiredInTray ? .collapsible : .visible
                 let confirmed = self.rules.rule(for: request.id)?.visibility == desiredGroup &&
@@ -266,6 +276,7 @@ final class MenuTidyModel: ObservableObject {
                 if self.trayPlacementQueue.desired(id: request.id) == nil {
                     if confirmed {
                         self.trayPlacementErrors.removeValue(forKey: request.id)
+                        self.trayItemErrors.removeValue(forKey: request.id)
                     } else {
                         self.trayPlacementErrors[request.id] = self.itemApplicationIssues[request.id] ??
                             self.positionRecoveryMessage ?? self.managementError ??
@@ -1019,7 +1030,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func applyItemRules(onlySavedRules: Bool = false, requestedItemIDs: Set<String>? = nil,
-                        preservePanel: Bool = false) {
+                        preservePanel: Bool = false, resolveAmbiguousKeyFor resolutionID: String? = nil) {
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         if !preservePanel { closeIconPanel() }
         panelTask?.cancel()
@@ -1075,6 +1086,12 @@ final class MenuTidyModel: ObservableObject {
             do {
                 await self.passiveIconCaptureTask?.value
                 try self.checkOperationDeadline()
+                if self.usesPositionHiding, let resolutionID, requestedIDs == [resolutionID] {
+                    stage = "识别图标对应的位置记录"
+                    self.managementMessage = "正在识别此图标的位置记录，完成后继续连接托盘…"
+                    try await self.resolveAmbiguousPositionKeyIfNeeded(id: resolutionID)
+                    try self.checkOperationDeadline()
+                }
                 stage = "应用后台排序"
                 if !(try await self.applyStoredPositionRules(requestedIDs: requestedIDs, confirmedRules: fixedRules)) {
                     try await self.access.validateBackgroundMoveSupport(ids: requestedIDs)
@@ -1449,13 +1466,15 @@ final class MenuTidyModel: ObservableObject {
                 if rule.visibility != .visible { try await access.validateItemActionSupport(id: rule.id) }
                 try checkPreflight()
                 supportedIDs.insert(rule.id)
+                itemsNeedingPositionKeyResolution.remove(rule.id)
             } catch let error as MenuBarPositionBindingError {
                 // Cancellation and exhausted time are operation outcomes, not
                 // evidence that an application is unsupported.
                 try checkPreflight()
                 if error.reason == .cancelled { throw MenuBarAccessError.cancelled }
+                if error.reason == .ambiguousKey { itemsNeedingPositionKeyResolution.insert(rule.id) }
                 issues[rule.id] = error.reason == .ambiguousKey
-                    ? "此应用有多个排序记录，无法安全自动匹配。请使用菜单栏 ⌘ 拖拽整理。"
+                    ? "此应用有多个位置记录。点击“识别并连接”可确认当前图标对应的记录，再完成设置。"
                     : error.localizedDescription
             } catch let error as MenuBarAccessError {
                 try checkPreflight()
@@ -1480,7 +1499,10 @@ final class MenuTidyModel: ObservableObject {
         let accountableKeys = Set(scope.priorTargets.map(\.key))
             .union(scope.preparedCandidates.filter { actionable.contains($0.id) }.map(\.key))
         guard scope.previouslyManagedKeys.isSubset(of: accountableKeys) else {
-            throw MenuTidyManagementError.positionApplication("现有隐藏项中仍有无法确认身份的项目，请先恢复原排序，再应用支持的分类。选择已保留。")
+            let message = "现有隐藏项中仍有无法确认身份的项目，请先恢复原排序，再应用支持的分类。选择已保留。"
+            positionLayoutRecoveryNeeded = true
+            positionRecoveryMessage = message
+            throw MenuTidyManagementError.positionApplication(message)
         }
         guard !scope.requestedRules.isEmpty else { return }
         for prior in scope.priorTargets where !actionable.contains(prior.rule.id) {
@@ -2036,6 +2058,25 @@ final class MenuTidyModel: ObservableObject {
         return result
     }
 
+    /// Only an explicit single-item retry may enter the bounded identification
+    /// path. Ordinary placement, discovery and batch work remain read-only here.
+    private func resolveAmbiguousPositionKeyIfNeeded(id: String) async throws {
+        try checkOperationDeadline()
+        try await scanNow()
+        do {
+            let candidates = try await prepareStablePositionCandidates(ids: [id])
+            await access.discardBackgroundPositionCandidates(candidates)
+            itemsNeedingPositionKeyResolution.remove(id)
+            return
+        } catch let error as MenuBarPositionBindingError where error.reason == .ambiguousKey {
+            itemsNeedingPositionKeyResolution.insert(id)
+        }
+        let controls = snapshots.filter { $0.ownIdentifier == "menu-tidy-toggle" }
+        guard controls.count == 1, let controlID = controls.first?.id else { throw MenuBarAccessError.disappeared }
+        try await resolvePositionKey(id: id, controlID: controlID)
+        itemsNeedingPositionKeyResolution.remove(id)
+    }
+
     /// Some applications leave multiple autosave keys behind. A candidate is
     /// accepted only when the same original AX item visibly follows it to both
     /// sides of our control, and its exact original preference is restored.
@@ -2046,7 +2087,7 @@ final class MenuTidyModel: ObservableObject {
         var transaction: MenuBarPositionStore.Transaction?
         do {
             for key in handle.candidateKeys {
-                try Task.checkCancellation()
+                try checkOperationDeadline()
                 guard !preparingToTerminate, !stopping,
                       !positionStore.managedHiddenEntries.contains(where: { $0.key == key }) else {
                     throw MenuBarAccessError.cancelled
@@ -2066,7 +2107,7 @@ final class MenuTidyModel: ObservableObject {
                     let deadline = min(handle.deadline - 0.7, started + 3)
                     var retriedLayout = false
                     while phase == observingPhase && ProcessInfo.processInfo.systemUptime < deadline {
-                        try Task.checkCancellation()
+                        try checkOperationDeadline()
                         try await scanNow()
                         phase = try await access.observeBackgroundPositionKeyChallenge(handle,
                             positions: positionStore.readPositions(), owners: menuBarScanInputs().owners)

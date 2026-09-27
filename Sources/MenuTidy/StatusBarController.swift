@@ -12,6 +12,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let alwaysDivider: NSStatusItem
     private var demoItems: [NSStatusItem] = []
     private var screenObserver: NSObjectProtocol?
+    private var lastScreenLayout: MenuBarScreenLayout?
     private var isCollapsed = false
     private var isArranging = false
     private let modernMenuBar = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
@@ -63,14 +64,41 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             }
         }
         apply(collapsed: false, arranging: false)
+        lastScreenLayout = currentScreenLayout()
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                                  object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                // A changed display topology invalidates the measured budget.
-                self?.clearPositionHidingBlocker()
-                self?.model?.recoverVisibility()
-            }
+            MainActor.assumeIsolated { self?.screenParametersDidChange() }
         }
+    }
+
+    private func currentScreenLayout() -> MenuBarScreenLayout? {
+        var screens: [MenuBarScreenLayout.Screen] = []
+        for screen in NSScreen.screens {
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return nil
+            }
+            screens.append(.init(displayID: number.uint32Value, frame: screen.frame,
+                bounds: CGDisplayBounds(CGDirectDisplayID(number.uint32Value)), scale: Double(screen.backingScaleFactor),
+                safeAreaTop: Double(screen.safeAreaInsets.top), auxiliaryTopLeftArea: screen.auxiliaryTopLeftArea,
+                auxiliaryTopRightArea: screen.auxiliaryTopRightArea))
+        }
+        return MenuBarScreenLayout(screens: screens, mainDisplayID: CGMainDisplayID(),
+            menuBarThickness: Double(NSStatusBar.system.thickness))
+    }
+
+    private func screenParametersDidChange() {
+        let current = currentScreenLayout()
+        let reason = MenuBarScreenLayout.invalidationReason(from: lastScreenLayout, to: current)
+        lastScreenLayout = current
+        guard let reason else {
+            Self.blockerLogger.notice("screenParameters invalidated=false reason=unchanged")
+            return
+        }
+        Self.blockerLogger.notice("screenParameters invalidated=true reason=\(reason.rawValue, privacy: .public)")
+        // Real or unreadable layout changes still invalidate the measured
+        // budget and every active reservation before requesting revalidation.
+        clearPositionHidingBlocker()
+        model?.recoverVisibility()
     }
 
     func restoreControlVisibility() {

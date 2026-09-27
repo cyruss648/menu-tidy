@@ -182,6 +182,9 @@ private struct HiddenItemsPanelView: View {
             // Pending placement may have removed its tile optimistically.
             // Keep the operation's result tied to its identity and action.
             if model.trayPlacementIsPending(id: id) { return nil }
+            if model.trayPlacementNeedsIdentification(id: id), let message = model.trayPlacementMessage(id: id) {
+                return TrayPanelError(itemID: id, message: message, retryAction: .placement)
+            }
             if lastInteraction == .placement, let message = model.trayPlacementMessage(id: id) {
                 return TrayPanelError(itemID: id, message: message, retryAction: .placement)
             }
@@ -191,6 +194,10 @@ private struct HiddenItemsPanelView: View {
             }
         }
         for item in model.panelItems {
+            if model.trayPlacementNeedsIdentification(id: item.id),
+               !model.trayPlacementIsPending(id: item.id), let message = model.trayPlacementMessage(id: item.id) {
+                return TrayPanelError(itemID: item.id, message: message, retryAction: .placement)
+            }
             if let message = model.trayItemErrors[item.id] {
                 return TrayPanelError(itemID: item.id, message: message, retryAction: .activation)
             }
@@ -312,7 +319,7 @@ private struct HiddenItemsPanelView: View {
             }
             Spacer(minLength: 0)
             if let id = error.itemID, let action = error.retryAction {
-                Button("重试") {
+                Button(action == .placement ? model.trayPlacementRetryTitle(id: id) : "重试") {
                     switch action {
                     case .placement:
                         lastInteractedItemID = id
