@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Menu Tidy stable (x86_64)</title>
+    <link>https://github.com/cyruss648/menu-tidy</link>
+    <description>Menu Tidy application updates</description>
+    <item>
+      <title>Menu Tidy 0.5.0</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.5.0</link>
+      <pubDate>Sun, 27 Sep 2026 07:04:16 +0000</pubDate>
+      <sparkle:version>52</sparkle:version>
+      <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="plain-text">## [0.5.0] - 2026-09-27
+
+本版将日常操作改为 Windows 风格独立托盘，并重做 macOS 27 的图标隐藏和恢复方式。构建号为 52，提供 Apple Silicon 与 Intel 两个独立安装包。
+
+### 功能与交互
+
+- 每项只有「常驻菜单栏 / 收进托盘」两种日常去向，选择后立即保存意图并串行处理；快速切换以最新选择为准，失败在对应项提示，不反复后台重试。
+- 点击菜单栏箭头立即打开六列独立托盘，不等待全量扫描、截图采集或整批分类。原始图像不可用时显示明确的应用身份图标；屏幕录制为可选增强。
+- macOS 27 使用精确应用的原生显示开关，移除两块宽占位，避免本应用把图标挤进系统溢出区。同一应用的多个图标共用显示选择，不依赖有歧义的旧排序编号。
+- 托盘点击先临时显示目标，再请求一次原生辅助功能动作；确认原生菜单或窗口出现后供用户操作，关闭后重新隐藏。支持经过独立验证的隔空投送通道。
+- 右键托盘项目提供 Menu Tidy 自己的「打开菜单 / 常驻菜单栏」操作，不承诺转发第三方原生右键事件。
+- 增加基于 Sparkle 2.10.0 的应用内更新，分别提供架构与 stable / preview 通道，验证更新列表及归档签名。默认自动检查，自动下载并在退出时安装默认关闭。
+
+### 可靠性修复
+
+- 刷新、显示分类、获取图像分别执行，减少无关等待；有界操作支持停止，已经开始的改动先完成必要恢复。
+- 设置写入前保存私有恢复日志；只恢复仍与本应用记录一致的目标，保留外部改动。两个独立后端分别尝试恢复，单侧错误不阻断另一侧。
+- 应用进程更换后保留旧生命周期的恢复意图，待操作空闲时恢复原值再重新发现；未知身份不冒充已退出，失败不自动循环。
+- 修复系统记录混合格式误报权限不足、Batteries 等已可见辅助进程的常驻误报，以及空白占位误入旧整理模式。
+- 保留旧分类和恢复记录，启用新隐藏方式前先条件恢复旧位置。正常退出或更新安装前恢复本应用管理的图标。
+
+### 升级与权限
+
+- macOS 27 需要辅助功能权限，并在应用内通过系统选择器授权精确的菜单栏显示设置文件；无需完整磁盘访问。旧排序恢复或特定系统模块可能需要独立文件授权。
+- 从没有更新器的旧版本升级，需要先正常退出，再手动安装对应架构包。保持 `/Applications/Menu Tidy.app` 安装路径；签名身份变化时可能需要重新确认系统授权。
+- 最低部署目标为 macOS 13；新原生显示开关路径针对 macOS 27，旧系统使用兼容路径。安装包使用项目专用自签名证书，并非 Apple Developer ID，尚未公证。
+
+### 验证与已知限制
+
+- 本地完整检查通过 438 项 Swift 与 80 项 Python 测试；macOS 27 Apple Silicon 本地候选验证了独立托盘、原生溢出入口消失、AutoFocus 和隔空投送原生动作、Bob 单项往返、退出恢复与重新启动。GitHub 双架构结果以本次工作流为准。
+- 本轮实测原生菜单打开约 1.1–1.4 秒，Bob 单项切换约 1 秒；这是指定机器的测量，不是所有应用的耗时保证。
+- 当前机器的 ChatGPT 系统记录指向旧诊断程序，归属无法可靠确认时保留原生图标并提示；不会扩大匹配或阻塞其他项目。文字输入图标尚未支持隐藏后完整重绑；部分第三方应用不提供可用后台动作。
+- 托盘是代理入口，未把第三方原生控件搬进本应用。隐藏图像是缓存，可能不实时更新；常驻图标自身超出屏幕容量时，系统仍可能显示溢出入口。
+- 旧 macOS、Intel 桌面交互、多显示器、第三方应用升级重启和崩溃注入未完成全场景设备验收。自动测试、代码签名和 CI 构建不能替代这些验证。
+
+使用说明见 [README](README.md)，当前实现与实机证据见[独立托盘体验](docs/TRAY-EXPERIENCE.md)和[原生隐藏验证](docs/NATIVE-VISIBILITY-RESEARCH.md)。
+
+### 软件内更新与首次安装
+
+已包含更新器的版本，可在「权限与设置 → 软件更新」点击「检查更新…」，
+由程序下载、验证并安装新版本；也可设置是否自动检查更新、自动下载并在退出时安装。
+更新保留图标分类与偏好设置；后台菜单栏操作结束后才会进行更新安装。
+尚无「软件更新」入口的旧版本，需要先按下方步骤安装一次含更新器的新版本；
+此后的更新即可在软件内完成，无需每次手动下载替换应用。
+
+### 下载与验证
+
+Apple Silicon 下载 `Menu-Tidy-0.5.0-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.5.0-macos-x86_64.zip`。
+同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
+退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
+macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
+已验证的系统模块可能另需该模块的精确文件访问。排序目录访问仅用于旧位置恢复或兼容路径，无需完整磁盘访问。
+屏幕录制权限仅用于获取原始菜单栏图像；未授权时独立托盘仍提供应用身份图标或名称入口。
+采集的原图只在内存中处理，不上传、不存盘、不采集声音。
+
+本版本发布到正式更新渠道。预览版本使用独立的预览更新渠道。
+使用项目专用自签名证书，未经过 Apple 公证；更新归档和更新列表均使用 EdDSA 签名并验证。
+主页面提供「常驻菜单栏 / 收进托盘」两种去向，选择后自动执行单项设置；失败在对应行保留原因与重试入口。
+点击菜单栏箭头立即打开独立网格托盘，不等待全量扫描或重新截图。原始图标快照在隐藏期间不会实时更新。
+macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同一应用的多个菜单栏图标共用显示设置。
+系统模块按已验证的接口逐项支持。日常模式移除宽占位，只保留托盘按钮；常驻项目超出屏幕容量时，系统仍可能显示溢出入口。
+采集原图或打开目标时会临时显示相应应用或模块，
+不移动用户鼠标，不发送全局模拟键鼠事件。点击只向原始辅助功能对象请求一次受支持的动作，
+确认原生菜单或窗口打开后等待其关闭，再恢复隐藏，不补发模拟点击。结束隐藏管理或正常退出时条件恢复原设置，
+外部改动不会被强行覆盖；未完成的恢复保留记录。不支持或未确认成功的选择保留原因和重试入口，不标为已完成。
+原生 ⌘ 拖拽分组仅保留在旧系统兼容模式；macOS 27 使用上述单项设置流程。
+显示设置读回或动作返回成功不等于图标已经隐藏或菜单已经出现，实际兼容性以验证记录为准。
+最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
+本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
+
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.5.0/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.5.0/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.5.0/docs/NATIVE-VISIBILITY-RESEARCH.md)
+</description>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.5.0/Menu-Tidy-0.5.0-macos-x86_64.zip" length="3775281" type="application/octet-stream" sparkle:edSignature="iyxpwFxUfmtLOMs8bE+W1gBK9C3ygDQugsqL5EQj4Rh0kneF6PAzXiI+rvI982xXTmePgSX1GATK+0Wm8lTRDQ=="></enclosure>
+    </item>
+  </channel>
+</rss><!-- sparkle-signatures:
+edSignature: cn5T656yHgxRJ7ofyvF7gJERbewNM47DShWXVnpPGNLMUS1Ki7myNVfRyXQr611Y4aCF2W3hzQvCGXJLF4I/AQ==
+length: 8943
+-->
