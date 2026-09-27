@@ -6,6 +6,14 @@ final class NativeMenuBarVisibilityLedgerTests: XCTestCase {
     private typealias Ledger = NativeMenuBarVisibilityLedger
     private typealias Codec = NativeMenuBarVisibilityCodec
     private let bundle = "dev.fixture.Target"
+    private var originalRecord: Data?
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        // A receipt retains its original bytes through every transition.
+        // Serializing equal dictionaries again need not reproduce those bytes.
+        originalRecord = try record()
+    }
 
     private func record(_ allowed: Bool = true, extra: String = "original") throws -> Data {
         let location: [String: Any] = ["bundle": ["_0": bundle]]
@@ -15,7 +23,7 @@ final class NativeMenuBarVisibilityLedgerTests: XCTestCase {
     }
 
     private func entry(_ mode: Ledger.Mode, _ operation: Ledger.Operation? = nil) throws -> Ledger.Entry {
-        Ledger.Entry(bundleIdentifier: bundle, originalRecord: try record(), mode: mode, pending: operation)
+        Ledger.Entry(bundleIdentifier: bundle, originalRecord: try XCTUnwrap(originalRecord), mode: mode, pending: operation)
     }
 
     func testCrashBeforeFirstWriteOwnsNothing() throws {
