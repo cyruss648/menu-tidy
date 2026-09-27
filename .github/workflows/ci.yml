@@ -125,7 +125,6 @@ jobs:
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_COMMIT: ${{ github.sha }}
       GH_TOKEN: ${{ github.token }}
-      FEED_DIRECTORY: ${{ runner.temp }}/menu-tidy-updates
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -144,6 +143,8 @@ jobs:
 
       - name: Read the latest published update channels
         run: |
+          FEED_DIRECTORY="$RUNNER_TEMP/menu-tidy-updates"
+          printf 'FEED_DIRECTORY=%s\n' "$FEED_DIRECTORY" >> "$GITHUB_ENV"
           gh auth setup-git
           git init "$FEED_DIRECTORY"
           git -C "$FEED_DIRECTORY" remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
