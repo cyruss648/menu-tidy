@@ -458,7 +458,11 @@ actor MenuBarAccessibility {
                 let existing = unique[index]
                 let childBridge = existing.hostPresentation == nil
                     ? sourceChildBinding(origin: existing, projection: candidate, candidates: identityCandidates) : nil
-                if childBridge != nil || sameItem(existing, candidate) {
+                // Keep non-Sendable AX entries on this actor instead of
+                // capturing them in a short-circuit autoclosure (Swift 6.2).
+                var isSameItem = childBridge != nil
+                if !isSameItem { isSameItem = sameItem(existing, candidate) }
+                if isSameItem {
                     if let childBridge {
                         unique[index].hostPresentation = childBridge
                         unique[index].hostGeometryUnresolved = false
@@ -565,9 +569,11 @@ actor MenuBarAccessibility {
             // CFEqual. Without a strictly validated dual-identity binding, a
             // fresh system hit on the original independently proves only its
             // own position. This is not a PID/frame-only host association.
-            let verifiedOrigin = candidate.source == .applicationExtras && !candidate.requiresHostPresentation &&
-                sourceMatchesHitTest(candidate.element,
+            var verifiedOrigin = false
+            if candidate.source == .applicationExtras, !candidate.requiresHostPresentation {
+                verifiedOrigin = sourceMatchesHitTest(candidate.element,
                     at: CGPoint(x: candidate.sourceFrame.midX, y: candidate.sourceFrame.midY), context: "origin-position")
+            }
             let hostGeometryUnresolved = (candidate.hostGeometryUnresolved || lostHostBinding) && !verifiedOrigin
             let hasReliableGeometry = !unreliableGeometry.contains(candidateIndex) && !hostGeometryUnresolved
             if let identifier = candidate.identifier, Self.anchorIdentifiers.contains(identifier) {
@@ -666,14 +672,22 @@ actor MenuBarAccessibility {
         try Task.checkCancellation()
         guard scanCanContinue else { throw MenuBarAccessError.scanTimedOut }
         entries = updated
-        nativeSystemVisibilityIdentities = nativeSystemVisibilityIdentities.filter { id, identity in
-            guard let entry = updated[id] else { return false }
-            return sameNativeSystemOwner(identity.owner, entry.owner) &&
-                entry.accessibilityIdentifier == identity.identifier
+        for (id, identity) in nativeSystemVisibilityIdentities {
+            guard let entry = updated[id], sameNativeSystemOwner(identity.owner, entry.owner),
+                  entry.accessibilityIdentifier == identity.identifier else {
+                nativeSystemVisibilityIdentities.removeValue(forKey: id)
+                continue
+            }
         }
         published = true
-        let observed = unique.compactMap { candidate in
-            updated.values.first { CFEqual($0.element, candidate.element) }?.snapshot
+        var observed: [MenuBarItemSnapshot] = []
+        for candidate in unique {
+            for entry in updated.values {
+                if CFEqual(entry.element, candidate.element) {
+                    observed.append(entry.snapshot)
+                    break
+                }
+            }
         }
         var result = retainedSnapshots
         for snapshot in observed { result[snapshot.id] = snapshot }
@@ -1176,11 +1190,23 @@ actor MenuBarAccessibility {
             guard livePresentationScopeMatches(prepared.entry, owners: prepared.owners) else {
                 throw MenuBarAccessError.disappeared
             }
-            let appeared = probe.nodes.filter { node in
-                node.visible && !prepared.visible.contains(where: { CFEqual($0.element, node.element) })
+            var appeared: [PresentationNode] = []
+            for node in probe.nodes {
+                guard node.visible else { continue }
+                var previouslyVisible = false
+                for previous in prepared.visible {
+                    if CFEqual(previous.element, node.element) { previouslyVisible = true; break }
+                }
+                if !previouslyVisible { appeared.append(node) }
             }
-            let matched = appeared.filter { presentationMatchesSystemModule($0, entry: prepared.entry) }
-            let menus = matched.filter { $0.kind == .menu }
+            var matched: [PresentationNode] = []
+            for node in appeared {
+                if presentationMatchesSystemModule(node, entry: prepared.entry) { matched.append(node) }
+            }
+            var menus: [PresentationNode] = []
+            for node in matched {
+                if node.kind == .menu { menus.append(node) }
+            }
             let preferred = menus.isEmpty ? matched : menus
             Self.logger.debug("itemPresentation observationComplete=\(probe.complete) nodes=\(probe.nodes.count) visible=\(probe.nodes.filter(\.visible).count) appeared=\(preferred.count)")
             // A verified new root is positive evidence even when a separate
@@ -2095,8 +2121,9 @@ actor MenuBarAccessibility {
               presentation.path.contains(where: { CFEqual($0, hit) }),
               systemModulePresentationIsCurrent(presentation, entry: entry) else { return false }
         let second = Self.copyElementAtPositionOnMainThread(point)
-        return second.error == .success && second.element.map { CFEqual($0, hit) } == true &&
-            systemModulePresentationIsCurrent(presentation, entry: entry)
+        guard second.error == .success, let secondHit = second.element, CFEqual(secondHit, hit),
+              systemModulePresentationIsCurrent(presentation, entry: entry) else { return false }
+        return true
     }
 
     /// Does not rescan, open overflow, alter layout, or synthesize input.
@@ -2136,7 +2163,8 @@ actor MenuBarAccessibility {
         let roleRead = copyAttribute(entry.element, kAXRoleAttribute)
         let role = roleRead.value as? String
         let isItemRole = roleRead.error == .success && (role == kAXMenuBarItemRole || role == kAXButtonRole)
-        let isVerifiedRolelessModule = roleRead.error == .noValue && verifiedSystemModuleSource(entry)
+        var isVerifiedRolelessModule = false
+        if roleRead.error == .noValue { isVerifiedRolelessModule = verifiedSystemModuleSource(entry) }
         let ownerCurrent = liveOwnerMatches(entry)
         var strictHit = false
         var frameStable = false
@@ -2150,13 +2178,17 @@ actor MenuBarAccessibility {
            }) {
             let point = CGPoint(x: raw.midX, y: raw.midY)
             let first = Self.copyElementAtPositionOnMainThread(point)
-            strictHit = first.error == .success && first.element.map { CFEqual($0, entry.element) } == true
+            if first.error == .success, let firstHit = first.element {
+                strictHit = CFEqual(firstHit, entry.element)
+            }
             if strictHit {
-                frameStable = frame(entry.element) == raw && liveOwnerMatches(entry)
+                if frame(entry.element) == raw { frameStable = liveOwnerMatches(entry) }
                 if frameStable {
                     let second = Self.copyElementAtPositionOnMainThread(point)
-                    verified = second.error == .success && second.element.map { CFEqual($0, entry.element) } == true &&
-                        frame(entry.element) == raw && liveOwnerMatches(entry) && !Task.isCancelled
+                    if second.error == .success, let secondHit = second.element, CFEqual(secondHit, entry.element),
+                       frame(entry.element) == raw, liveOwnerMatches(entry), !Task.isCancelled {
+                        verified = true
+                    }
                 }
             }
         }
@@ -2315,7 +2347,10 @@ actor MenuBarAccessibility {
     /// remote app items. Prove a unique original-object subtree instead of
     /// applying the foreign-child mirror rule or matching image coordinates.
     private func systemModulePresentation(_ entry: Entry, sourceVerified: Bool = false) -> SystemModulePresentation? {
-        guard sourceVerified || verifiedSystemModuleSource(entry), let band = menuBands.first else { return nil }
+        if !sourceVerified {
+            guard verifiedSystemModuleSource(entry) else { return nil }
+        }
+        guard let band = menuBands.first else { return nil }
         do {
             var budget = PositionReadBudget()
             let id = entry.snapshot.id
@@ -2400,9 +2435,10 @@ actor MenuBarAccessibility {
                       branch.children.allSatisfy({ old in children.contains(where: { CFEqual($0, old) }) }) else { return false }
             }
             let identifier = try positionAttribute(entry.element, kAXIdentifierAttribute, id: id, budget: &budget)
-            return identifier.error == .success && identifier.value as? String == entry.accessibilityIdentifier &&
-                liveOwnerMatches(entry) && frame(container) == presentation.frame &&
-                frame(presentation.window) == presentation.windowFrame && !Task.isCancelled
+            guard identifier.error == .success, identifier.value as? String == entry.accessibilityIdentifier,
+                  liveOwnerMatches(entry), frame(container) == presentation.frame,
+                  frame(presentation.window) == presentation.windowFrame, !Task.isCancelled else { return false }
+            return true
         } catch { return false }
     }
 
@@ -4748,8 +4784,9 @@ actor MenuBarAccessibility {
             Self.logger.notice("sourceChildBridge accepted=false stage=source-child-not-equal childCount=\(children.count)")
             return false
         }
-        return budget.isValid && liveOwnerMatches(element: original, owner: owner) &&
-            liveOwnerMatches(element: remote, owner: owner)
+        guard budget.isValid, liveOwnerMatches(element: original, owner: owner),
+              liveOwnerMatches(element: remote, owner: owner) else { return false }
+        return true
     }
 
     private func mirrorBinding(origin: Candidate, projection: Candidate,
@@ -4943,8 +4980,10 @@ actor MenuBarAccessibility {
                 return failed("children-read", depth: next.depth)
             }
             branches.append((next.element, children, !roleless))
-            let childrenAreHostContainers = next.depth == 0 && role == kAXWindowRole &&
-                hostOwner.map { pid == $0.pid && liveOwnerMatches(element: next.element, owner: $0) } == true
+            var childrenAreHostContainers = false
+            if next.depth == 0, role == kAXWindowRole, let hostOwner, pid == hostOwner.pid {
+                childrenAreHostContainers = liveOwnerMatches(element: next.element, owner: hostOwner)
+            }
             pending.append(contentsOf: children.map { (element: $0, depth: next.depth + 1, hostContainer: childrenAreHostContainers) })
         }
         // A roleless container is usable only as fully enumerated structure.
