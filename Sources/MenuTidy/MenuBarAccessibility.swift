@@ -162,6 +162,13 @@ actor MenuBarAccessibility {
         let role: String?
         var policy: SystemModuleContinuityPolicy
     }
+    /// AirDrop is recreated when its native visibility preference changes.
+    /// This protects its system identity, never the identity of an old AX object.
+    private struct NativeSystemVisibilityIdentity {
+        let owner: MenuBarOwner
+        let identifier: String
+        let key: String
+    }
     private struct PositionReadBudget {
         let deadline = ProcessInfo.processInfo.systemUptime + 1
         var remaining = 512
@@ -326,6 +333,7 @@ actor MenuBarAccessibility {
     }
     private var positionCandidateBindings: [UUID: PositionCandidateBinding] = [:]
     private var systemModuleContinuity: [String: SystemModuleContinuitySeed] = [:]
+    private var nativeSystemVisibilityIdentities: [String: NativeSystemVisibilityIdentity] = [:]
     private var positionKeyChallenges: [UUID: PositionKeyChallengeBinding] = [:]
     private var validatedPositionKeys: [String: ValidatedPositionKey] = [:]
     private var menuBands: [CGRect] = []
@@ -366,13 +374,18 @@ actor MenuBarAccessibility {
 
     func cancel() {
         cancellationRequested = true
-        if !AXIsProcessTrusted() { systemModuleContinuity.removeAll() }
+        if !AXIsProcessTrusted() {
+            systemModuleContinuity.removeAll()
+            nativeSystemVisibilityIdentities.removeAll()
+        }
     }
 
     func scan(owners: [MenuBarOwner], menuBands: [CGRect],
-              positions: [String: Double] = [:]) throws -> [MenuBarItemSnapshot] {
+              positions: [String: Double] = [:],
+              retainHiddenIDs: Set<String> = []) throws -> [MenuBarItemSnapshot] {
         guard AXIsProcessTrusted() else {
             systemModuleContinuity.removeAll()
+            nativeSystemVisibilityIdentities.removeAll()
             throw MenuBarAccessError.permission
         }
         self.menuBands = menuBands
@@ -516,6 +529,17 @@ actor MenuBarAccessibility {
             let persistent = accessibilityPersistent ?? positionPersistent
             let reusableSessionID = existing?.snapshot.id.hasPrefix("session:") == true ? existing?.snapshot.id : nil
             let id = persistent ?? reusableSessionID ?? "session:\(candidate.owner.pid):\(UUID().uuidString)"
+            if let identity = nativeSystemVisibilityIdentities[id], let previous = entries[id],
+               !CFEqual(previous.element, candidate.element),
+               sameNativeSystemOwner(identity.owner, candidate.owner) {
+                // Native AirDrop showing creates a new source. Its protected
+                // system identifier permits rebinding only after a complete,
+                // unique current census; the ordinary scan is not that proof.
+                guard candidate.identifier == identity.identifier,
+                      let matches = try? nativeSystemSources(identity, id: id),
+                      matches.count == 1, let source = matches.first,
+                      CFEqual(source, candidate.element) else { continue }
+            }
             if persistent == nil {
                 // These IDs contain only a process ID and a locally generated
                 // UUID. Record continuity without logging app names, source
@@ -566,14 +590,44 @@ actor MenuBarAccessibility {
             }
         }
         // Retain off-screen items for recovery and rules; never reuse a stale PID.
-        let alive = ownersByPID.mapValues(\.launchTime)
-        for (id, old) in entries where updated[id] == nil && alive[old.owner.pid] == old.owner.launchTime && !updated.values.contains(where: { CFEqual($0.element, old.element) }) {
+        for (id, old) in entries where updated[id] == nil &&
+            ownersByPID[old.owner.pid]?.launchTime == old.owner.launchTime &&
+            ownersByPID[old.owner.pid]?.bundleIdentifier == old.owner.bundleIdentifier &&
+            !updated.values.contains(where: { CFEqual($0.element, old.element) }) {
             updated[id] = old
+        }
+        // Native hiding can remove an item from both enumerated roots while its
+        // owner keeps the original AX object alive. Preserve only caller-owned
+        // hidden inventory with an unchanged process identity, never its old
+        // geometry or host binding. Revealing must obtain fresh evidence again.
+        var retainedSnapshots: [String: MenuBarItemSnapshot] = [:]
+        for id in retainHiddenIDs {
+            guard let old = entries[id], let current = updated[id],
+                  old.snapshot.ownIdentifier == nil,
+                  CFEqual(old.element, current.element),
+                  let owner = ownersByPID[old.owner.pid],
+                  owner.bundleIdentifier == old.owner.bundleIdentifier,
+                  owner.launchTime == old.owner.launchTime,
+                  current.owner.pid == owner.pid,
+                  current.owner.bundleIdentifier == owner.bundleIdentifier,
+                  current.owner.launchTime == owner.launchTime,
+                  !unique.contains(where: { CFEqual($0.element, old.element) }) else { continue }
+            let previous = old.snapshot
+            let snapshot = MenuBarItemSnapshot(id: previous.id, processIdentifier: previous.processIdentifier,
+                name: previous.name, ownerName: previous.ownerName, bundleIdentifier: previous.bundleIdentifier,
+                frame: previous.frame, hasReliableGeometry: false, canMove: previous.canMove, detail: previous.detail,
+                persistentIdentity: previous.persistentIdentity, ownIdentifier: previous.ownIdentifier)
+            updated[id] = Entry(element: old.element, owner: old.owner,
+                accessibilityIdentifier: old.accessibilityIdentifier, snapshot: snapshot,
+                hostPresentation: nil, hostGeometryUnresolved: true)
+            retainedSnapshots[id] = snapshot
+        }
+        if !retainedSnapshots.isEmpty {
+            Self.logger.notice("nativeHiddenInventory retainedSnapshots=\(retainedSnapshots.count) reliableGeometry=false")
         }
         // The host omits some hidden system modules from both public roots.
         // Preserve their row only after a fresh continuity check, and explicitly
         // discard geometric trust. Neither absence nor this row proves hiding.
-        var retainedSnapshots: [MenuBarItemSnapshot] = []
         var systemInventory: [AXUIElement]?
         var systemInventoryFailed = false
         for (id, seed) in Array(systemModuleContinuity) {
@@ -585,6 +639,7 @@ actor MenuBarAccessibility {
                 continue
             }
             if unique.contains(where: { CFEqual($0.element, current.element) }) { continue }
+            if retainedSnapshots[id] != nil { continue }
             do {
                 guard !systemInventoryFailed else { continue }
                 if systemInventory == nil {
@@ -601,7 +656,7 @@ actor MenuBarAccessibility {
                 updated[id] = Entry(element: current.element, owner: current.owner,
                     accessibilityIdentifier: current.accessibilityIdentifier, snapshot: snapshot,
                     hostPresentation: nil, hostGeometryUnresolved: true)
-                retainedSnapshots.append(snapshot)
+                retainedSnapshots[id] = snapshot
             } catch {
                 // A transport failure is unknown for this scan. It does not
                 // convert the last successful check into a current row/proof.
@@ -611,14 +666,18 @@ actor MenuBarAccessibility {
         try Task.checkCancellation()
         guard scanCanContinue else { throw MenuBarAccessError.scanTimedOut }
         entries = updated
+        nativeSystemVisibilityIdentities = nativeSystemVisibilityIdentities.filter { id, identity in
+            guard let entry = updated[id] else { return false }
+            return sameNativeSystemOwner(identity.owner, entry.owner) &&
+                entry.accessibilityIdentifier == identity.identifier
+        }
         published = true
         let observed = unique.compactMap { candidate in
             updated.values.first { CFEqual($0.element, candidate.element) }?.snapshot
         }
-        if !retainedSnapshots.isEmpty {
-            Self.logger.notice("systemModuleContinuity retainedSnapshots=\(retainedSnapshots.count) reliableGeometry=false")
-        }
-        return (observed + retainedSnapshots).sorted { $0.frame.minX < $1.frame.minX }
+        var result = retainedSnapshots
+        for snapshot in observed { result[snapshot.id] = snapshot }
+        return result.values.sorted { $0.frame.minX < $1.frame.minX }
     }
 
     /// Diagnose stable-key collisions using only already-read structural data.
@@ -1824,6 +1883,222 @@ actor MenuBarAccessibility {
         return (matching[0][kCGWindowNumber as String] as? NSNumber)?.uint32Value
     }
 
+    /// A strict, read-only observation of an ordinary item's original AX
+    /// center. false means two complete successful hit chains excluded that
+    /// object; it is not by itself proof of physical hiding. Failed transport,
+    /// incomplete ancestry, stale ownership or geometry all remain unknown.
+    func inspectNativeVisibility(id: String) -> Bool? {
+        guard AXIsProcessTrusted(), !Task.isCancelled, let entry = entries[id],
+              liveOwnerMatches(entry) else { return nil }
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.65
+        var remaining = 64
+        func read(_ node: AXUIElement, _ attribute: String) -> CFTypeRef? {
+            let time = deadline - ProcessInfo.processInfo.systemUptime
+            guard !Task.isCancelled, remaining > 0, time > 0,
+                  AXUIElementSetMessagingTimeout(node, Float(min(0.08, time))) == .success else { return nil }
+            remaining -= 1
+            let result = copyAttribute(node, attribute)
+            guard result.error == .success, ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+            return result.value
+        }
+        func originalFrame() -> CGRect? {
+            guard let position = read(entry.element, kAXPositionAttribute),
+                  let size = read(entry.element, kAXSizeAttribute),
+                  CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+            let pointValue = unsafeDowncast(position, to: AXValue.self)
+            let sizeValue = unsafeDowncast(size, to: AXValue.self)
+            var point = CGPoint.zero
+            var extent = CGSize.zero
+            guard AXValueGetType(pointValue) == .cgPoint, AXValueGetType(sizeValue) == .cgSize,
+                  AXValueGetValue(pointValue, .cgPoint, &point), AXValueGetValue(sizeValue, .cgSize, &extent),
+                  [point.x, point.y, extent.width, extent.height].allSatisfy(\.isFinite),
+                  extent.width > 0, extent.height > 0, extent.height <= 64 else { return nil }
+            let rect = CGRect(origin: point, size: extent)
+            guard menuBands.contains(where: { band in
+                rect.width <= band.width && rect.minY >= band.minY - 1 && rect.maxY <= band.maxY + 1 &&
+                    band.contains(CGPoint(x: rect.midX, y: rect.midY))
+            }) else { return nil }
+            return rect
+        }
+        func sourceInHitAncestry(at point: CGPoint) -> Bool? {
+            guard !Task.isCancelled, ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+            let hit = Self.copyElementAtPositionOnMainThread(point)
+            guard hit.error == .success, let first = hit.element else { return nil }
+            var node = first
+            var visited: [AXUIElement] = []
+            for _ in 0..<10 {
+                guard !Task.isCancelled, ProcessInfo.processInfo.systemUptime < deadline,
+                      !visited.contains(where: { CFEqual($0, node) }) else { return nil }
+                visited.append(node)
+                if CFEqual(node, entry.element) { return true }
+                // A known hosted mirror is not a negative source observation.
+                // Rebinding it belongs to a fresh scan, never metadata matching.
+                if let host = entry.hostPresentation,
+                   host.path.contains(where: { CFEqual($0, node) }) { return nil }
+                guard let role = read(node, kAXRoleAttribute) as? String else { return nil }
+                if role == kAXApplicationRole || role == kAXSystemWideRole { return false }
+                guard let parent = element(read(node, kAXParentAttribute)) else { return nil }
+                node = parent
+            }
+            return nil
+        }
+        guard let role = read(entry.element, kAXRoleAttribute) as? String,
+              role == kAXMenuBarItemRole || role == kAXButtonRole,
+              let initialFrame = originalFrame() else { return nil }
+        let point = CGPoint(x: initialFrame.midX, y: initialFrame.midY)
+        guard let first = sourceInHitAncestry(at: point), originalFrame() == initialFrame,
+              liveOwnerMatches(entry), let second = sourceInHitAncestry(at: point), first == second,
+              originalFrame() == initialFrame,
+              read(entry.element, kAXRoleAttribute) as? String == role,
+              AXIsProcessTrusted(), liveOwnerMatches(entry), !Task.isCancelled,
+              ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+        return first
+    }
+
+    /// The native AirDrop preference recreates its source AX object. Register
+    /// only the exact, currently enumerated system identity before managing it.
+    /// Later reads keep that identity across disappearance in this owner epoch.
+    func nativeSystemVisibilityKey(id: String) -> String? {
+        guard AXIsProcessTrusted(), !Task.isCancelled, let entry = entries[id],
+              entry.snapshot.ownIdentifier == nil,
+              entry.accessibilityIdentifier == "com.apple.menuextra.airdrop",
+              SystemModuleIdentity.positionKey(ownerBundleIdentifier: entry.owner.bundleIdentifier,
+                  accessibilityIdentifier: entry.accessibilityIdentifier) == "module:AirDrop",
+              MenuItemIdentity.persistentID(bundleIdentifier: entry.owner.bundleIdentifier,
+                  accessibilityIdentifier: entry.accessibilityIdentifier, occurrenceCount: 1) == id,
+              nativeSystemOwnerIsCurrent(entry.owner) else { return nil }
+        if let registered = nativeSystemVisibilityIdentities[id],
+           sameNativeSystemOwner(registered.owner, entry.owner),
+           registered.identifier == entry.accessibilityIdentifier, registered.key == "AirDrop" {
+            return registered.key
+        }
+        let identity = NativeSystemVisibilityIdentity(owner: entry.owner,
+            identifier: "com.apple.menuextra.airdrop", key: "AirDrop")
+        guard let matches = try? nativeSystemSources(identity, id: id), matches.count == 1,
+              let source = matches.first, CFEqual(source, entry.element),
+              liveOwnerMatches(entry) else { return nil }
+        nativeSystemVisibilityIdentities[id] = identity
+        return identity.key
+    }
+
+    /// Absence means hidden only after a complete census of this exact system
+    /// host. A replacement source is tested as itself, never as the old object.
+    /// Unknown structure, transport, duplicate identities and occlusion are nil.
+    func inspectNativeSystemVisibility(id: String, key: String) -> Bool? {
+        guard AXIsProcessTrusted(), !Task.isCancelled, key == "AirDrop",
+              let entry = entries[id], let identity = nativeSystemVisibilityIdentities[id],
+              identity.key == key, identity.identifier == "com.apple.menuextra.airdrop",
+              entry.accessibilityIdentifier == identity.identifier,
+              sameNativeSystemOwner(identity.owner, entry.owner),
+              nativeSystemOwnerIsCurrent(identity.owner),
+              let matches = try? nativeSystemSources(identity, id: id), matches.count <= 1 else { return nil }
+        guard let source = matches.first else { return false }
+        let current = Entry(element: source, owner: identity.owner,
+            accessibilityIdentifier: identity.identifier, snapshot: entry.snapshot,
+            hostPresentation: nil, hostGeometryUnresolved: true)
+        guard nativeSystemSourceIsVisible(current), nativeSystemOwnerIsCurrent(identity.owner),
+              AXIsProcessTrusted(), !Task.isCancelled else { return nil }
+        return true
+    }
+
+    /// Positive-only observation for a system item that remains unmanaged.
+    /// Known roleless modules require their strict source/host proof; a failed
+    /// observation does not claim that the system item has become hidden.
+    func inspectNativeVisibleSystemItem(id: String) -> Bool? {
+        guard AXIsProcessTrusted(), !Task.isCancelled, let entry = entries[id],
+              entry.owner.bundleIdentifier?.hasPrefix("com.apple.") == true else { return nil }
+        if SystemModuleIdentity.positionKey(ownerBundleIdentifier: entry.owner.bundleIdentifier,
+            accessibilityIdentifier: entry.accessibilityIdentifier) != nil {
+            if verifiedRawOriginVisibility(entry, diagnostic: false).centerHit { return true }
+            return verifiedSystemModuleVisibility(entry)?.centerHit == true ? true : nil
+        }
+        return inspectNativeVisibility(id: id) == true ? true : nil
+    }
+
+    private func sameNativeSystemOwner(_ lhs: MenuBarOwner, _ rhs: MenuBarOwner) -> Bool {
+        lhs.pid == rhs.pid && lhs.bundleIdentifier == rhs.bundleIdentifier && lhs.launchTime == rhs.launchTime
+    }
+
+    private func nativeSystemOwnerIsCurrent(_ owner: MenuBarOwner) -> Bool {
+        guard owner.bundleIdentifier == SystemModuleIdentity.ownerBundleIdentifier,
+              let running = NSRunningApplication(processIdentifier: owner.pid), !running.isTerminated,
+              running.bundleURL?.standardizedFileURL.path == "/System/Library/CoreServices/MenuBarAgent.app" else { return false }
+        // Query the live application identity, not the removed item's AX object.
+        return liveOwnerMatches(element: AXUIElementCreateApplication(owner.pid), owner: owner)
+    }
+
+    private func nativeSystemSources(_ identity: NativeSystemVisibilityIdentity, id: String) throws -> [AXUIElement] {
+        guard AXIsProcessTrusted(), !Task.isCancelled, identity.key == "AirDrop",
+              identity.identifier == "com.apple.menuextra.airdrop",
+              nativeSystemOwnerIsCurrent(identity.owner) else {
+            throw MenuBarPositionBindingError(id: id, reason: .identityChanged)
+        }
+        let items = try systemPositionSourceItems(owner: identity.owner, id: id)
+        var budget = PositionReadBudget()
+        func identifier(of item: AXUIElement) throws -> String? {
+            guard liveOwnerMatches(element: item, owner: identity.owner) else {
+                throw MenuBarPositionBindingError(id: id, reason: .ownerChanged)
+            }
+            let read = try positionAttribute(item, kAXIdentifierAttribute, id: id, budget: &budget)
+            if read.error == .noValue || read.error == .attributeUnsupported { return nil }
+            guard read.error == .success, let value = read.value as? String else {
+                throw MenuBarPositionBindingError(id: id, reason: .incompleteSource)
+            }
+            return value
+        }
+        var observed: [(element: AXUIElement, identifier: String?)] = []
+        for item in items { observed.append((item, try identifier(of: item))) }
+        for observation in observed {
+            guard try identifier(of: observation.element) == observation.identifier else {
+                throw MenuBarPositionBindingError(id: id, reason: .identityChanged)
+            }
+        }
+        let matches = observed.filter { $0.identifier == identity.identifier }.map(\.element)
+        guard matches.count <= 1 else {
+            throw MenuBarPositionBindingError(id: id, reason: .ambiguousSource)
+        }
+        guard AXIsProcessTrusted(), !Task.isCancelled, nativeSystemOwnerIsCurrent(identity.owner) else {
+            throw MenuBarPositionBindingError(id: id, reason: .ownerChanged)
+        }
+        return matches
+    }
+
+    /// The caller has just established unique protected identity from a full
+    /// census. Require stable positive geometry and repeated exact-object hits.
+    private func nativeSystemSourceIsVisible(_ entry: Entry) -> Bool {
+        var budget = MirrorReadBudget()
+        if let rect = mirrorFrame(entry.element, budget: &budget),
+           rect.width > 0, rect.height > 0, rect.height <= 64,
+           menuBands.contains(where: { band in
+               rect.width <= band.width && rect.minY >= band.minY - 1 && rect.maxY <= band.maxY + 1 &&
+                   band.contains(CGPoint(x: rect.midX, y: rect.midY))
+           }) {
+            let point = CGPoint(x: rect.midX, y: rect.midY)
+            let first = Self.copyElementAtPositionOnMainThread(point)
+            if first.error == .success, first.element.map({ CFEqual($0, entry.element) }) == true,
+               mirrorFrame(entry.element, budget: &budget) == rect {
+                let second = Self.copyElementAtPositionOnMainThread(point)
+                let identifier = mirrorAttribute(entry.element, kAXIdentifierAttribute, budget: &budget)
+                if second.error == .success, second.element.map({ CFEqual($0, entry.element) }) == true,
+                   identifier.error == .success, identifier.value as? String == entry.accessibilityIdentifier,
+                   mirrorFrame(entry.element, budget: &budget) == rect, liveOwnerMatches(entry), budget.isValid {
+                    return true
+                }
+            }
+        }
+        // A system module can have a zero-sized leaf inside its real host
+        // container. Use only the unique subtree of this newly censused source.
+        guard let presentation = systemModulePresentation(entry, sourceVerified: true) else { return false }
+        let point = CGPoint(x: presentation.frame.midX, y: presentation.frame.midY)
+        let first = Self.copyElementAtPositionOnMainThread(point)
+        guard first.error == .success, let hit = first.element,
+              presentation.path.contains(where: { CFEqual($0, hit) }),
+              systemModulePresentationIsCurrent(presentation, entry: entry) else { return false }
+        let second = Self.copyElementAtPositionOnMainThread(point)
+        return second.error == .success && second.element.map { CFEqual($0, hit) } == true &&
+            systemModulePresentationIsCurrent(presentation, entry: entry)
+    }
+
     /// Does not rescan, open overflow, alter layout, or synthesize input.
     func inspectVisibility(id: String) -> MenuBarVisibilityInspection {
         guard let entry = entries[id] else {
@@ -2039,8 +2314,8 @@ actor MenuBarAccessibility {
     /// System modules share their owner's PID with the host container, unlike
     /// remote app items. Prove a unique original-object subtree instead of
     /// applying the foreign-child mirror rule or matching image coordinates.
-    private func systemModulePresentation(_ entry: Entry) -> SystemModulePresentation? {
-        guard verifiedSystemModuleSource(entry), let band = menuBands.first else { return nil }
+    private func systemModulePresentation(_ entry: Entry, sourceVerified: Bool = false) -> SystemModulePresentation? {
+        guard sourceVerified || verifiedSystemModuleSource(entry), let band = menuBands.first else { return nil }
         do {
             var budget = PositionReadBudget()
             let id = entry.snapshot.id

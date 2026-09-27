@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Combine
+import Darwin
 import MenuTidyCore
 import OSLog
 import ServiceManagement
@@ -82,6 +83,10 @@ final class MenuTidyModel: ObservableObject {
     @Published private(set) var panelUsesCachedImages = false
     @Published private(set) var panelLastCaptureDate: Date?
     @Published private(set) var permissionCheckMessage: String?
+    @Published private(set) var nativeVisibilityAccessAvailable = false
+    @Published private(set) var nativeVisibilityAccessMessage: String?
+    @Published private(set) var nativeSystemVisibilityAccessNeeded = false
+    @Published private(set) var nativeSystemVisibilityAccessMessage: String?
     @Published private(set) var menuBarPositionAccessAvailable = false
     @Published private(set) var menuBarPositionAccessMessage: String?
     @Published private(set) var positionRecoveryMessage: String?
@@ -106,6 +111,30 @@ final class MenuTidyModel: ObservableObject {
     private var statusBar: StatusBarController?
     private let positionStore = MenuBarPositionStore()
     private let positionAccess = MenuBarPositionAccess()
+    private let nativeVisibilityStore = NativeMenuBarVisibilityStore()
+    private let nativeSystemVisibilityStore = NativeSystemMenuBarVisibilityStore()
+    fileprivate enum NativeVisibilityTarget: Hashable {
+        case application(bundle: String)
+        case system(key: String)
+    }
+    private struct NativeVisibilityEvidence {
+        let identity: ObservedItemGroupHistory.Identity
+        /// nil is a visible, unmanaged item; it grants no preference write access.
+        let target: NativeVisibilityTarget?
+        let group: ItemVisibility
+    }
+    private var nativeVisibilityEvidence: [String: NativeVisibilityEvidence] = [:]
+    private var nativeOwnerRecoveries = NativeOwnerRecoveryQueue<NativeVisibilityTarget>()
+    private var nativeTrayChoices = NativeTrayChoices()
+    private var nativeChoicesLoadIssue: String?
+    var usesNativeVisibility: Bool {
+        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 && !demoMode
+    }
+    var usesIndependentTray: Bool { usesNativeVisibility || usesPositionHiding }
+    var needsLegacyPositionRecovery: Bool {
+        !positionStore.managedHiddenEntries.isEmpty || !positionStore.pendingTransactions.isEmpty ||
+            positionStore.recoveryJournalIssue != nil || positionStore.hiddenLedgerRecoveryIssue != nil
+    }
     private var pendingPositionRecoveries: [MenuBarPositionStore.Transaction] = []
     private var positionLayoutRecoveryNeeded = false {
         didSet { defaults.set(positionLayoutRecoveryNeeded, forKey: "positionLayoutReviewNeeded.v1") }
@@ -130,7 +159,7 @@ final class MenuTidyModel: ObservableObject {
     private var needsPositionRevalidation = false
     private var positionRecoveryGeneration = 0
     var usesPositionHiding: Bool {
-        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 && !demoMode
+        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 && !demoMode && !usesNativeVisibility
     }
     private let shortcut = GlobalShortcut()
     private var timer: Timer?
@@ -221,10 +250,24 @@ final class MenuTidyModel: ObservableObject {
     /// enters the serial native mutation path. Displaying the tray never waits
     /// for this queue, and stale completion cannot consume a newer choice.
     func requestTrayPlacement(id: String, inTray: Bool, resolveAmbiguousKey: Bool = false) {
+        requestTrayPlacement(id: id, group: inTray ? .collapsible : .visible,
+            resolveAmbiguousKey: resolveAmbiguousKey)
+    }
+
+    private func requestTrayPlacement(id: String, group: ItemVisibility, resolveAmbiguousKey: Bool = false) {
         guard !stopping, !preparingToTerminate, !isRecoveringPositions, !isArranging,
               let row = items.first(where: { $0.id == id && $0.canMove && $0.isAvailable }),
               snapshots.filter({ $0.id == id }).count == 1 else { return }
-        let group: ItemVisibility = inTray ? .collapsible : .visible
+        if usesNativeVisibility, let issue = nativeChoicesLoadIssue {
+            trayPlacementErrors[id] = issue
+            return
+        }
+        if usesNativeVisibility, let bundle = row.bundleIdentifier,
+           nativeTrayChoices.set(bundle: bundle, group: group,
+                excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 })),
+           let encoded = try? JSONEncoder().encode(nativeTrayChoices) {
+            defaults.set(encoded, forKey: "nativeTrayChoices.v1")
+        }
         do {
             try pendingDrafts.set(ItemRule(id: id, name: row.name, bundleIdentifier: row.bundleIdentifier,
                 visibility: group), sessionIdentity: draftSessionIdentity(for: id))
@@ -241,7 +284,7 @@ final class MenuTidyModel: ObservableObject {
         trayPlacementErrors.removeValue(forKey: id)
         itemApplicationIssues.removeValue(forKey: id)
         if let identity = draftSessionIdentity(for: id) { trayConnectionAttempts[id] = identity }
-        trayPlacementQueue.enqueue(id: id, desiredInTray: inTray, resolveAmbiguousKey: resolveAmbiguousKey)
+        trayPlacementQueue.enqueue(id: id, desiredInTray: group != .visible, resolveAmbiguousKey: resolveAmbiguousKey)
         rebuildRows()
         drainTrayPlacements()
     }
@@ -269,7 +312,9 @@ final class MenuTidyModel: ObservableObject {
                 self.applyItemRules(requestedItemIDs: [request.id], preservePanel: true,
                     resolveAmbiguousKeyFor: request.resolveAmbiguousKey ? request.id : nil)
                 if self.isApplying { await self.workTask?.value }
-                let desiredGroup: ItemVisibility = request.desiredInTray ? .collapsible : .visible
+                let desiredGroup: ItemVisibility = self.usesNativeVisibility
+                    ? (self.items.first(where: { $0.id == request.id })?.group ?? (request.desiredInTray ? .collapsible : .visible))
+                    : (request.desiredInTray ? .collapsible : .visible)
                 let confirmed = self.rules.rule(for: request.id)?.visibility == desiredGroup &&
                     self.actualGroups[request.id] == desiredGroup
                 _ = self.trayPlacementQueue.finish(token: request.token)
@@ -291,8 +336,8 @@ final class MenuTidyModel: ObservableObject {
     /// Reconnect saved intent once per process lifetime. A manual refresh of
     /// the same processes does not restart rejected work or create a retry loop.
     private func reconnectDiscoveredTrayItems() {
-        guard usesPositionHiding, hasCompletedSetup, !panelInteractionBusy, trayPlacementTask == nil,
-              accessibilityGranted, menuBarPositionAccessAvailable, positionRecoveryMessage == nil,
+        guard usesIndependentTray, hasCompletedSetup, !panelInteractionBusy, trayPlacementTask == nil,
+              accessibilityGranted, (usesNativeVisibility ? nativeVisibilityAccessAvailable : menuBarPositionAccessAvailable), positionRecoveryMessage == nil,
               !stopping, !preparingToTerminate else { return }
         let ids = items.compactMap { row -> String? in
             guard row.isAvailable, row.canMove, row.isPending,
@@ -371,6 +416,20 @@ final class MenuTidyModel: ObservableObject {
                 managementError = "已保存的分类无法读取，原始设置已备份。请刷新图标后重新分类。"
             }
         }
+        if let data = defaults.data(forKey: "nativeTrayChoices.v1") {
+            do { nativeTrayChoices = try JSONDecoder().decode(NativeTrayChoices.self, from: data) }
+            catch {
+                defaults.set(data, forKey: "nativeTrayChoices.unreadableBackup")
+                nativeChoicesLoadIssue = "托盘分类记录无法读取，原始数据已保留并备份。已停止自动隐藏，请先检查分类记录。"
+                managementError = nativeChoicesLoadIssue
+            }
+        }
+        if nativeChoicesLoadIssue == nil {
+            nativeTrayChoices.migrate(saved: rules, excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
+            if let encoded = try? JSONEncoder().encode(nativeTrayChoices) {
+                defaults.set(encoded, forKey: "nativeTrayChoices.v1")
+            }
+        }
         drafts = rules
         if let data = defaults.data(forKey: "itemDrafts.v1") {
             do { pendingDrafts = try JSONDecoder().decode(PendingDraftStore.self, from: data) }
@@ -388,6 +447,8 @@ final class MenuTidyModel: ObservableObject {
             positionRecoveryMessage = issue
         }
         recheckMenuBarPositionAccess()
+        recheckNativeVisibilityAccess()
+        if usesNativeVisibility, let issue = nativeRecoveryIssue { positionRecoveryMessage = issue }
         rebuildRows()
     }
 
@@ -400,23 +461,31 @@ final class MenuTidyModel: ObservableObject {
         refreshEnvironment()
         // Recover our own exact preference writes even if AX was revoked
         // while this application was stopped. Recovery never needs AX input.
-        if usesPositionHiding && !positionStore.managedHiddenEntries.isEmpty {
+        if needsLegacyPositionRecovery {
             let recoveryGeneration = beginPositionRecovery()
             workTask = Task {
                 defer { finishPositionRecovery(recoveryGeneration) }
                 do {
+                    for transaction in positionStore.pendingTransactions {
+                        let restored = try positionStore.rollback(transaction)
+                        try await statusBar?.refreshPreferredPositions()
+                        guard restored.isComplete else { throw MenuBarAccessError.rejected }
+                    }
                     let pending = try positionStore.recoverPendingHiddenWrites()
                     try await completeHiddenLayoutRefresh(pending.requiresLayoutRefresh)
                     let restored = try positionStore.restoreAllHidden()
                     try await completeHiddenLayoutRefresh(restored.requiresLayoutRefresh)
                     guard pending.isComplete && restored.isComplete else { throw MenuBarAccessError.rejected }
                     finishPositionRecovery(recoveryGeneration)
-                    if accessibilityGranted { refreshMenuItems(collapseWhenFinished: startCollapsed && hasCompletedSetup) }
+                    if usesNativeVisibility { recoverNativeVisibilityAndRefresh() }
+                    else if accessibilityGranted { refreshMenuItems(collapseWhenFinished: startCollapsed && hasCompletedSetup) }
                 } catch {
                     await refreshAfterHiddenFailure(error)
                     positionRecoveryMessage = "上次隐藏位置尚未恢复：\(error.localizedDescription)"
                 }
             }
+        } else if usesNativeVisibility && hasManagedNativeTargets {
+            recoverNativeVisibilityAndRefresh()
         } else if accessibilityGranted {
             refreshMenuItems(collapseWhenFinished: startCollapsed && hasCompletedSetup && !demoMode)
         }
@@ -438,6 +507,8 @@ final class MenuTidyModel: ObservableObject {
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    self?.registerDepartedNativeOwners()
+                    self?.scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
                     self?.pruneObservedGroupHistory()
                     self?.rebuildRows()
                     self?.refreshEnvironment()
@@ -504,6 +575,11 @@ final class MenuTidyModel: ObservableObject {
 
     func retryPositionRecovery() {
         guard !isApplying, !isRefreshing, !isActivatingPanelItem, !isRecoveringPositions else { return }
+        if usesNativeVisibility && !needsLegacyPositionRecovery {
+            trayConnectionAttempts.removeAll()
+            recoverNativeVisibilityAndRefresh(reconnect: false)
+            return
+        }
         cancelPassiveIconCapture()
         let recoveryGeneration = beginPositionRecovery()
         workTask = Task {
@@ -546,6 +622,24 @@ final class MenuTidyModel: ObservableObject {
 
     func keepCurrentPositionLayout() {
         guard !isApplying, !isRefreshing, !isActivatingPanelItem, !isRecoveringPositions else { return }
+        if usesNativeVisibility && !needsLegacyPositionRecovery {
+            _ = reloadAllNativeRecoveryJournalsIfNeeded()
+            let failed = nativeVisibilityStore.restoreAll()
+            let failedSystems = nativeSystemVisibilityStore.restoreAll()
+            do { for bundle in failed { try nativeVisibilityStore.forgetExternallyChanged(bundle: bundle) } }
+            catch { positionRecoveryMessage = error.localizedDescription; return }
+            guard failedSystems.isEmpty, nativeRecoveryIssue == nil else {
+                positionRecoveryMessage = nativeRecoveryIssue ?? "系统图标的显示设置已变化，恢复记录已保留；请先重试恢复。"
+                return
+            }
+            nativeVisibilityEvidence.removeAll()
+            positionRecoveryMessage = nil
+            for item in snapshots {
+                if let identity = observedItemIdentity(item) { trayConnectionAttempts[item.id] = identity }
+            }
+            refreshMenuItems()
+            return
+        }
         cancelPassiveIconCapture()
         let recoveryGeneration = beginPositionRecovery()
         workTask = Task {
@@ -586,6 +680,10 @@ final class MenuTidyModel: ObservableObject {
             workTask?.cancel()
             panelActivationTask?.cancel()
             Task { await access.cancel() }
+            if usesNativeVisibility {
+                restoreNativeAfterPermissionLoss()
+                return
+            }
             if usesPositionHiding {
                 restoreHiddenAfterPermissionLoss()
                 managementError = "辅助功能权限已关闭。已停止自动整理，正在恢复本应用隐藏的位置。"
@@ -697,7 +795,7 @@ final class MenuTidyModel: ObservableObject {
                 await self.passiveIconCaptureTask?.value
                 try self.checkImageRefreshCancellation()
                 try self.checkOperationDeadline()
-                if preparesIconInventory && !refreshesManagedIcons {
+                if preparesIconInventory && !refreshesManagedIcons && !self.usesNativeVisibility {
                     do {
                         try await self.scanManagementAnchors()
                         _ = try await self.access.revealSystemOverflowForManagement(
@@ -708,9 +806,10 @@ final class MenuTidyModel: ObservableObject {
                     }
                 }
                 try self.checkImageRefreshCancellation()
-                try await self.scanNow()
+                try await self.scanNow(allowNativeOwnerRecovery: true)
                 try self.checkOperationDeadline()
-                // List refresh is read-only. ScreenCaptureKit and temporary
+                // Discovery can first restore our ownership for a departed
+                // process. ScreenCaptureKit and temporary
                 // native presentation belong only to explicit image refresh.
                 if preparesIconInventory {
                     if refreshesManagedIcons {
@@ -760,7 +859,7 @@ final class MenuTidyModel: ObservableObject {
                     self.managementMessage = "本次刷新已停止，现有列表与选择已保留。"
                 }
             }
-            if preparesIconInventory && !refreshesManagedIcons { await self.access.restoreSystemOverflowAfterManagement() }
+            if preparesIconInventory && !refreshesManagedIcons && !self.usesNativeVisibility { await self.access.restoreSystemOverflowAfterManagement() }
         }
     }
 
@@ -960,6 +1059,10 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func setGroup(id: String, group: ItemVisibility) {
+        if usesNativeVisibility {
+            requestTrayPlacement(id: id, group: group)
+            return
+        }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging, let row = items.first(where: { $0.id == id }), row.canMove, row.isAvailable,
               snapshots.filter({ $0.id == id }).count == 1 else { return }
         cancelPassiveIconCapture()
@@ -1092,7 +1195,7 @@ final class MenuTidyModel: ObservableObject {
                     try await self.resolveAmbiguousPositionKeyIfNeeded(id: resolutionID)
                     try self.checkOperationDeadline()
                 }
-                stage = "应用后台排序"
+                stage = self.usesNativeVisibility ? "更新图标显示设置" : "应用后台排序"
                 if !(try await self.applyStoredPositionRules(requestedIDs: requestedIDs, confirmedRules: fixedRules)) {
                     try await self.access.validateBackgroundMoveSupport(ids: requestedIDs)
                     try self.checkOperationDeadline()
@@ -1205,6 +1308,9 @@ final class MenuTidyModel: ObservableObject {
     /// is selected before the unrelated AXPosition/overflow-action preflight.
     /// A written preference is committed only after fresh native order checks.
     private func applyStoredPositionRules(requestedIDs: [String], confirmedRules: [ItemRule]? = nil) async throws -> Bool {
+        if usesNativeVisibility {
+            return try await applyNativeVisibilityRules(requestedIDs: requestedIDs, confirmedRules: confirmedRules)
+        }
         pendingPositionRecoveries = positionStore.pendingTransactions
         if let issue = positionStore.recoveryJournalIssue {
             positionRecoveryMessage = issue
@@ -2481,22 +2587,42 @@ final class MenuTidyModel: ObservableObject {
         return (owners, bands)
     }
 
-    private func scanNow() async throws {
+    private func scanNow(allowNativeOwnerRecovery: Bool = false) async throws {
+        registerDepartedNativeOwners()
+        if allowNativeOwnerRecovery && isRefreshing && !isApplying && !isActivatingPanelItem &&
+            !isRecoveringPositions && !isArranging && !preparingToTerminate && !stopping &&
+            positionRecoveryMessage == nil {
+            restoreDepartedNativeOwnersBeforeScan()
+        } else {
+            scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
+        }
         anchorScanSequence += 1
         let scanID = anchorScanSequence
         let (owners, bands) = menuBarScanInputs()
         let newSnapshots: [MenuBarItemSnapshot]
         do {
-            newSnapshots = try await access.scan(owners: owners, menuBands: bands, positions: (try? positionStore.readPositions()) ?? [:])
+            newSnapshots = try await access.scan(owners: owners, menuBands: bands,
+                positions: usesNativeVisibility && !needsLegacyPositionRecovery ? [:] : ((try? positionStore.readPositions()) ?? [:]),
+                retainHiddenIDs: Set(nativeVisibilityEvidence.filter {
+                    $0.value.group != .visible && Self.observedOwnerIsCurrent($0.value.identity)
+                }.keys))
         } catch {
             logOwnAnchors(nil, scanID: scanID)
             throw error
         }
         logOwnAnchors(newSnapshots, scanID: scanID)
         guard !stopping, !Task.isCancelled, scanID == anchorScanSequence else { throw MenuBarAccessError.cancelled }
+        // A process can exit while AX scanning is suspended. Retain its
+        // recovery intent before reconciliation discards the old evidence.
+        registerDepartedNativeOwners()
+        scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
         snapshots = newSnapshots
         actualGroups.removeAll()
-        if (!usesPositionHiding || isArranging), statusBar?.areGroupBoundariesExpanded == true,
+        if usesNativeVisibility && !isArranging {
+            await reconcileNativeVisibilityEvidence()
+            actualGroups = nativeVisibilityEvidence.mapValues(\.group)
+        }
+        if (!usesIndependentTray || isArranging), statusBar?.areGroupBoundariesExpanded == true,
            let always = snapshots.first(where: { $0.ownIdentifier == "menu-tidy-always-divider" }),
            let regular = snapshots.first(where: { $0.ownIdentifier == "menu-tidy-divider" }),
            always.hasReliableGeometry, regular.hasReliableGeometry,
@@ -2632,7 +2758,8 @@ final class MenuTidyModel: ObservableObject {
             let draft = drafts.rule(for: item.id)
             // System recovery controls can move with the overflow presentation,
             // but never belong to a user-managed hidden section.
-            let group: ItemVisibility = item.canMove ? (draft?.visibility ?? rules.rule(for: item.id)?.visibility ?? observedGroupForDisplay(id: item.id) ?? .visible) : .visible
+            let nativeChoice = usesNativeVisibility ? item.bundleIdentifier.flatMap { nativeTrayChoices.group(bundle: $0) } : nil
+            let group: ItemVisibility = item.canMove ? (nativeChoice ?? draft?.visibility ?? rules.rule(for: item.id)?.visibility ?? observedGroupForDisplay(id: item.id) ?? .visible) : .visible
             // Concealed overflow items may have no usable AX order. An unknown
             // observation is not evidence that an already verified rule moved.
             let observedMismatch = actualGroups[item.id].map { $0 != group } ?? false
@@ -2651,14 +2778,17 @@ final class MenuTidyModel: ObservableObject {
             return ManagedItemRow(id: item.id, name: item.name, ownerName: item.ownerName, bundleIdentifier: item.bundleIdentifier,
                 icon: icon, group: group, isAvailable: true, canMove: item.canMove, detail: details.joined(separator: " · "),
                 isPending: item.canMove && counts[item.id] == 1 &&
-                    (rowDraftIDs[item.id] != nil || (rules.rule(for: item.id) != nil &&
-                        (observedMismatch || (usesPositionHiding && verifiedPositionGroups[item.id] == nil)))))
+                    (rowDraftIDs[item.id] != nil || ((nativeChoice != nil || rules.rule(for: item.id) != nil) &&
+                        (observedMismatch || (usesIndependentTray && actualGroups[item.id] == nil)))))
         }
         let boundDraftIDs = Set(rowDraftIDs.values)
         offlineDrafts = pendingDrafts.records.filter { !boundDraftIDs.contains($0.id) }
             .sorted { $0.rule.name.localizedStandardCompare($1.rule.name) == .orderedAscending }
         let offlineTargetIDs = Set(offlineDrafts.map(\.rule.id))
         for rule in rules.rules.values where !result.contains(where: { $0.id == rule.id }) && !offlineTargetIDs.contains(rule.id) {
+            if usesNativeVisibility, let bundle = rule.bundleIdentifier,
+               nativeTrayChoices.group(bundle: bundle) != nil,
+               result.contains(where: { $0.isAvailable && $0.bundleIdentifier == bundle }) { continue }
             result.append(ManagedItemRow(id: rule.id, name: rule.name, ownerName: rule.bundleIdentifier ?? "尚未运行的应用",
                 bundleIdentifier: rule.bundleIdentifier, icon: nil, group: rule.visibility, isAvailable: false, canMove: false,
                 detail: "已应用规则；当前未读到此图标。启动对应应用后刷新。", isPending: false))
@@ -2723,7 +2853,7 @@ final class MenuTidyModel: ObservableObject {
         state.collapse()
         statusBar?.restoreControlVisibility()
         applyState()
-        managementMessage = usesPositionHiding
+        managementMessage = usesIndependentTray
             ? "已收起图标栏；未应用的分类选择仍保留。"
             : "已收起现有菜单栏分组；未应用的分类选择仍保留，不代表这些图标已移动。"
     }
@@ -3014,8 +3144,11 @@ final class MenuTidyModel: ObservableObject {
         panelItemProgress = "正在打开目标图标…"
         panelActivationTask = Task { [weak self] in
             guard let self else { return }
+            let actionStarted = ProcessInfo.processInfo.systemUptime
+            Self.diagnosticLogger.notice("backgroundItemAction started=true")
             var candidates: [MenuBarPositionCandidate] = []
             var revealedKey: String?
+            var nativeRevealedTarget: NativeVisibilityTarget?
             var presentation: MenuBarItemPresentation?
             var revealVerified = false
             var pressAttempted = false
@@ -3037,6 +3170,21 @@ final class MenuTidyModel: ObservableObject {
                 await self.passiveIconCaptureTask?.value
                 try Task.checkCancellation()
                 try await self.scanNow()
+                if self.usesNativeVisibility {
+                    guard let evidence = self.nativeVisibilityEvidence[id],
+                          Self.observedOwnerIsCurrent(evidence.identity),
+                          let target = evidence.target, self.nativeTargetIsManaged(target) else {
+                        throw MenuTidyManagementError.positionApplication("此图标尚未连接到托盘，请在图标设置中重试。")
+                    }
+                    nativeRevealedTarget = target
+                    try self.temporarilyRevealNativeTarget(target)
+                    try await self.waitForNativeVisibility(id: id, target: target,
+                        identity: evidence.identity, visible: true)
+                    // AirDrop's old source is removed while hidden. Bind its
+                    // newly shown source before asking for actions or pressing.
+                    try await self.scanNow()
+                    revealVerified = true
+                }
                 try await self.access.validateItemActionSupport(id: id)
                 if self.usesPositionHiding,
                    let controlID = self.snapshots.first(where: { $0.ownIdentifier == "menu-tidy-toggle" })?.id {
@@ -3062,8 +3210,9 @@ final class MenuTidyModel: ObservableObject {
                 if let presentation {
                     self.panelIsPreparingNativeAction = false
                     self.closeIconPanel()
-                    Self.diagnosticLogger.notice("backgroundItemAction presentationConfirmed=true")
-                    if revealedKey != nil {
+                    let actionElapsed = ProcessInfo.processInfo.systemUptime - actionStarted
+                    Self.diagnosticLogger.notice("backgroundItemAction presentationConfirmed=true elapsedSeconds=\(actionElapsed)")
+                    if revealedKey != nil || nativeRevealedTarget != nil {
                         // Popovers are often exposed as AXWindow. Moving their
                         // anchor immediately can dismiss them before interaction.
                         self.panelItemProgress = "目标界面已打开，关闭后自动恢复隐藏。"
@@ -3085,7 +3234,7 @@ final class MenuTidyModel: ObservableObject {
                                     continue
                                 }
                                 canRestore = false
-                                self.positionLayoutRecoveryNeeded = true
+                                if !self.usesNativeVisibility { self.positionLayoutRecoveryNeeded = true }
                                 self.positionRecoveryMessage = "目标界面状态暂时无法确认。图标保留可见，关闭后可重试恢复位置。"
                             }
                             break
@@ -3103,7 +3252,7 @@ final class MenuTidyModel: ObservableObject {
                 self.panelActivationError = error.localizedDescription
                 Self.diagnosticLogger.notice("backgroundItemAction failed=true")
             }
-            if canRestore, revealedKey != nil, pressAttempted, !presentationClosed,
+            if canRestore, (revealedKey != nil || nativeRevealedTarget != nil), pressAttempted, !presentationClosed,
                !self.preparingToTerminate, !self.stopping {
                 let retainedPresentation = presentation
                 let wasCancelled = Task.isCancelled
@@ -3122,7 +3271,7 @@ final class MenuTidyModel: ObservableObject {
                 }
                 canRestore = await checkClosure.value
                 if !canRestore {
-                    self.positionLayoutRecoveryNeeded = true
+                    if !self.usesNativeVisibility { self.positionLayoutRecoveryNeeded = true }
                     self.positionRecoveryMessage = "目标界面尚未确认关闭。图标保留可见，关闭后可重试恢复位置。"
                 }
             }
@@ -3171,6 +3320,29 @@ final class MenuTidyModel: ObservableObject {
                 }
                 await cleanup.value
             }
+            if canRestore, let target = nativeRevealedTarget {
+                let cleanup = Task { @MainActor in
+                    do {
+                        let shouldHide = !self.stopping && !self.preparingToTerminate && AXIsProcessTrusted() &&
+                            self.latestNativeGroup(id: id, target: target) != .visible
+                        if shouldHide { try self.rehideNativeTarget(target) }
+                        else { try self.restoreNativeTarget(target) }
+                        if shouldHide, let evidence = self.nativeVisibilityEvidence[id] {
+                            try await self.waitForNativeVisibility(id: id, target: target,
+                                identity: evidence.identity, visible: false)
+                        }
+                        if !shouldHide {
+                            self.removeNativeEvidence(target: target)
+                        }
+                        Self.diagnosticLogger.notice("backgroundItemAction nativeHiddenRestored=true")
+                    } catch {
+                        self.removeNativeEvidence(target: target)
+                        self.rebuildRows()
+                        self.positionRecoveryMessage = "图标显示状态尚未恢复：\(error.localizedDescription)"
+                    }
+                }
+                await cleanup.value
+            }
             await self.access.discardBackgroundPositionCandidates(candidates)
             if let error = self.panelActivationError ?? self.positionRecoveryMessage {
                 self.trayItemErrors[id] = error
@@ -3183,6 +3355,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func beginArrangement() {
+        guard !usesNativeVisibility else { openTraySettings(); return }
         guard !preparingToTerminate, !stopping, !isRecoveringPositions, !isActivatingPanelItem,
               !isApplying, !isRefreshing, !isArranging else { return }
         closeIconPanel()
@@ -3452,6 +3625,12 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func recoverVisibility() {
+        if usesNativeVisibility {
+            guard !preparingToTerminate, !stopping else { return }
+            statusBar?.restoreControlVisibility()
+            trayDiscoveryNeeded = true
+            return
+        }
         if usesPositionHiding {
             needsPositionRevalidation = true
             guard !preparingToTerminate, !stopping, !isRecoveringPositions, !isActivatingPanelItem,
@@ -3480,7 +3659,7 @@ final class MenuTidyModel: ObservableObject {
         applyState()
     }
     private func collapseIfSafe() {
-        guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging, (usesPositionHiding || statusBar?.validateOrder() != false) else { return }
+        guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging, (usesIndependentTray || statusBar?.validateOrder() != false) else { return }
         state.collapse()
         applyState()
     }
@@ -3590,7 +3769,8 @@ final class MenuTidyModel: ObservableObject {
         preparingToTerminate || isApplying || isRefreshing || isRecoveringPositions || trayPlacementTask != nil ||
             panelActivationTask != nil || passiveIconCaptureTask != nil ||
             !positionStore.managedHiddenEntries.isEmpty || !positionStore.pendingTransactions.isEmpty ||
-            positionLayoutRecoveryNeeded
+            positionLayoutRecoveryNeeded || !nativeVisibilityStore.managedBundles.isEmpty ||
+            !nativeSystemVisibilityStore.managedKeys.isEmpty || nativeRecoveryIssue != nil
     }
 
     func quit() { NSApp.terminate(nil) }
@@ -3618,6 +3798,9 @@ final class MenuTidyModel: ObservableObject {
         await previousActivation?.value
         await previousCapture?.value
         await previousPlacement?.value
+        // Native recovery is independent of the legacy position journal too.
+        // Always try both native owners before any earlier recovery can throw.
+        let nativeRestored = restoreAllNativeTargets()
         do {
             for transaction in positionStore.pendingTransactions {
                 let rollback = try positionStore.rollback(transaction)
@@ -3627,6 +3810,10 @@ final class MenuTidyModel: ObservableObject {
             let result = try positionStore.restoreAllHidden()
             try await completeHiddenLayoutRefresh(result.requiresLayoutRefresh)
             guard result.isComplete else { throw MenuBarAccessError.rejected }
+            guard nativeRestored, nativeRecoveryIssue == nil else {
+                throw MenuTidyManagementError.positionApplication("原生显示设置尚未恢复，请保留应用并重试恢复。")
+            }
+            nativeVisibilityEvidence.removeAll()
             verifiedPositionGroups.removeAll()
             positionLayoutRecoveryNeeded = false
         } catch {
@@ -3660,5 +3847,488 @@ final class MenuTidyModel: ObservableObject {
         shortcut.unregister()
         statusBar?.stop()
         statusBar = nil
+    }
+}
+
+@MainActor
+private extension MenuTidyModel {
+    var nativeRecoveryIssue: String? {
+        nativeVisibilityStore.pendingRecoveryIssue ?? nativeSystemVisibilityStore.pendingRecoveryIssue
+    }
+    var hasManagedNativeTargets: Bool {
+        !nativeVisibilityStore.managedBundles.isEmpty || !nativeSystemVisibilityStore.managedKeys.isEmpty
+    }
+
+    var managedNativeTargets: Set<NativeVisibilityTarget> {
+        Set(nativeVisibilityStore.managedBundles.map { .application(bundle: $0) })
+            .union(nativeSystemVisibilityStore.managedKeys.map { .system(key: $0) })
+    }
+
+    func registerDepartedNativeOwners() {
+        guard usesNativeVisibility else { return }
+        let managed = managedNativeTargets
+        nativeOwnerRecoveries.retainManagedTargets(managed)
+        for evidence in nativeVisibilityEvidence.values {
+            guard let target = evidence.target, managed.contains(target),
+                  !Self.observedOwnerIsCurrent(evidence.identity) else { continue }
+            nativeOwnerRecoveries.register(target: target, departedOwner: evidence.identity)
+        }
+    }
+
+    func departedNativeTargetsReadyForRecovery() -> Set<NativeVisibilityTarget> {
+        let liveTargets = Set(nativeVisibilityEvidence.values.compactMap { evidence in
+            Self.observedOwnerIsCurrent(evidence.identity) ? evidence.target : nil
+        })
+        // Unknown process metadata is not evidence of an ended lifecycle.
+        return nativeOwnerRecoveries.readyTargets(canRestore: true, liveTargets: liveTargets,
+            ownerIsCurrent: { !Self.nativeOwnerHasEnded($0) })
+    }
+
+    func scheduleNativeOwnerRecoveryDiscoveryIfNeeded() {
+        guard usesNativeVisibility, !preparingToTerminate, !stopping,
+              positionRecoveryMessage == nil,
+              !departedNativeTargetsReadyForRecovery().isEmpty else { return }
+        // This Boolean is coalesced with normal application discovery. Failed
+        // targets are excluded by the queue and cannot create a retry loop.
+        trayDiscoveryNeeded = true
+    }
+
+    /// Runs synchronously inside the existing exclusive refresh operation.
+    /// Restores only receipt-owned preferences; it never adopts the new owner.
+    func restoreDepartedNativeOwnersBeforeScan() {
+        guard usesNativeVisibility else { return }
+        var failed = false
+        let targets = departedNativeTargetsReadyForRecovery()
+        for target in targets {
+            // External process lifetimes may change between two store writes.
+            // Recheck immediately before each independent conditional restore.
+            guard nativeTargetIsManaged(target),
+                  departedNativeTargetsReadyForRecovery().contains(target) else { continue }
+            do {
+                try reloadNativeRecoveryJournalIfNeeded(for: target)
+                try restoreNativeTarget(target)
+                guard !nativeTargetIsManaged(target) else { throw MenuBarAccessError.rejected }
+                nativeOwnerRecoveries.complete(target: target)
+                removeNativeEvidence(target: target)
+                Self.diagnosticLogger.notice("nativeOwnerRecovery restored=true departedEpochConfirmed=true")
+            } catch {
+                nativeOwnerRecoveries.recordFailure(target: target)
+                failed = true
+                Self.diagnosticLogger.notice("nativeOwnerRecovery restored=false explicitRecoveryRequired=true")
+            }
+        }
+        nativeOwnerRecoveries.retainManagedTargets(managedNativeTargets)
+        if failed {
+            positionRecoveryMessage = "应用重新启动后，部分图标的原显示设置尚未恢复。恢复记录已保留，请点击“重试恢复”；不会自动反复重试。"
+            recheckNativeVisibilityAccess()
+        }
+    }
+
+    static func nativeOwnerHasEnded(_ identity: ObservedItemGroupHistory.Identity) -> Bool {
+        guard identity.pid > 0, identity.launchTime.isFinite, identity.launchTime > 0 else { return false }
+        if let app = NSRunningApplication(processIdentifier: identity.pid) {
+            if app.isTerminated { return true }
+            guard let currentLaunch = MenuBarProcessIdentity.launchTime(for: app) else { return false }
+            if currentLaunch != identity.launchTime { return true }
+            guard let currentBundle = app.bundleIdentifier, let previousBundle = identity.bundleIdentifier else { return false }
+            return currentBundle != previousBundle
+        }
+        // Signal zero only tests process existence. EPERM and other failures
+        // remain unknown; only ESRCH proves that this PID no longer exists.
+        return kill(identity.pid, 0) == -1 && errno == ESRCH
+    }
+
+    func nativeTarget(for source: MenuBarItemSnapshot) async -> NativeVisibilityTarget? {
+        if let key = await access.nativeSystemVisibilityKey(id: source.id) { return .system(key: key) }
+        guard let bundle = source.bundleIdentifier, bundle != Bundle.main.bundleIdentifier,
+              !bundle.lowercased().hasPrefix("com.apple."), bundle.lowercased() != "com.apple" else { return nil }
+        return .application(bundle: bundle)
+    }
+
+    func nativeTargetIsManaged(_ target: NativeVisibilityTarget) -> Bool {
+        switch target {
+        case .application(let bundle): nativeVisibilityStore.managedBundles.contains(bundle)
+        case .system(let key): nativeSystemVisibilityStore.managedKeys.contains(key)
+        }
+    }
+    func nativeTargetIsRevealed(_ target: NativeVisibilityTarget) -> Bool {
+        switch target {
+        case .application(let bundle): nativeVisibilityStore.isTemporarilyRevealed(bundle: bundle)
+        case .system(let key): nativeSystemVisibilityStore.isTemporarilyRevealed(key: key)
+        }
+    }
+    func nativeAllowed(_ target: NativeVisibilityTarget) throws -> Bool {
+        switch target {
+        case .application(let bundle): try nativeVisibilityStore.readAllowed(bundle: bundle)
+        case .system(let key): try nativeSystemVisibilityStore.readAllowed(key: key)
+        }
+    }
+    func hideNativeTarget(_ target: NativeVisibilityTarget) throws -> Bool {
+        switch target {
+        case .application(let bundle): try nativeVisibilityStore.hide(bundle: bundle)
+        case .system(let key): try nativeSystemVisibilityStore.hide(key: key)
+        }
+    }
+    func temporarilyRevealNativeTarget(_ target: NativeVisibilityTarget) throws {
+        switch target {
+        case .application(let bundle): try nativeVisibilityStore.temporarilyReveal(bundle: bundle)
+        case .system(let key): try nativeSystemVisibilityStore.temporarilyReveal(key: key)
+        }
+    }
+    func rehideNativeTarget(_ target: NativeVisibilityTarget) throws {
+        switch target {
+        case .application(let bundle): try nativeVisibilityStore.rehide(bundle: bundle)
+        case .system(let key): try nativeSystemVisibilityStore.rehide(key: key)
+        }
+    }
+    func restoreNativeTarget(_ target: NativeVisibilityTarget) throws {
+        switch target {
+        case .application(let bundle): try nativeVisibilityStore.restore(bundle: bundle)
+        case .system(let key): try nativeSystemVisibilityStore.restore(key: key)
+        }
+    }
+    func reloadNativeRecoveryJournalIfNeeded(for target: NativeVisibilityTarget) throws {
+        switch target {
+        case .application:
+            if nativeVisibilityStore.pendingRecoveryIssue != nil { try nativeVisibilityStore.reloadForRecovery() }
+        case .system:
+            if nativeSystemVisibilityStore.pendingRecoveryIssue != nil { try nativeSystemVisibilityStore.reloadForRecovery() }
+        }
+    }
+    func reloadAllNativeRecoveryJournalsIfNeeded() -> Bool {
+        // Each store retains its own reload failure. Never let one unreadable
+        // journal stop restoration of the other store's verified ownership.
+        var succeeded = true
+        do {
+            if nativeVisibilityStore.pendingRecoveryIssue != nil { try nativeVisibilityStore.reloadForRecovery() }
+        } catch { succeeded = false }
+        do {
+            if nativeSystemVisibilityStore.pendingRecoveryIssue != nil { try nativeSystemVisibilityStore.reloadForRecovery() }
+        } catch { succeeded = false }
+        return succeeded
+    }
+    func restoreAllNativeTargets() -> Bool {
+        let reloadsSucceeded = reloadAllNativeRecoveryJournalsIfNeeded()
+        let applications = nativeVisibilityStore.restoreAll()
+        let systems = nativeSystemVisibilityStore.restoreAll()
+        nativeOwnerRecoveries.retainManagedTargets(managedNativeTargets)
+        if !systems.isEmpty { recheckNativeVisibilityAccess() }
+        return reloadsSucceeded && applications.isEmpty && systems.isEmpty && nativeRecoveryIssue == nil
+    }
+    func latestNativeGroup(id: String, target: NativeVisibilityTarget) -> ItemVisibility {
+        if case .application(let bundle) = target, let group = nativeTrayChoices.group(bundle: bundle) { return group }
+        return items.first(where: { $0.id == id })?.group ?? rules.rule(for: id)?.visibility ?? .visible
+    }
+    func removeNativeEvidence(target: NativeVisibilityTarget) {
+        for (id, evidence) in nativeVisibilityEvidence where evidence.target == target {
+            nativeVisibilityEvidence.removeValue(forKey: id)
+            actualGroups.removeValue(forKey: id)
+        }
+        if !nativeTargetIsManaged(target) { nativeOwnerRecoveries.complete(target: target) }
+    }
+
+    func reconcileNativeVisibilityEvidence() async {
+        var confirmed: [String: NativeVisibilityEvidence] = [:]
+        for (id, evidence) in nativeVisibilityEvidence {
+            guard Self.observedOwnerIsCurrent(evidence.identity),
+                  let snapshot = snapshots.first(where: { $0.id == id }),
+                  observedItemIdentity(snapshot) == evidence.identity else { continue }
+            // An unmanaged item's positive observation is not a durable
+            // native preference proof. Refresh verifies it again when requested.
+            guard let target = evidence.target else {
+                if evidence.group == .visible, await inspectUnmanagedNativeVisibility(snapshot) == true {
+                    confirmed[id] = evidence
+                }
+                continue
+            }
+            guard let allowed = try? nativeAllowed(target) else { continue }
+            if nativeTargetIsRevealed(target) {
+                if isActivatingPanelItem && evidence.group != .visible { confirmed[id] = evidence }
+            } else if allowed == (evidence.group == .visible) { confirmed[id] = evidence }
+        }
+        // Positive-only checks above can suspend. Catch a departure during
+        // those reads before replacing the last evidence for that owner epoch.
+        registerDepartedNativeOwners()
+        scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
+        nativeVisibilityEvidence = confirmed
+    }
+
+    func inspectUnmanagedNativeVisibility(_ source: MenuBarItemSnapshot) async -> Bool? {
+        if source.bundleIdentifier?.hasPrefix("com.apple.") == true {
+            return await access.inspectNativeVisibleSystemItem(id: source.id)
+        }
+        return await access.inspectNativeVisibility(id: source.id)
+    }
+
+    func applyNativeVisibilityRules(requestedIDs: [String], confirmedRules: [ItemRule]?) async throws -> Bool {
+        recheckNativeVisibilityAccess()
+        if let issue = nativeChoicesLoadIssue { throw MenuTidyManagementError.positionApplication(issue) }
+        guard !needsLegacyPositionRecovery else {
+            throw MenuTidyManagementError.positionApplication("旧版隐藏位置仍待恢复，请先完成排序恢复再启用原生隐藏。")
+        }
+        var appConflicts: Set<String> = []
+        var systemConflicts: Set<String> = []
+        // An empty unrelated backend owns nothing to recover and must not
+        // require its separate file authorization before this target can run.
+        if !nativeVisibilityStore.managedBundles.isEmpty || nativeVisibilityStore.pendingRecoveryIssue != nil {
+            appConflicts = try nativeVisibilityStore.recoverPendingWrites()
+        }
+        if !nativeSystemVisibilityStore.managedKeys.isEmpty || nativeSystemVisibilityStore.pendingRecoveryIssue != nil {
+            systemConflicts = try nativeSystemVisibilityStore.recoverPendingWrites()
+        }
+        guard appConflicts.isEmpty, systemConflicts.isEmpty else {
+            positionRecoveryMessage = "上次图标显示设置已被其他操作改变，恢复记录已保留；请先重试恢复。"
+            throw MenuBarAccessError.rejected
+        }
+        try await scanNow()
+        let requested = Set(requestedIDs)
+        let displayed = items.filter { requested.contains($0.id) && $0.canMove && $0.isAvailable }.map {
+            ItemRule(id: $0.id, name: $0.name, bundleIdentifier: $0.bundleIdentifier, visibility: $0.group)
+        }
+        guard let targets = ManualArrangementRules.applicationRules(requestedIDs: requestedIDs,
+            displayed: displayed, confirmed: confirmedRules) else { throw MenuBarAccessError.disappeared }
+        var processed: Set<NativeVisibilityTarget> = []
+        for rule in targets {
+            try checkOperationDeadline()
+            let targetStarted = ProcessInfo.processInfo.systemUptime
+            var cleanupTarget: NativeVisibilityTarget?
+            var affectedIDs: Set<String> = [rule.id]
+            do {
+                guard let source = snapshots.first(where: { $0.id == rule.id }),
+                      let identity = observedItemIdentity(source), Self.observedOwnerIsCurrent(identity) else {
+                    throw MenuBarAccessError.disappeared
+                }
+                let discoveredTarget = await nativeTarget(for: source)
+                if rule.visibility == .visible,
+                   discoveredTarget.map({ !nativeTargetIsManaged($0) }) ?? true {
+                    // Keeping an already unmanaged item visible needs no
+                    // preference lookup, ownership, parent-bundle inference or
+                    // authorization for a backend that will not be written.
+                    guard items.first(where: { $0.id == rule.id })?.group == rule.visibility else { continue }
+                    guard await inspectUnmanagedNativeVisibility(source) == true,
+                          Self.observedOwnerIsCurrent(identity) else {
+                        throw MenuTidyManagementError.positionApplication("尚未确认此图标当前可见，未改变系统设置。")
+                    }
+                    confirmNativeRule(rule, identity: identity, target: nil)
+                    continue
+                }
+                guard let target = discoveredTarget else {
+                    throw MenuTidyManagementError.positionApplication("此系统图标尚无经过验证的独立隐藏方式，当前保留在菜单栏。")
+                }
+                if processed.contains(target) { continue }
+                // A newer click already superseded this queued rule; its own
+                // queued request owns the next mutation and draft consumption.
+                guard latestNativeGroup(id: rule.id, target: target) == rule.visibility else { continue }
+                let affected: [MenuBarItemSnapshot]
+                switch target {
+                case .application(let bundle):
+                    guard nativeVisibilityAccessAvailable else {
+                        throw MenuTidyManagementError.positionApplication("请先授权菜单栏显示设置文件，之后即可收进托盘。当前选择已保存。")
+                    }
+                    affected = snapshots.filter { $0.canMove && $0.ownIdentifier == nil && $0.bundleIdentifier == bundle }
+                    let siblings = items.filter { $0.isAvailable && $0.canMove && $0.bundleIdentifier == bundle }
+                    guard siblings.allSatisfy({ ($0.group == .visible) == (rule.visibility == .visible) }) else {
+                        throw MenuTidyManagementError.positionApplication("同一应用的多个图标共用显示开关，请统一选择常驻或托盘。")
+                    }
+                case .system(let key):
+                    guard nativeSystemVisibilityStore.accessAvailable(key: key) else {
+                        nativeSystemVisibilityAccessNeeded = true
+                        nativeSystemVisibilityAccessMessage = "需要允许访问 AirDrop 的菜单栏显示设置，当前选择已保留。"
+                        throw MenuTidyManagementError.positionApplication("请先点击页面上的“授权 AirDrop 显示设置”，然后重试此图标。")
+                    }
+                    affected = [source]
+                }
+                affectedIDs = Set(affected.map(\.id))
+                guard !affected.isEmpty, affectedIDs.count == affected.count else { throw MenuBarAccessError.disappeared }
+                let identities = affected.compactMap { item -> (MenuBarItemSnapshot, ObservedItemGroupHistory.Identity)? in
+                    guard let observed = observedItemIdentity(item), Self.observedOwnerIsCurrent(observed) else { return nil }
+                    return (item, observed)
+                }
+                guard identities.count == affected.count else { throw MenuBarAccessError.disappeared }
+                managementMessage = "正在更新「\(rule.name)」的显示位置…"
+                if rule.visibility == .visible {
+                    cleanupTarget = target
+                    try restoreNativeTarget(target)
+                    guard try nativeAllowed(target) else {
+                        throw MenuTidyManagementError.positionApplication("此图标已在系统设置中被关闭。请先允许它显示在菜单栏，再连接托盘。")
+                    }
+                } else {
+                    if !nativeTargetIsManaged(target) {
+                        for item in affected { try await access.validateItemActionSupport(id: item.id) }
+                    }
+                    // Set cleanup before a store call that can throw after its
+                    // preference write but before its receipt is committed.
+                    cleanupTarget = target
+                    guard try hideNativeTarget(target) else {
+                        throw MenuTidyManagementError.positionApplication("此图标原本已被系统设置隐藏。请先允许它显示，再连接托盘。")
+                    }
+                }
+                for (item, observed) in identities {
+                    try await waitForNativeVisibility(id: item.id, target: target,
+                        identity: observed, visible: rule.visibility == .visible)
+                }
+                guard identities.allSatisfy({ Self.observedOwnerIsCurrent($0.1) }) else { throw MenuBarAccessError.disappeared }
+                for (item, observed) in identities {
+                    confirmNativeRule(ItemRule(id: item.id, name: item.name, bundleIdentifier: item.bundleIdentifier,
+                        visibility: rule.visibility), identity: observed, target: target)
+                }
+                cleanupTarget = nil
+                processed.insert(target)
+                let targetElapsed = ProcessInfo.processInfo.systemUptime - targetStarted
+                Self.diagnosticLogger.notice("nativeVisibility classificationConfirmed=true hidden=\(rule.visibility != .visible) itemCount=\(identities.count) elapsedSeconds=\(targetElapsed)")
+            } catch {
+                if let target = cleanupTarget {
+                    let recovery = Task { @MainActor in
+                        do {
+                            try self.reloadNativeRecoveryJournalIfNeeded(for: target)
+                            try self.restoreNativeTarget(target)
+                        } catch {
+                            self.positionRecoveryMessage = "未完成的隐藏操作仍待恢复：\(error.localizedDescription)"
+                        }
+                    }
+                    await recovery.value
+                    removeNativeEvidence(target: target)
+                }
+                for id in affectedIDs {
+                    nativeVisibilityEvidence.removeValue(forKey: id)
+                    actualGroups.removeValue(forKey: id)
+                    itemApplicationIssues[id] = error.localizedDescription
+                }
+                if Task.isCancelled || positionRecoveryMessage != nil { throw error }
+            }
+        }
+        hasCompletedSetup = true
+        defaults.set(true, forKey: "hasCompletedSetup")
+        return true
+    }
+
+    func confirmNativeRule(_ rule: ItemRule, identity: ObservedItemGroupHistory.Identity, target: NativeVisibilityTarget?) {
+        nativeVisibilityEvidence[rule.id] = NativeVisibilityEvidence(identity: identity, target: target, group: rule.visibility)
+        actualGroups[rule.id] = rule.visibility
+        rules.set(rule)
+        persistRules()
+        pendingDrafts.removeVerified(rule, sessionIdentity: identity)
+        persistDrafts()
+        itemApplicationIssues.removeValue(forKey: rule.id)
+    }
+
+    func waitForNativeVisibility(id: String, target: NativeVisibilityTarget,
+                                 identity: ObservedItemGroupHistory.Identity, visible: Bool) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 2.5
+        var consecutive = 0
+        var refreshed = false
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            try Task.checkCancellation()
+            guard !stopping, AXIsProcessTrusted(), Self.observedOwnerIsCurrent(identity),
+                  snapshots.first(where: { $0.id == id }).flatMap(observedItemIdentity) == identity else {
+                throw MenuBarAccessError.disappeared
+            }
+            let allowed = try nativeAllowed(target)
+            let observed: Bool?
+            switch target {
+            case .application: observed = await access.inspectNativeVisibility(id: id)
+            case .system(let key): observed = await access.inspectNativeSystemVisibility(id: id, key: key)
+            }
+            let agrees = allowed == visible && observed == visible
+            consecutive = agrees ? consecutive + 1 : 0
+            if consecutive >= 2 { return }
+            // Native showing may replace a source or host binding. Refresh at
+            // most once; a transport failure never means the target is hidden.
+            if visible && observed != true && !refreshed {
+                try await scanNow()
+                refreshed = true
+            }
+            try await Task.sleep(for: .milliseconds(80))
+        }
+        throw MenuTidyManagementError.positionApplication(visible
+            ? "图标尚未在菜单栏中可操作，已停止本次打开。"
+            : "系统尚未完成隐藏，已恢复图标，可重试。")
+    }
+
+    func recoverNativeVisibilityAndRefresh(reconnect: Bool = true) {
+        guard restoreAllNativeTargets() else {
+            positionRecoveryMessage = "上次图标显示设置尚未恢复，请重试恢复。"
+            return
+        }
+        nativeVisibilityEvidence.removeAll()
+        actualGroups.removeAll()
+        positionRecoveryMessage = nil
+        if !reconnect {
+            for item in snapshots {
+                if let identity = observedItemIdentity(item) { trayConnectionAttempts[item.id] = identity }
+            }
+            managementMessage = "图标已恢复显示。关闭目标菜单后，可在对应图标旁重试连接。"
+        }
+        if accessibilityGranted { refreshMenuItems(collapseWhenFinished: startCollapsed && hasCompletedSetup) }
+    }
+
+    func restoreNativeAfterPermissionLoss() {
+        guard !preparingToTerminate, !stopping else { return }
+        cancelPassiveIconCapture()
+        closeIconPanel()
+        let previousWork = workTask
+        let previousActivation = panelActivationTask
+        let generation = beginPositionRecovery()
+        workTask = Task {
+            defer { finishPositionRecovery(generation) }
+            await previousWork?.value
+            await previousActivation?.value
+            let restored = restoreAllNativeTargets()
+            nativeVisibilityEvidence.removeAll()
+            actualGroups.removeAll()
+            rebuildRows()
+            if restored {
+                managementError = "辅助功能权限已关闭，已恢复本应用隐藏的图标。重新授权后可继续。"
+            } else {
+                positionRecoveryMessage = "权限变化后仍有图标显示设置待恢复，请重试恢复。"
+            }
+        }
+    }
+}
+
+extension MenuTidyModel {
+    func requestNativeSystemVisibilityAccess() {
+        guard !panelInteractionBusy, !preparingToTerminate, !stopping else { return }
+        Task {
+            do {
+                guard try await nativeSystemVisibilityStore.requestAccess(key: "AirDrop") else { return }
+                nativeSystemVisibilityAccessNeeded = !nativeSystemVisibilityStore.accessAvailable(key: "AirDrop")
+                nativeSystemVisibilityAccessMessage = nativeSystemVisibilityAccessNeeded
+                    ? "AirDrop 显示设置尚不可访问，请重新检测授权。"
+                    : "AirDrop 显示设置已授权，可在图标旁重试连接。"
+                if !nativeSystemVisibilityAccessNeeded { rebuildRows() }
+            } catch {
+                nativeSystemVisibilityAccessNeeded = true
+                nativeSystemVisibilityAccessMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func recheckNativeVisibilityAccess() {
+        guard usesNativeVisibility else { return }
+        nativeVisibilityAccessAvailable = nativeVisibilityStore.accessAvailable
+        if nativeSystemVisibilityStore.managedKeys.contains("AirDrop"),
+           !nativeSystemVisibilityStore.accessAvailable(key: "AirDrop") {
+            nativeSystemVisibilityAccessNeeded = true
+            nativeSystemVisibilityAccessMessage = "请先授权 AirDrop 显示设置，再点击恢复图标。恢复完成前保留现有记录。"
+        }
+        nativeVisibilityAccessMessage = nativeVisibilityAccessAvailable
+            ? "菜单栏显示设置文件可访问。选择图标后即可连接托盘。"
+            : "请在系统选择窗口中确认菜单栏显示设置文件，当前分类选择会保留。"
+    }
+
+    func requestNativeVisibilityAccess() {
+        guard !isApplying, !isRefreshing, !isActivatingPanelItem, !isRecoveringPositions else { return }
+        Task {
+            do {
+                guard try await nativeVisibilityStore.requestAccess() else { return }
+                recheckNativeVisibilityAccess()
+                if nativeVisibilityAccessAvailable {
+                    managementError = nil
+                    trayConnectionAttempts.removeAll()
+                    recoverNativeVisibilityAndRefresh()
+                }
+            } catch { nativeVisibilityAccessMessage = error.localizedDescription }
+        }
     }
 }

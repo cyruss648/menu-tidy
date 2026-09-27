@@ -31,16 +31,30 @@ struct SettingsView: View {
     private var trayControlsDisabled: Bool {
         model.isRecoveringPositions || model.isArranging || model.positionRecoveryMessage != nil
     }
-    private var requiresPositionAccess: Bool { ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 }
+    private var requiresPositionAccess: Bool {
+        !model.usesNativeVisibility && ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
+    }
+    private var showsPositionAccessCard: Bool { requiresPositionAccess || model.needsLegacyPositionRecovery }
     private var groupingPermissionsGranted: Bool {
-        model.accessibilityGranted && (!requiresPositionAccess || model.menuBarPositionAccessAvailable)
+        model.accessibilityGranted && (model.usesNativeVisibility
+            ? model.nativeVisibilityAccessAvailable : (!requiresPositionAccess || model.menuBarPositionAccessAvailable))
     }
     private var groupingPermissionStatus: String {
         if !model.accessibilityGranted { return "需要辅助功能权限" }
+        if model.usesNativeVisibility {
+            return model.nativeVisibilityAccessAvailable ? "辅助功能与菜单栏显示设置已授权" : "还需授权菜单栏显示设置"
+        }
         if requiresPositionAccess && !model.menuBarPositionAccessAvailable { return "后台分组还需目录授权" }
         return requiresPositionAccess ? "辅助功能与排序目录已授权" : "辅助功能已授权"
     }
-    private var usesPanelVisibility: Bool { model.usesPositionHiding && !model.isArranging }
+    private var usesPanelVisibility: Bool {
+        (model.usesNativeVisibility || model.usesPositionHiding) && !model.isArranging
+    }
+    private var groupingPermissionHelp: String {
+        model.usesNativeVisibility
+            ? "辅助功能用于读取图标并打开原生菜单；菜单栏显示设置用于控制图标是否显示。屏幕录制可选，用于显示原始图标外观。"
+            : "辅助功能与排序目录用于调整原生图标。屏幕录制为可选增强，用于显示原始菜单栏图像；未开启时托盘显示应用身份图标。"
+    }
     private var currentTrayItems: [ManagedItemRow] { model.items.filter(\.isAvailable) }
     private func trayItemNeedsConfirmation(_ item: ManagedItemRow) -> Bool {
         item.isPending && !model.trayPlacementIsPending(id: item.id) && model.trayPlacementMessage(id: item.id) == nil
@@ -87,7 +101,7 @@ struct SettingsView: View {
                       systemImage: groupingPermissionsGranted ? "checkmark.shield" : "lock.shield")
                     .font(.system(size: 11))
                     .foregroundStyle(groupingPermissionsGranted ? accent : .secondary)
-                    .help("辅助功能与排序目录用于调整原生图标。屏幕录制为可选增强，用于显示原始菜单栏图像；未开启时托盘显示应用身份图标。")
+                    .help(groupingPermissionHelp)
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 16)
@@ -137,7 +151,7 @@ struct SettingsView: View {
 
     private var statusText: String {
         if model.operationCancellationRequested { return "正在安全停止…" }
-        if model.isRecoveringPositions { return "正在恢复排序…" }
+        if model.isRecoveringPositions { return model.usesNativeVisibility ? "正在恢复图标显示…" : "正在恢复排序…" }
         if model.isApplying { return "正在调整图标…" }
         if model.isRefreshing && model.isArranging { return "正在确认拖拽分组…" }
         if model.isRefreshing { return "正在读取图标…" }
@@ -199,14 +213,16 @@ struct SettingsView: View {
         if model.isRecoveringPositions { return "恢复完成后会重新确认菜单栏状态。" }
         if let progress = model.managementMessage { return progress }
         if model.isRefreshing { return "正在读取最新状态；列表中的选择会保留。" }
-        return "先检查当前状态，再调整并验证位置。"
+        return model.usesNativeVisibility ? "正在确认图标的显示状态。" : "先检查当前状态，再调整并验证位置。"
     }
 
     private var managementPage: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 16) {
                 if !model.accessibilityGranted { permissionCard(compact: true) }
-                if requiresPositionAccess && !model.menuBarPositionAccessAvailable { menuBarPositionAccessCard(compact: true) }
+                if model.usesNativeVisibility && !model.nativeVisibilityAccessAvailable { nativeVisibilityAccessCard(compact: true) }
+                if model.nativeSystemVisibilityAccessNeeded { nativeSystemVisibilityAccessCard }
+                if showsPositionAccessCard && !model.menuBarPositionAccessAvailable { menuBarPositionAccessCard(compact: true) }
                 recoveryNotice
                 if model.isArranging { arrangementNotice }
                 VStack(alignment: .leading, spacing: 5) {
@@ -395,7 +411,7 @@ struct SettingsView: View {
                 Text("旧版分类与未完成记录保留在这里。日常使用上方的两种显示位置；仅在排查兼容问题或处理旧记录时使用以下工具。")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if !model.isArranging { arrangementEntry }
+                if !model.isArranging && !model.usesNativeVisibility { arrangementEntry }
                 HStack(spacing: 10) {
                     ForEach(ItemVisibility.allCases, id: \.id) { groupSummary($0) }
                 }
@@ -627,12 +643,16 @@ struct SettingsView: View {
             Menu {
                 Button("更新图标栏图像") { model.refreshMenuItems(prepareOverflow: true) }
                     .disabled(groupingControlsDisabled || !model.accessibilityGranted || !model.screenCaptureGranted
+                              || (model.usesNativeVisibility && !model.nativeVisibilityAccessAvailable)
                               || (model.usesPositionHiding && (!model.menuBarPositionAccessAvailable || model.positionRecoveryMessage != nil)))
                 if !model.screenCaptureGranted {
                     Button("设置图像权限…") { page = .settings }
                 }
                 if model.usesPositionHiding && !model.menuBarPositionAccessAvailable {
                     Button("设置排序目录权限…") { page = .settings }
+                }
+                if model.usesNativeVisibility && !model.nativeVisibilityAccessAvailable {
+                    Button("授权菜单栏显示设置…") { page = .settings }
                 }
             } label: {
                 Image(systemName: "photo")
@@ -900,7 +920,9 @@ struct SettingsView: View {
             if usesPanelVisibility || !model.temporarilyRevealingAll {
                 Button("临时显示全部") { model.revealAllTemporarily() }
                     .disabled(groupingControlsDisabled)
-                    .help("在下方图标栏中临时展示包括「始终隐藏」在内的项目。")
+                    .help(model.usesNativeVisibility
+                        ? "临时恢复被 Menu Tidy 收起的原生菜单栏图标。"
+                        : "在下方图标栏中临时展示包括「始终隐藏」在内的项目。")
             }
             Button { model.applyItemRules() } label: {
                 HStack(spacing: 6) {
@@ -910,9 +932,11 @@ struct SettingsView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .help(!requiresPositionAccess || model.menuBarPositionAccessAvailable
-                ? "应用高级维护中的旧版分组选择。通过后台接口调整并验证位置；不支持的项目保留为待应用，不移动鼠标。"
-                : "后台分组还需单独授权访问排序目录。选择仍保留为草稿，也可使用菜单栏 ⌘ 拖拽分组。")
+            .help(model.usesNativeVisibility
+                ? "应用高级维护中保留的显示选择。请先完成辅助功能与菜单栏显示设置授权；日常选择会立即处理。"
+                : (!requiresPositionAccess || model.menuBarPositionAccessAvailable
+                    ? "应用高级维护中的旧版分组选择。通过后台接口调整并验证位置；不支持的项目保留为待应用，不移动鼠标。"
+                    : "后台分组还需单独授权访问排序目录。选择仍保留为草稿，也可使用菜单栏 ⌘ 拖拽分组。"))
             .disabled(groupingControlsDisabled || !groupingPermissionsGranted || model.actionablePendingCount == 0
                       || model.positionRecoveryMessage != nil)
         }
@@ -927,9 +951,9 @@ struct SettingsView: View {
 
     private var applySummaryTitle: String {
         if model.operationCancellationRequested { return "正在停止，等待临时改动恢复" }
-        if model.isRecoveringPositions { return "正在恢复菜单栏排序" }
+        if model.isRecoveringPositions { return model.usesNativeVisibility ? "正在恢复菜单栏图标" : "正在恢复菜单栏排序" }
         if model.isArranging { return "请先完成菜单栏拖拽分组" }
-        if model.positionRecoveryMessage != nil { return "请先恢复菜单栏排序" }
+        if model.positionRecoveryMessage != nil { return model.usesNativeVisibility ? "请先恢复菜单栏图标" : "请先恢复菜单栏排序" }
         if model.explicitDraftCount > 0 {
             return "\(model.explicitDraftCount) 项草稿已保存，尚未应用"
         }
@@ -946,7 +970,9 @@ struct SettingsView: View {
         }
         if model.isArranging { return "整理期间暂停列表修改，完成后重新读取分组。" }
         if model.positionRecoveryMessage != nil { return "恢复操作见上方提示；完成后再应用草稿。" }
-        if !groupingPermissionsGranted { return "先在上方完成授权，也可使用菜单栏 ⌘ 拖拽整理。" }
+        if !groupingPermissionsGranted {
+            return model.usesNativeVisibility ? "先在上方完成授权；已保存的显示选择会保留。" : "先在上方完成授权，也可使用菜单栏 ⌘ 拖拽整理。"
+        }
         var parts: [String] = []
         if applicationIssueCount > 0 {
             parts.append("\(applicationIssueCount) 项未自动应用，可筛选查看原因。")
@@ -955,7 +981,7 @@ struct SettingsView: View {
             parts.append("另有 \(model.savedRulesNeedingVerificationCount) 项已保存规则待核实。")
         }
         if model.actionablePendingCount > 0 {
-            parts.append("应用时先检查支持情况，只有位置确认后才算成功。")
+            parts.append(model.usesNativeVisibility ? "应用后会检查实际显示状态。" : "应用时先检查支持情况，只有位置确认后才算成功。")
         } else {
             parts.append("选择会立即保存为草稿；应用后更新菜单栏。")
         }
@@ -992,11 +1018,11 @@ struct SettingsView: View {
             if let recovery = model.positionRecoveryMessage {
                 VStack(alignment: .leading, spacing: 8) {
                     detailedIssueNotice(recovery, symbol: "arrow.uturn.backward.circle",
-                                        title: "查看排序恢复详情", isExpanded: $recoveryDetailsExpanded)
+                                        title: "查看图标恢复详情", isExpanded: $recoveryDetailsExpanded)
                     HStack {
-                        Button("重试恢复原排序") { model.retryPositionRecovery() }
+                        Button(model.usesNativeVisibility ? "重试恢复图标" : "重试恢复原排序") { model.retryPositionRecovery() }
                         Button("恢复隐藏项并保留外部改动") { model.keepCurrentPositionLayout() }
-                            .help("恢复仍由 Menu Tidy 管理的隐藏位置；保留其他操作改过的位置。待应用分类不会标为成功。")
+                            .help("恢复仍由 Menu Tidy 管理的图标状态；保留其他操作改过的设置。待应用分类不会标为成功。")
                     }
                     .disabled(groupingControlsDisabled)
                 }
@@ -1085,7 +1111,9 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 18) {
                 if model.isArranging { arrangementNotice }
                 permissionCard(compact: false)
-                if requiresPositionAccess { menuBarPositionAccessCard(compact: false) }
+                if model.usesNativeVisibility { nativeVisibilityAccessCard(compact: false) }
+                if model.nativeSystemVisibilityAccessNeeded { nativeSystemVisibilityAccessCard }
+                if showsPositionAccessCard { menuBarPositionAccessCard(compact: false) }
                 screenCapturePermissionCard
                 VStack(alignment: .leading, spacing: 10) {
                     Text("使用偏好").font(.system(size: 13, weight: .semibold))
@@ -1116,7 +1144,9 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(model.accessibilityGranted ? "辅助功能已开启" : "先允许 Menu Tidy 整理菜单栏")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("辅助功能用于读取图标、确认位置，以及请求系统支持的图标操作。调整原生位置另需排序目录授权；屏幕录制仅用于增强原始图标外观，未开启时托盘仍可使用应用身份图标。")
+                    Text(model.usesNativeVisibility
+                        ? "辅助功能用于读取菜单栏图标并打开对应的原生菜单。图标的显示与隐藏另需下方菜单栏设置文件授权；屏幕录制只用于增强原始图标外观，未开启时托盘仍可使用应用身份图标。"
+                        : "辅助功能用于读取图标、确认位置，以及请求系统支持的图标操作。调整原生位置另需排序目录授权；屏幕录制仅用于增强原始图标外观，未开启时托盘仍可使用应用身份图标。")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1187,6 +1217,58 @@ struct SettingsView: View {
         .modifier(SettingsCardStyle())
     }
 
+    private func nativeVisibilityAccessCard(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: compact ? 10 : 13) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: model.nativeVisibilityAccessAvailable ? "checkmark.shield.fill" : "doc.text")
+                    .font(.system(size: compact ? 18 : 21)).foregroundStyle(accent)
+                    .frame(width: 26).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(model.nativeVisibilityAccessAvailable ? "菜单栏显示设置已授权" : "允许调整菜单栏显示设置")
+                        .font(.system(size: compact ? 12 : 13, weight: .semibold))
+                    Text("在系统选择窗口中确认已定位的菜单栏设置文件。授权后，选择常驻或收进托盘即可处理；点击托盘图标仍可打开应用的原生菜单。")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if !compact {
+                Text("仅授权这一个菜单栏设置文件。已保存的图标选择会保留，完成授权后可继续处理。")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 10) {
+                Button(model.nativeVisibilityAccessAvailable ? "重新选择设置文件…" : "授权菜单栏显示设置…") {
+                    model.requestNativeVisibilityAccess()
+                }
+                Button("重新检测文件访问") { model.recheckNativeVisibilityAccess() }
+                Spacer(minLength: 0)
+                if compact { Button("权限说明") { page = .settings }.buttonStyle(.link) }
+            }
+            .disabled(groupingControlsDisabled)
+            if let message = model.nativeVisibilityAccessMessage {
+                issueNotice(message, symbol: "info.circle", tint: model.nativeVisibilityAccessAvailable ? accent : .orange)
+            }
+        }
+        .padding(compact ? 12 : 16)
+        .modifier(SettingsCardStyle())
+    }
+
+    private var nativeSystemVisibilityAccessCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("允许管理 AirDrop 图标").font(.system(size: 13, weight: .semibold))
+            Text("AirDrop 使用单独的系统显示设置。只需在选择窗口中授权已定位的设置文件，完成后可重试连接。")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("授权 AirDrop 显示设置…") { model.requestNativeSystemVisibilityAccess() }
+                .disabled(groupingControlsDisabled)
+            if let message = model.nativeSystemVisibilityAccessMessage {
+                issueNotice(message, symbol: "info.circle", tint: .orange)
+            }
+        }
+        .padding(12)
+        .modifier(SettingsCardStyle())
+    }
+
     private func menuBarPositionAccessCard(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: compact ? 10 : 13) {
             HStack(alignment: .top, spacing: 10) {
@@ -1195,11 +1277,14 @@ struct SettingsView: View {
                     .foregroundStyle(accent)
                     .frame(width: 26).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(model.menuBarPositionAccessAvailable ? "菜单栏排序目录可访问" : "后台分组还需单独授权排序目录")
+                    Text(model.usesNativeVisibility ? "恢复旧版菜单栏位置" :
+                        (model.menuBarPositionAccessAvailable ? "菜单栏排序目录可访问" : "后台分组还需单独授权排序目录"))
                         .font(.system(size: compact ? 12 : 13, weight: .semibold))
-                    Text(compact
-                        ? "辅助功能授权不包含排序目录。点击下方按钮，在系统选择窗口中确认目录；仍可使用 ⌘ 拖拽分组。"
-                        : "后台分组需要读取和更新系统菜单栏排序记录。请通过系统目录选择窗口，仅授权菜单栏的 Preferences 目录；辅助功能权限不会自动提供这项访问。")
+                    Text(model.usesNativeVisibility
+                        ? "旧版本留下的位置记录尚待恢复。这里的目录授权仅用于完成这次恢复；日常托盘显示使用上方的菜单栏设置文件。"
+                        : (compact
+                            ? "辅助功能授权不包含排序目录。点击下方按钮，在系统选择窗口中确认目录；仍可使用 ⌘ 拖拽分组。"
+                            : "后台分组需要读取和更新系统菜单栏排序记录。请通过系统目录选择窗口，仅授权菜单栏的 Preferences 目录；辅助功能权限不会自动提供这项访问。"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1210,7 +1295,9 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("只访问菜单栏排序目录，不需要「完整磁盘访问权限」。目录可访问后，仍需逐项确认身份和实际位置，才能保存为已应用。")
+                Text(model.usesNativeVisibility
+                    ? "恢复时保留其他操作对菜单栏所做的修改。完成后，这项旧版目录权限不再是日常托盘使用的前提。"
+                    : "只访问菜单栏排序目录，不需要「完整磁盘访问权限」。目录可访问后，仍需逐项确认身份和实际位置，才能保存为已应用。")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1320,7 +1407,7 @@ struct SettingsView: View {
                 }
             }
             Divider()
-            preferenceRow(title: "键盘快捷键", subtitle: "随时展开或收起，不展开「始终隐藏」图标。") {
+            preferenceRow(title: "键盘快捷键", subtitle: usesPanelVisibility ? "随时打开或收起独立托盘。" : "随时展开或收起，不展开「始终隐藏」图标。") {
                 HStack(spacing: 12) {
                     Text("⌃ ⌥ M")
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -1332,7 +1419,7 @@ struct SettingsView: View {
                         .labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }
             }
-            if !model.usesPositionHiding {
+            if !model.usesPositionHiding && !model.usesNativeVisibility {
                 Divider()
                 preferenceRow(title: "启动时收起图标", subtitle: model.hasCompletedSetup ? "打开 Menu Tidy 时保持菜单栏整洁。" : "完成一次托盘设置后可启用。") {
                     Toggle("启动时收起图标", isOn: $model.startCollapsed)

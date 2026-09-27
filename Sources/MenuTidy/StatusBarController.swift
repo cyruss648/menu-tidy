@@ -2,7 +2,8 @@ import AppKit
 import MenuTidyCore
 import OSLog
 
-/// Native status items define groups; boundaries become visible during Command-drag arrangement.
+/// The tray keeps one visible control. Legacy group boundaries appear only
+/// when their backend needs them, or during explicit Command-drag arrangement.
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
     private static let blockerLogger = Logger(subsystem: "dev.hdh.MenuTidy", category: "PositionBlocker")
@@ -16,6 +17,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private var isCollapsed = false
     private var isArranging = false
     private let modernMenuBar = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
+    private var usesIndependentTray: Bool {
+        model?.usesNativeVisibility == true || model?.usesPositionHiding == true
+    }
+    private var showsGroupBoundaries: Bool {
+        isArranging || model?.usesNativeVisibility != true
+    }
 
     init(model: MenuTidyModel, demoMode: Bool) {
         self.model = model
@@ -96,16 +103,23 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         // Real or unreadable layout changes still invalidate the measured
         // budget and every active reservation before requesting revalidation.
         clearPositionHidingBlocker()
+        restoreControlVisibility()
         model?.recoverVisibility()
     }
 
     func restoreControlVisibility() {
         control.isVisible = true
-        divider.isVisible = true
-        alwaysDivider.isVisible = true
+        // Zero length still leaves a hosted status-item slot on some systems.
+        // Native visibility needs no boundary at all, so remove both from layout.
+        divider.isVisible = showsGroupBoundaries
+        alwaysDivider.isVisible = showsGroupBoundaries
     }
 
     func validateOrder() -> Bool {
+        guard showsGroupBoundaries else {
+            model?.layoutIssue = nil
+            return true
+        }
         // On macOS 27 the status views can be remote-hosted and their local window
         // frames are zero. A collapsed spacer's midpoint also does not represent
         // its item order. Unknown geometry must not create or clear a warning.
@@ -128,6 +142,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func apply(collapsed: Bool, arranging: Bool) {
         isCollapsed = collapsed
         isArranging = arranging
+        restoreControlVisibility()
         if arranging || model?.usesPositionHiding != true {
             positionHidingBlockerWidth = nil
             positionHidingBlockerReservation = nil
@@ -139,7 +154,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             // Reading items does not grant permission to expose hidden groups.
             isManaging: arranging || (model?.isApplying ?? false),
             temporarilyRevealingAll: model?.temporarilyRevealingAll ?? false)
-        areGroupBoundariesExpanded = !sections.collapseRegular && !sections.collapseAlways
+        areGroupBoundariesExpanded = showsGroupBoundaries && !sections.collapseRegular && !sections.collapseAlways
         let font = NSFont.systemFont(ofSize: 11, weight: .medium)
         let regularTitle = "← 收起"
         let alwaysTitle = "← 常隐"
@@ -147,8 +162,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             max(44, (title as NSString).size(withAttributes: [.font: font]).width + 12)
         }
         divider.length = arranging ? markerWidth(regularTitle) :
-            (model?.usesPositionHiding == true ? (positionHidingBlockerWidth ?? MenuBarLayout.expandedLength) :
-                (sections.collapseRegular ? collapsedLength() : MenuBarLayout.expandedLength))
+            (model?.usesNativeVisibility == true ? MenuBarLayout.expandedLength :
+                (model?.usesPositionHiding == true ? (positionHidingBlockerWidth ?? MenuBarLayout.expandedLength) :
+                    (sections.collapseRegular ? collapsedLength() : MenuBarLayout.expandedLength)))
         if !arranging && positionHidingBlockerWidth != nil { areGroupBoundariesExpanded = false }
         divider.button?.font = font
         divider.button?.title = arranging ? regularTitle : ""
@@ -157,7 +173,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         divider.button?.isEnabled = arranging
         divider.button?.toolTip = arranging ? "收起区边界：按住 ⌘ 拖动图标；点击完成拖拽并收起。" : nil
         alwaysDivider.length = arranging ? markerWidth(alwaysTitle) :
-            (sections.collapseAlways && model?.usesPositionHiding != true ? collapsedLength() : MenuBarLayout.expandedLength)
+            (sections.collapseAlways && !usesIndependentTray ? collapsedLength() : MenuBarLayout.expandedLength)
         alwaysDivider.button?.font = font
         alwaysDivider.button?.title = arranging ? alwaysTitle : ""
         alwaysDivider.button?.isEnabled = arranging
@@ -173,8 +189,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             stateDescription = "正在请求图标操作"
         } else if arranging {
             stateDescription = model?.managementError == nil ? "正在拖拽分组" : "拖拽结果待确认，右键查看原因"
-        } else if model?.usesPositionHiding == true {
-            stateDescription = model?.isPanelPresented == true ? "图标栏已展开" : "图标栏已收起"
+        } else if usesIndependentTray {
+            stateDescription = model?.temporarilyRevealingAll == true ? "临时显示全部图标" :
+                (model?.isPanelPresented == true ? "托盘已展开" : "托盘已收起")
         } else if model?.isPanelPresented == true {
             stateDescription = "图标栏已展开"
         } else if model?.temporarilyRevealingAll == true {
@@ -372,7 +389,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         let busy = model?.isApplying == true || model?.isRefreshing == true || model?.isActivatingPanelItem == true
-        let usesPanelVisibility = model?.usesPositionHiding == true && !isArranging
+        let usesPanelVisibility = usesIndependentTray && !isArranging
         if isArranging {
             addItem(menu, title: "完成拖拽并收起", action: #selector(finishArrangement), enabled: !busy)
             addItem(menu, title: "退出拖拽，保持全部展开", action: #selector(leaveArrangement), enabled: !busy)
@@ -415,7 +432,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func leaveArrangement() { model?.leaveArrangementExpanded() }
     @objc private func collapseNativeGroups() { model?.collapseNativeGroups() }
     @objc private func revealAll() {
-        if model?.usesPositionHiding == true && !isArranging { model?.revealAllTemporarily() }
+        if usesIndependentTray && !isArranging { model?.revealAllTemporarily() }
         else if model?.temporarilyRevealingAll == true { model?.endTemporaryReveal() }
         else { model?.revealAllTemporarily() }
     }

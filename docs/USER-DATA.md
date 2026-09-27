@@ -1,6 +1,6 @@
 # 用户数据与存储位置
 
-Menu Tidy 的日常配置保存在当前 macOS 用户的偏好设置中；原始菜单栏图标快照只保存在运行中的应用内存里。新的后台分组实现还会读写系统菜单栏排序记录，并保存本次修改的私有事务备份。开发机器上的测试备份、签名资料与这些用户配置是不同用途的数据。
+Menu Tidy 的日常配置保存在当前 macOS 用户的偏好设置中；原始菜单栏图标快照只保存在运行中的应用内存里。macOS 27 的原生隐藏路径还会读写系统菜单栏显示设置；旧排序记录仅用于兼容与历史恢复。两条路径分别保存本次修改的私有恢复账本。开发机器上的测试备份、签名资料与这些用户配置是不同用途的数据。
 
 本文说明当前 **0.5.0 开发中、尚未发布**源码的存储行为。旧版本或后续版本有差异时，以对应版本说明为准。路径中的 `~` 表示当前用户的个人文件夹，不依赖某个固定用户名。
 
@@ -18,6 +18,9 @@ Menu Tidy 的日常配置保存在当前 macOS 用户的偏好设置中；原始
 | --- | --- |
 | 已保存的图标分类 | `itemRules.v1`：包含图标稳定标识、应用名称／bundle 标识和分类的编码数据 |
 | 未应用的明确分类选择 | `itemDrafts.v1`：草稿 ID、目标标识及名称、bundle 标识、所选分类；不代表实际隐藏成功 |
+| 应用级原生托盘选择 | `nativeTrayChoices.v1`：按精确 bundle 保存的常驻或托盘意图；同应用多个图标共用选择 |
+| 原生选择解码失败备份 | `nativeTrayChoices.unreadableBackup`；原数据保留，失败时不自动重写 |
+| 原生显示设置文件书签 | `nativeMenuBarVisibilityFileBookmark.v1`：精确系统偏好文件访问 |
 | 草稿解码失败备份 | `itemDrafts.unreadableBackup` |
 | 首次设置是否完成 | `hasCompletedSetup` |
 | 启动时收起 | `startCollapsed` |
@@ -36,9 +39,23 @@ Menu Tidy 的日常配置保存在当前 macOS 用户的偏好设置中；原始
 
 通过 `--demo-items` 启动的开发演示模式，主要设置使用独立的 `dev.hdh.MenuTidy.demo` 偏好设置域，通常对应 `~/Library/Preferences/dev.hdh.MenuTidy.demo.plist`。演示数据不应当作正式分类规则的备份；AppKit 的窗口和菜单栏位置提示仍可能使用应用自身的偏好设置域。
 
-## 系统菜单栏排序与事务备份
+## 原生菜单栏显示与恢复
 
-当前 macOS 27 后台分组开发实现使用以下系统偏好文件中的 `TrailingItemPreferredPositions` 位置表：
+普通应用原生显示设置位于：
+
+```text
+~/Library/Group Containers/group.com.apple.controlcenter/Library/Preferences/group.com.apple.controlcenter.plist
+```
+
+其中 `trackedApplications` 是系统维护的应用记录。Menu Tidy 只修改精确匹配目标的 `isAllowed`，保留其他记录和字段。此文件不是本应用配置，不应为重置或卸载而删除。系统模块使用经过单独验证的设置，不按整个 MenuBarAgent 进程隐藏。
+
+`Transactions/NativeVisibility.plist` 保存普通应用显示开关的原始目标记录、已写入状态和待完成写入；`Transactions/NativeSystemVisibility.plist` 保存支持的系统模块状态。两者均以私有权限持久化，写设置前先记意图。启动、退出和恢复时只条件恢复本应用仍拥有的修改，不用整份偏好备份覆盖外部新设置。文件缺失、损坏或冲突不视为恢复完成。
+
+菜单展开期间临时恢复目标可见，关闭后再隐藏；无法确认菜单状态时保留恢复提示。清理或卸载前应正常退出并完成恢复，不直接删除这些账本。
+
+## 旧系统菜单栏排序与事务备份
+
+旧 macOS 27 排序隐藏与历史恢复路径使用以下系统偏好文件中的 `TrailingItemPreferredPositions` 位置表：
 
 ```text
 ~/Library/Group Containers/com.apple.MenuBar/Library/Preferences/com.apple.MenuBar.plist
