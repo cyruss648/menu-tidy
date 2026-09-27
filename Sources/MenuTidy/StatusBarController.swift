@@ -41,7 +41,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             button.title = ""
             button.target = self
             button.action = #selector(dividerClicked)
-            button.toolTip = "收起区边界：拖拽分组时，按住 ⌘ 将图标拖到此项左侧，收起后隐藏。"
             button.setAccessibilityLabel("Menu Tidy 收起区定位项")
             button.setAccessibilityIdentifier("menu-tidy-divider")
         }
@@ -49,7 +48,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             button.title = ""
             button.target = self
             button.action = #selector(dividerClicked)
-            button.toolTip = "常隐区边界：拖拽分组时，按住 ⌘ 将图标拖到此项左侧，普通展开时也隐藏。"
             button.setAccessibilityLabel("Menu Tidy 常隐区定位项")
             button.setAccessibilityIdentifier("menu-tidy-always-divider")
         }
@@ -154,12 +152,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if !arranging && positionHidingBlockerWidth != nil { areGroupBoundariesExpanded = false }
         divider.button?.font = font
         divider.button?.title = arranging ? regularTitle : ""
-        divider.button?.isEnabled = !sections.collapseRegular
+        // Blank layout spacers are not undisclosed entry points. Only the
+        // labelled markers in explicit arrangement mode accept clicks.
+        divider.button?.isEnabled = arranging
+        divider.button?.toolTip = arranging ? "收起区边界：按住 ⌘ 拖动图标；点击完成拖拽并收起。" : nil
         alwaysDivider.length = arranging ? markerWidth(alwaysTitle) :
             (sections.collapseAlways && model?.usesPositionHiding != true ? collapsedLength() : MenuBarLayout.expandedLength)
         alwaysDivider.button?.font = font
         alwaysDivider.button?.title = arranging ? alwaysTitle : ""
-        alwaysDivider.button?.isEnabled = !sections.collapseAlways
+        alwaysDivider.button?.isEnabled = arranging
+        alwaysDivider.button?.toolTip = arranging ? "常隐区边界：按住 ⌘ 拖动图标；点击完成拖拽并收起。" : nil
 
         let stateDescription: String
         if model?.isApplying == true {
@@ -362,8 +364,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         } else { model?.controlClicked(event: event) }
     }
     @objc private func dividerClicked() {
-        guard NSApp.currentEvent?.modifierFlags.contains(.command) != true else { return }
-        if isArranging { model?.finishArrangement() } else { model?.beginArrangement() }
+        guard isArranging, NSApp.currentEvent?.modifierFlags.contains(.command) != true else { return }
+        model?.finishArrangement()
     }
 
     private func showMenu() {
