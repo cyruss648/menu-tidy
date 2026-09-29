@@ -602,12 +602,20 @@ actor MenuBarAccessibility {
             }
         }
         // Retain off-screen items for recovery and rules; never reuse a stale PID.
-        for (id, old) in entries where updated[id] == nil &&
-            ownersByPID[old.owner.pid]?.launchTime == old.owner.launchTime &&
-            ownersByPID[old.owner.pid]?.bundleIdentifier == old.owner.bundleIdentifier &&
-            !belongsToScannedApplicationMenu(old) &&
-            !updated.values.contains(where: { CFEqual($0.element, old.element) }) {
-            updated[id] = old
+        for (id, old) in entries {
+            guard updated[id] == nil,
+                  ownersByPID[old.owner.pid]?.launchTime == old.owner.launchTime,
+                  ownersByPID[old.owner.pid]?.bundleIdentifier == old.owner.bundleIdentifier else { continue }
+            // Keep non-Sendable AX entries within this actor, including on Swift 6.2.
+            if belongsToScannedApplicationMenu(old) { continue }
+            var alreadyEnumerated = false
+            for current in updated.values {
+                if CFEqual(current.element, old.element) {
+                    alreadyEnumerated = true
+                    break
+                }
+            }
+            if !alreadyEnumerated { updated[id] = old }
         }
         // Native hiding can remove an item from both enumerated roots while its
         // owner keeps the original AX object alive. Preserve only caller-owned
