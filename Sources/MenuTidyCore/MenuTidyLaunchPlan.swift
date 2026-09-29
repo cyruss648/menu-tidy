@@ -17,6 +17,9 @@ public enum MenuTidyLaunchPlan: Equatable, Sendable {
         if arguments.contains("--probe-private-record-command") { return .disabledCommand }
         let flags = Set(arguments)
         guard flags.count == arguments.count else { return .rejected }
+        if flags.contains("--preview-ui") {
+            return flags.isSubset(of: ["--preview-ui", "--preview-permissions"]) ? .normal : .rejected
+        }
         if flags.contains("--observe-menu-bar-owner") {
             guard arguments.count == 2, arguments[0] == "--observe-menu-bar-owner",
                   arguments[1].count <= 255,

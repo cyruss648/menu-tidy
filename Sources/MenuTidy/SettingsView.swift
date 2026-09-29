@@ -1,21 +1,20 @@
 import MenuTidyCore
 import SwiftUI
 
-/// Immediate per-item tray placement, with legacy maintenance kept separate.
+/// One management surface for immediate choices, explicit retries and recovery.
 struct SettingsView: View {
     @ObservedObject var model: MenuTidyModel
     @ObservedObject var updates: UpdateController
     @State private var page: Page = .items
-    @State private var searchText = ""
-    @State private var groupFilter = "all"
     @State private var traySearchText = ""
     @State private var trayFilter = "all"
-    @State private var compatibilityExpanded = false
+    @State private var savedRecordsExpanded = false
     @State private var permissionHelpExpanded = false
     @State private var imageWarningDetailsExpanded = false
     @State private var managementErrorDetailsExpanded = false
     @State private var recoveryDetailsExpanded = false
     @State private var offlineDraftsExpanded = false
+    @State private var itemToForget: ManagedItemRow?
     @State private var draftToAssociate: PendingDraftRecord?
     @State private var associationTargetID = ""
     @State private var associationIssue: String?
@@ -29,7 +28,7 @@ struct SettingsView: View {
     private var isBusy: Bool { model.isRefreshing || model.isApplying || model.isActivatingPanelItem || model.isRecoveringPositions }
     private var groupingControlsDisabled: Bool { isBusy || model.isArranging }
     private var trayControlsDisabled: Bool {
-        model.isRecoveringPositions || model.isArranging || model.positionRecoveryMessage != nil
+        !model.trayPlacementSelectionAllowed
     }
     private var requiresPositionAccess: Bool {
         !model.usesNativeVisibility && ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
@@ -56,33 +55,19 @@ struct SettingsView: View {
             : "辅助功能与排序目录用于调整原生图标。屏幕录制为可选增强，用于显示原始菜单栏图像；未开启时托盘显示应用身份图标。"
     }
     private var currentTrayItems: [ManagedItemRow] { model.items.filter(\.isAvailable) }
-    private func trayItemNeedsConfirmation(_ item: ManagedItemRow) -> Bool {
-        item.isPending && !model.trayPlacementIsPending(id: item.id) && model.trayPlacementMessage(id: item.id) == nil
+    private var unavailableItems: [ManagedItemRow] { model.items.filter { !$0.isAvailable } }
+    private var attentionCount: Int {
+        currentTrayItems.filter { $0.canMove && ($0.isPending || model.trayPlacementFailure(id: $0.id) != nil) }.count
     }
     private var filteredTrayItems: [ManagedItemRow] {
         let query = traySearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return currentTrayItems.filter { item in
-            let inTray = model.trayPlacementIsInTray(id: item.id)
-            let matchesFilter = trayFilter == "all" || (trayFilter == "tray" && inTray) ||
-                (trayFilter == "menubar" && !inTray) ||
-                (trayFilter == "attention" && (model.trayPlacementMessage(id: item.id) != nil || trayItemNeedsConfirmation(item)))
+            let group = model.trayPlacementGroup(id: item.id)
+            let needsAttention = item.canMove && (item.isPending || model.trayPlacementFailure(id: item.id) != nil)
+            let matchesFilter = trayFilter == "all" || trayFilter == group.id ||
+                (trayFilter == "attention" && needsAttention)
             return matchesFilter && (query.isEmpty || [item.name, item.ownerName, item.bundleIdentifier ?? ""]
                 .contains { $0.localizedCaseInsensitiveContains(query) })
-        }
-    }
-    private var applicationIssueCount: Int {
-        model.items.filter { applicationIssue(for: $0) != nil }.count
-    }
-    private func applicationIssue(for item: ManagedItemRow) -> String? {
-        item.isPending ? model.itemApplicationIssues[item.id] : nil
-    }
-    private var filteredItems: [ManagedItemRow] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return model.items.filter { item in
-            (groupFilter == "all" || item.group.id == groupFilter ||
-                (groupFilter == "application-issues" && applicationIssue(for: item) != nil))
-                && (query.isEmpty || [item.name, item.ownerName, item.bundleIdentifier ?? ""]
-                    .contains { $0.localizedCaseInsensitiveContains(query) })
         }
     }
 
@@ -111,9 +96,20 @@ struct SettingsView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .tint(accent)
-        .frame(minWidth: 780, idealWidth: 900, maxWidth: .infinity,
+        .frame(minWidth: 820, idealWidth: 960, maxWidth: .infinity,
                minHeight: 680, idealHeight: 740, maxHeight: .infinity)
         .sheet(item: $draftToAssociate) { draft in draftAssociationSheet(draft) }
+        .alert("忘记此应用的显示设置？", isPresented: Binding(
+            get: { itemToForget != nil }, set: { if !$0 { itemToForget = nil } }
+        )) {
+            Button("忘记此应用", role: .destructive) {
+                if let item = itemToForget { model.forgetItem(id: item.id) }
+                itemToForget = nil
+            }
+            Button("取消", role: .cancel) { itemToForget = nil }
+        } message: {
+            Text("将删除“\(itemToForget?.name ?? "此应用")”全部离线显示规则和待应用草稿。应用下次启动时，不再沿用这些选择；其他应用的记录保留。")
+        }
         .onChange(of: model.managementError) { _ in managementErrorDetailsExpanded = false }
         .onChange(of: model.positionRecoveryMessage) { _ in recoveryDetailsExpanded = false }
     }
@@ -127,7 +123,7 @@ struct SettingsView: View {
                 .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 13))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Menu Tidy")
+                Text(model.isUIPreview ? "Menu Tidy · 交互预览" : "Menu Tidy")
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
                 Text("常用图标留在菜单栏，其余收进箭头下方的托盘。")
                     .font(.system(size: 11))
@@ -217,84 +213,90 @@ struct SettingsView: View {
     }
 
     private var managementPage: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 16) {
-                if !model.accessibilityGranted { permissionCard(compact: true) }
-                if model.usesNativeVisibility && !model.nativeVisibilityAccessAvailable { nativeVisibilityAccessCard(compact: true) }
-                if model.nativeSystemVisibilityAccessNeeded { nativeSystemVisibilityAccessCard }
-                if showsPositionAccessCard && !model.menuBarPositionAccessAvailable { menuBarPositionAccessCard(compact: true) }
-                recoveryNotice
-                if model.isArranging { arrangementNotice }
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("图标放在哪里？").font(.system(size: 15, weight: .semibold))
-                    Text("选择后自动处理，无需点击应用。收进托盘的图标，点击菜单栏箭头即可使用。")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                HStack(spacing: 12) {
-                    trayPlacementSummary(inTray: false)
-                    trayPlacementSummary(inTray: true)
-                }
-                trayListToolbar
-                trayItemList
-                HStack(alignment: .top, spacing: 7) {
-                    Image(systemName: "info.circle").accessibilityHidden(true)
-                    Text("托盘优先显示原始图标；暂时没有原始图像时，显示应用图标与名称。")
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 4)
-                    if !model.screenCaptureGranted {
-                        Button("增强图标外观") { page = .settings }.buttonStyle(.link)
+        VStack(spacing: 0) {
+            managementActions
+                .padding(.horizontal, 24).padding(.vertical, 14)
+            Divider()
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 16) {
+                    if !model.accessibilityGranted { permissionCard(compact: true) }
+                    if model.usesNativeVisibility && !model.nativeVisibilityAccessAvailable { nativeVisibilityAccessCard(compact: true) }
+                    if model.nativeSystemVisibilityAccessNeeded { nativeSystemVisibilityAccessCard }
+                    if showsPositionAccessCard && !model.menuBarPositionAccessAvailable { menuBarPositionAccessCard(compact: true) }
+                    recoveryNotice
+                    if model.isArranging { arrangementNotice }
+                    compatibilityNotices
+                    HStack(spacing: 10) {
+                        ForEach(ItemVisibility.allCases) { groupSummary($0) }
                     }
+                    trayListToolbar
+                    if currentTrayItems.contains(where: { model.trayPlacementNeedsIdentification(id: $0.id) }) {
+                        Label("需要确认身份的图标，请逐项“识别并连接”；批量操作会跳过这些项目。", systemImage: "person.crop.circle.badge.questionmark")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    trayItemList
+                    HStack(alignment: .top, spacing: 7) {
+                        Image(systemName: "info.circle").accessibilityHidden(true)
+                        Text("更改选择会立即处理；同一应用的多个图标可能共用显示设置。缺少原始图像时，托盘显示应用图标。")
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        if !model.screenCaptureGranted {
+                            Button("增强图标外观") { page = .settings }.buttonStyle(.link)
+                        }
+                    }
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    if let issue = model.draftPersistenceIssue {
+                        Label(issue, systemImage: "exclamationmark.triangle")
+                            .font(.system(size: 11)).foregroundStyle(.orange)
+                    }
+                    savedRecords
+                    if !model.isArranging && !model.usesNativeVisibility { arrangementEntry }
+                    if !usesPanelVisibility && model.temporarilyRevealingAll && !model.isArranging { temporaryRevealNotice }
                 }
-                .font(.system(size: 10)).foregroundStyle(.secondary)
-                if let issue = model.draftPersistenceIssue {
-                    Label(issue, systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 11)).foregroundStyle(.orange)
-                }
-                compatibilityMaintenance
+                .padding(20)
             }
-            .padding(20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func trayPlacementSummary(inTray: Bool) -> some View {
-        let count = currentTrayItems.filter { model.trayPlacementIsInTray(id: $0.id) == inTray }.count
-        let filter = inTray ? "tray" : "menubar"
-        return Button { trayFilter = trayFilter == filter ? "all" : filter } label: {
-            HStack(spacing: 12) {
-                Image(systemName: inTray ? "tray" : "menubar.rectangle")
-                    .font(.system(size: 20)).foregroundStyle(accent)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(inTray ? "收进托盘" : "常驻菜单栏")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text(inTray ? "点击箭头查看" : "随时直接使用")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("\(count)").font(.system(size: 22, weight: .semibold, design: .rounded)).monospacedDigit()
-                    Text("当前选择").font(.system(size: 9)).foregroundStyle(.secondary)
-                }
+    /// Batch controls stay visible while scrolling a long list.
+    private var managementActions: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("图标显示方式").font(.system(size: 15, weight: .semibold))
+                Text(managementSummary)
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(14)
-            .background(trayFilter == filter ? accent.opacity(0.09) : Color(nsColor: .controlBackgroundColor),
-                        in: RoundedRectangle(cornerRadius: 11))
-            .overlay(RoundedRectangle(cornerRadius: 11)
-                .strokeBorder(trayFilter == filter ? accent.opacity(0.5) : Color.primary.opacity(0.06), lineWidth: 1))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button("重试失败项\(model.trayRetryCount > 0 ? " · \(model.trayRetryCount)" : "")") {
+                model.retryFailedTrayPlacements()
+            }
+            .disabled(!model.trayPlacementBatchActionsAllowed || model.trayRetryCount == 0)
+            .help("仅重试当前可处理的失败项，保留各自的三项选择；需要单独识别的图标请使用行内按钮。范围不受搜索与筛选影响。")
+            Button("应用全部待处理\(model.trayPendingApplicationCount > 0 ? " · \(model.trayPendingApplicationCount)" : "")") {
+                model.applyPendingTrayPlacements()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!model.trayPlacementBatchActionsAllowed || model.trayPendingApplicationCount == 0)
+            .help("继续处理所有可直接应用的未完成选择，包括失败项。已确认、离线和需要单独识别的图标不重复处理。范围不受搜索与筛选影响。")
         }
-        .buttonStyle(.plain)
-        .help("按当前选择筛选；处理中的选择会在对应图标旁显示进度。再次点击显示全部。")
-        .accessibilityLabel("\(inTray ? "收进托盘" : "常驻菜单栏")，当前选择 \(count) 项")
-        .accessibilityValue(trayFilter == filter ? "已筛选" : "未筛选")
+    }
+
+    private var managementSummary: String {
+        if let reason = model.trayPlacementBlockedReason { return reason }
+        if model.trayPlacementOutstandingCount > 0 {
+            return "\(model.trayPlacementOutstandingCount) 项尚未完成 · 选择已保留，批量操作覆盖全部图标"
+        }
+        return "三项选择，即改即用 · 未完成时可统一应用或重试"
     }
 
     private var trayListToolbar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
                 TextField("搜索应用或图标", text: $traySearchText)
-                    .textFieldStyle(.plain).accessibilityLabel("搜索托盘设置中的应用或图标")
+                    .textFieldStyle(.plain).accessibilityLabel("搜索应用或图标")
                 if !traySearchText.isEmpty {
                     Button { traySearchText = "" } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -304,40 +306,57 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-            Picker("筛选托盘设置", selection: $trayFilter) {
+            Picker("筛选图标", selection: $trayFilter) {
                 Text("全部图标").tag("all")
-                Text("常驻菜单栏").tag("menubar")
-                Text("收进托盘").tag("tray")
-                Text("需要处理").tag("attention")
+                ForEach(ItemVisibility.allCases) { Text($0.title).tag($0.id) }
+                Text("需要处理 · \(attentionCount)").tag("attention")
             }
-            .labelsHidden().frame(width: 132)
+            .labelsHidden().frame(width: 144)
+            Button { model.refreshMenuItems() } label: {
+                Label("刷新", systemImage: "arrow.clockwise")
+            }
+            .disabled(groupingControlsDisabled || !model.accessibilityGranted)
+            .keyboardShortcut("r", modifiers: .command)
+            .help("重新读取图标与状态，保留所有选择。刷新不会反复重试失败项。快捷键 ⌘R。")
+            Menu {
+                Button("临时显示全部") { model.revealAllTemporarily() }
+                    .disabled(groupingControlsDisabled || model.positionRecoveryMessage != nil)
+                Button("更新原始图标图像") { model.refreshMenuItems(prepareOverflow: true) }
+                    .disabled(groupingControlsDisabled || !groupingPermissionsGranted || !model.screenCaptureGranted
+                              || model.positionRecoveryMessage != nil)
+                Divider()
+                Button("权限与设置…") { page = .settings }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+            .accessibilityLabel("更多图标操作")
         }
     }
 
     private var trayItemList: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("应用 / 图标")
+                Text("应用 / 图标 · \(filteredTrayItems.count)")
                 Spacer()
-                Text("显示位置").frame(width: 224, alignment: .leading)
+                Text("更改后立即处理").frame(width: 294, alignment: .center)
             }
-            .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+            .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
             .padding(.horizontal, 16).padding(.vertical, 10)
             Divider()
             if filteredTrayItems.isEmpty {
                 VStack(spacing: 8) {
-                    Image(systemName: "tray").font(.system(size: 24)).foregroundStyle(.secondary)
-                    Text(currentTrayItems.isEmpty ? "正在等待菜单栏图标" : "没有匹配的图标")
-                        .font(.system(size: 12, weight: .medium))
+                    Image(systemName: trayFilter == "attention" ? "checkmark.circle" : "tray")
+                        .font(.system(size: 25)).foregroundStyle(.secondary)
+                    Text(trayEmptyTitle).font(.system(size: 13, weight: .medium))
                     if !traySearchText.isEmpty || trayFilter != "all" {
                         Button("显示全部图标") { traySearchText = ""; trayFilter = "all" }.buttonStyle(.link)
                     } else {
-                        Text("确认对应应用已运行，必要时在下方高级维护中重新读取列表。")
+                        Text(model.accessibilityGranted ? "确认对应应用已运行，再点击上方“刷新”。" : "完成上方授权后即可读取和管理图标。")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
-                .frame(maxWidth: .infinity, minHeight: 130)
-                .padding(16)
+                .frame(maxWidth: .infinity, minHeight: 130).padding(16)
             } else {
                 LazyVStack(spacing: 0) {
                     ForEach(filteredTrayItems) { item in
@@ -350,12 +369,18 @@ struct SettingsView: View {
         .modifier(SettingsCardStyle())
     }
 
+    private var trayEmptyTitle: String {
+        if !model.accessibilityGranted { return "授权后开始整理" }
+        if model.isRefreshing && currentTrayItems.isEmpty { return "正在读取菜单栏图标…" }
+        if trayFilter == "attention" && traySearchText.isEmpty { return "当前没有需要处理的图标" }
+        return currentTrayItems.isEmpty ? "暂未发现菜单栏图标" : "没有匹配的图标"
+    }
+
     private func trayItemRow(_ item: ManagedItemRow) -> some View {
         let pending = model.trayPlacementIsPending(id: item.id)
-        let message = model.trayPlacementMessage(id: item.id)
-        let needsConfirmation = trayItemNeedsConfirmation(item)
-        let confirmTitle = model.pendingDraftID(for: item.id) == nil ? "重新连接" : "继续设置"
-        let retryTitle = message == nil ? confirmTitle : model.trayPlacementRetryTitle(id: item.id)
+        let message = model.trayPlacementFailure(id: item.id)
+        let needsConfirmation = item.isPending && !pending && message == nil
+        let retryTitle = message == nil ? "应用" : model.trayPlacementRetryTitle(id: item.id)
         return HStack(spacing: 12) {
             itemIcon(item)
             VStack(alignment: .leading, spacing: 5) {
@@ -363,75 +388,91 @@ struct SettingsView: View {
                     Text(item.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
                     if pending {
                         ProgressView().controlSize(.small)
-                        Text("处理中…").font(.system(size: 10)).foregroundStyle(.secondary)
+                        rowBadge("处理中", color: accent)
                     } else if !item.canMove {
                         rowBadge("系统保留", color: .secondary)
+                    } else if message != nil {
+                        rowBadge("需处理", color: .orange)
                     } else if needsConfirmation {
-                        rowBadge("待确认", color: .secondary)
+                        rowBadge("待应用", color: .secondary)
                     }
                 }
-                if let message {
+                if let message, !pending {
                     Text(issueSummary(message))
-                        .font(.system(size: 10)).foregroundStyle(.orange)
+                        .font(.system(size: 11)).foregroundStyle(.orange)
                         .lineLimit(2).help(message)
                         .accessibilityLabel("需要处理：\(message)")
                 } else if pending {
-                    Text("可继续设置其他图标，也可改变此项选择。")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text("正在按顺序处理，可继续更改选择。")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                 } else {
-                    Text(needsConfirmation ? "已保留此前选择，确认后继续设置显示位置。" :
-                            (!item.canMove ? "此图标由系统管理。" : (item.ownerName.isEmpty ? "选择后自动处理" : item.ownerName)))
-                        .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(needsConfirmation ? "选择已保留，等待应用并确认。" :
+                            (!item.canMove ? "由系统管理，保持显示。" :
+                                (item.ownerName.isEmpty || item.ownerName == item.name ? "更改后自动处理" : item.ownerName)))
+                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if !pending && (message != nil || needsConfirmation) && item.canMove {
                 Button(retryTitle) { model.retryTrayPlacement(id: item.id) }
-                    .disabled(trayControlsDisabled)
+                    .controlSize(.small).disabled(trayControlsDisabled)
                     .accessibilityLabel("\(retryTitle)\(item.name)")
+                    .help(message ?? "应用并确认此前保存的选择。")
             }
-            Picker("\(item.name)的显示位置", selection: Binding(
-                get: { model.trayPlacementIsInTray(id: item.id) },
-                set: { model.requestTrayPlacement(id: item.id, inTray: $0) }
+            Picker("\(item.name)的显示方式", selection: Binding(
+                get: { model.trayPlacementGroup(id: item.id) },
+                set: { model.requestTrayPlacement(id: item.id, group: $0) }
             )) {
-                Text("常驻菜单栏").tag(false)
-                Text("收进托盘").tag(true)
+                ForEach(ItemVisibility.allCases) { Text($0.title).tag($0) }
             }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 224)
+            .pickerStyle(.segmented).labelsHidden().frame(width: 294)
             .disabled(trayControlsDisabled || !item.canMove || !item.isAvailable)
-            .help(item.canMove ? "选择后立即处理，不需要批量应用；处理期间可更新为最新选择。" : item.detail)
+            .help(item.canMove ? "选择后立即保存并处理。处理中继续更改，将以最新选择为准。" : item.detail)
         }
         .padding(.horizontal, 16).padding(.vertical, 13)
-        .background(message != nil ? Color.orange.opacity(0.035) : .clear)
+        .background(message != nil && !pending ? Color.orange.opacity(0.035) : .clear)
     }
 
-    private var compatibilityMaintenance: some View {
-        DisclosureGroup("高级兼容维护", isExpanded: $compatibilityExpanded) {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("旧版分类与未完成记录保留在这里。日常使用上方的两种显示位置；仅在排查兼容问题或处理旧记录时使用以下工具。")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if !model.isArranging && !model.usesNativeVisibility { arrangementEntry }
-                HStack(spacing: 10) {
-                    ForEach(ItemVisibility.allCases, id: \.id) { groupSummary($0) }
-                }
-                if applicationIssueCount > 0 { applicationIssuesSummary }
-                if !model.offlineDrafts.isEmpty {
-                    DisclosureGroup("已保留 \(model.offlineDrafts.count) 条待关联旧草稿", isExpanded: $offlineDraftsExpanded) {
-                        offlineDraftList.padding(.top, 8)
+    private var savedRecords: some View {
+        Group {
+            if !unavailableItems.isEmpty || !model.offlineDrafts.isEmpty {
+                DisclosureGroup("离线与保留记录 · \(unavailableItems.count + model.offlineDrafts.count)", isExpanded: $savedRecordsExpanded) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("应用未运行或图标身份尚未确认的记录保留在这里，不参加批量操作。")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                        ForEach(unavailableItems) { item in
+                            HStack(spacing: 10) {
+                                itemIcon(item)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(item.name).font(.system(size: 12, weight: .medium))
+                                    Text("应用未运行或图标不可用 · \(item.group.title)")
+                                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button(model.forgetItemAffectsApplication(id: item.id) ? "忘记此应用…" : "忘记此图标规则") {
+                                    if model.forgetItemAffectsApplication(id: item.id) { itemToForget = item }
+                                    else { model.forgetItem(id: item.id) }
+                                }
+                                .controlSize(.small)
+                                .disabled(groupingControlsDisabled || !model.canForgetItem(id: item.id))
+                                .accessibilityLabel("忘记\(item.name)的规则")
+                                .help(model.forgetItemAffectsApplication(id: item.id)
+                                    ? "仅在此应用没有可用图标时操作；删除它的离线显示规则和草稿，保留其他应用记录。"
+                                    : "忘记此图标的已保存规则，保留其他图标与离线草稿。")
+                            }
+                        }
+                        if !model.offlineDrafts.isEmpty {
+                            DisclosureGroup("待关联草稿 · \(model.offlineDrafts.count)", isExpanded: $offlineDraftsExpanded) {
+                                offlineDraftList.padding(.top, 8)
+                            }
+                        }
                     }
+                    .padding(.top, 12)
                 }
-                compatibilityNotices
-                if !usesPanelVisibility && model.temporarilyRevealingAll && !model.isArranging { temporaryRevealNotice }
-                listToolbar
-                itemList
-                applyBar
+                .font(.system(size: 12, weight: .medium))
+                .padding(14).modifier(SettingsCardStyle())
             }
-            .padding(.top, 12)
         }
-        .font(.system(size: 12, weight: .medium))
-        .padding(14)
-        .modifier(SettingsCardStyle())
     }
 
     private var arrangementEntry: some View {
@@ -439,9 +480,9 @@ struct SettingsView: View {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 19)).foregroundStyle(accent).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text("选择即存为草稿，应用后确认结果")
+                Text("也可以在菜单栏中拖拽整理")
                     .font(.system(size: 12, weight: .medium))
-                Text("修改显示方式不会立即移动图标。应用时先检查，再调整；也可按住 ⌘ 直接拖拽整理。")
+                Text("进入整理模式后按住 ⌘ 拖动图标，完成时确认分组。列表选择会立即处理。")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -519,10 +560,11 @@ struct SettingsView: View {
     }
 
     private func groupSummary(_ group: ItemVisibility) -> some View {
-        let count = model.items.filter { $0.group == group }.count
-        let pendingCount = model.items.filter { $0.group == group && $0.isPending }.count
+        let count = currentTrayItems.filter { model.trayPlacementGroup(id: $0.id) == group }.count
+        let pendingCount = currentTrayItems.filter { model.trayPlacementGroup(id: $0.id) == group &&
+            ($0.isPending || model.trayPlacementIsPending(id: $0.id) || model.trayPlacementFailure(id: $0.id) != nil) }.count
         return Button {
-            groupFilter = groupFilter == group.id ? "all" : group.id
+            trayFilter = trayFilter == group.id ? "all" : group.id
         } label: {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 7) {
@@ -546,50 +588,27 @@ struct SettingsView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-            .background(groupFilter == group.id ? accent.opacity(0.08) : Color(nsColor: .controlBackgroundColor),
+            .background(trayFilter == group.id ? accent.opacity(0.08) : Color(nsColor: .controlBackgroundColor),
                         in: RoundedRectangle(cornerRadius: 11))
             .overlay {
                 RoundedRectangle(cornerRadius: 11)
-                    .strokeBorder(groupFilter == group.id ? accent.opacity(0.6) : Color.primary.opacity(0.06), lineWidth: 1)
+                    .strokeBorder(trayFilter == group.id ? accent.opacity(0.6) : Color.primary.opacity(0.06), lineWidth: 1)
             }
         }
         .buttonStyle(.plain)
         .help("按当前选择筛选\(group.title)的图标，数量包含尚未应用的草稿；再次点击显示全部。")
         .accessibilityLabel("\(group.title)，当前选择 \(count) 个图标" + (pendingCount > 0 ? "，其中 \(pendingCount) 项尚待确认" : "，无待处理选择"))
-        .accessibilityValue(groupFilter == group.id ? "已筛选" : "未筛选")
+        .accessibilityValue(trayFilter == group.id ? "已筛选" : "未筛选")
     }
 
     private func groupSymbol(_ group: ItemVisibility) -> String {
         switch group {
-        case .visible: "pin"
-        case .collapsible: "chevron.left.chevron.right"
+        case .visible: "menubar.rectangle"
+        case .collapsible: "tray"
         case .alwaysHidden: "eye.slash"
         }
     }
 
-    private var applicationIssuesSummary: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "hand.draw")
-                .foregroundStyle(.orange)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("\(applicationIssueCount) 项未自动应用")
-                    .font(.system(size: 12, weight: .medium))
-                Text("这些项目未自动应用，选择仍保留；其余项目按验证结果处理。")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Button(groupFilter == "application-issues" ? "显示全部" : "查看这些项目") {
-                searchText = ""
-                groupFilter = groupFilter == "application-issues" ? "all" : "application-issues"
-            }
-            .help("筛选本次未自动应用的项目，查看逐项原因；不会删除草稿或改变已确认的规则。")
-        }
-        .padding(12)
-        .background(Color.orange.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
-    }
     private func groupColor(_ group: ItemVisibility) -> Color {
         switch group {
         case .visible: accent
@@ -600,161 +619,9 @@ struct SettingsView: View {
     private func groupDescription(_ group: ItemVisibility) -> String {
         switch group {
         case .visible: "保持在菜单栏，随时可用。"
-        case .collapsible: "点击「···」展开，再次点击收起。"
-        case .alwaysHidden: "普通展开不显示，仍可在此管理。"
+        case .collapsible: "收进托盘，点击菜单栏箭头查看。"
+        case .alwaysHidden: "普通展开不显示，可临时显示全部。"
         }
-    }
-
-    private var listToolbar: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                TextField("搜索应用或图标", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .accessibilityLabel("搜索应用或图标")
-                if !searchText.isEmpty {
-                    Button { searchText = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("清除搜索")
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-            Picker("筛选分组", selection: $groupFilter) {
-                Text("全部图标").tag("all")
-                ForEach(ItemVisibility.allCases, id: \.id) { Text($0.title).tag($0.id) }
-                if applicationIssueCount > 0 || groupFilter == "application-issues" {
-                    Text("未自动应用").tag("application-issues")
-                }
-            }
-            .labelsHidden()
-            .frame(width: 132)
-            Button { model.refreshMenuItems() } label: {
-                Label("刷新列表", systemImage: "arrow.clockwise")
-            }
-            .disabled(groupingControlsDisabled || !model.accessibilityGranted)
-            .keyboardShortcut("r", modifiers: .command)
-            .help("重新读取图标和分组状态，保留草稿；不额外展开隐藏项采集图像。快捷键 ⌘R。")
-            Menu {
-                Button("更新图标栏图像") { model.refreshMenuItems(prepareOverflow: true) }
-                    .disabled(groupingControlsDisabled || !model.accessibilityGranted || !model.screenCaptureGranted
-                              || (model.usesNativeVisibility && !model.nativeVisibilityAccessAvailable)
-                              || (model.usesPositionHiding && (!model.menuBarPositionAccessAvailable || model.positionRecoveryMessage != nil)))
-                if !model.screenCaptureGranted {
-                    Button("设置图像权限…") { page = .settings }
-                }
-                if model.usesPositionHiding && !model.menuBarPositionAccessAvailable {
-                    Button("设置排序目录权限…") { page = .settings }
-                }
-                if model.usesNativeVisibility && !model.nativeVisibilityAccessAvailable {
-                    Button("授权菜单栏显示设置…") { page = .settings }
-                }
-            } label: {
-                Image(systemName: "photo")
-            }
-            .fixedSize()
-            .accessibilityLabel("图标栏图像操作")
-            .help("更新图标栏图像是独立操作，可能需要临时展示隐藏项；普通刷新列表不会执行这一步。")
-        }
-    }
-
-    private var itemList: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("图标 / 所属应用")
-                Spacer()
-                Text("选择显示方式").frame(width: 148, alignment: .leading)
-            }
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            Divider()
-            if filteredItems.isEmpty {
-                emptyList.frame(maxWidth: .infinity, minHeight: 135)
-            } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(filteredItems, id: \.id) { item in
-                        itemRow(item)
-                        Divider().padding(.leading, 60)
-                    }
-                }
-            }
-        }
-        .modifier(SettingsCardStyle())
-    }
-
-    private func itemRow(_ item: ManagedItemRow) -> some View {
-        HStack(spacing: 12) {
-            itemIcon(item)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Text(item.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                    if applicationIssue(for: item) != nil {
-                        rowBadge("未自动应用", color: .orange)
-                    }
-                    if item.isPending {
-                        rowBadge(model.pendingDraftID(for: item.id) == nil ? "待核实" : "草稿", color: .orange)
-                    } else if !item.isAvailable {
-                        rowBadge("当前不可用", color: .secondary)
-                    } else if !item.canMove {
-                        rowBadge("受保护", color: .secondary)
-                    }
-                }
-                Text(itemSubtitle(item))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .help(item.detail)
-                if let issue = applicationIssue(for: item) {
-                    Text(issueSummary(issue))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.orange)
-                        .lineLimit(2)
-                        .help(issue)
-                        .accessibilityLabel("未自动应用的原因：\(issue)")
-                }
-            }
-            Spacer(minLength: 10)
-            Picker("\(item.name)的显示方式", selection: Binding(
-                get: { item.group }, set: { model.setGroup(id: item.id, group: $0) }
-            )) {
-                ForEach(ItemVisibility.allCases, id: \.id) { Text($0.title).tag($0) }
-            }
-            .labelsHidden()
-            .frame(width: 125)
-            .disabled(!item.canMove || !item.isAvailable || groupingControlsDisabled || !model.accessibilityGranted)
-            .help(item.canMove ? "选择会立即保存为草稿。点击「应用并收起」后检查并调整；位置验证通过后才确认成功。" : item.detail)
-            if let draftID = model.pendingDraftID(for: item.id) {
-                Button { model.discardDraft(id: draftID) } label: {
-                    Image(systemName: "arrow.uturn.backward").foregroundStyle(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .disabled(groupingControlsDisabled)
-                .help("撤销这条待应用草稿；已应用规则不变")
-                .accessibilityLabel("撤销\(item.name)的草稿")
-                .frame(width: 18)
-            } else if !item.isAvailable {
-                Button { model.forgetItem(id: item.id) } label: {
-                    Image(systemName: "trash").foregroundStyle(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .disabled(groupingControlsDisabled)
-                .help("忘记此图标保存的规则")
-                .accessibilityLabel("忘记\(item.name)的规则")
-                .frame(width: 18)
-            } else {
-                Color.clear.frame(width: 18, height: 1).accessibilityHidden(true)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
-        .background(applicationIssue(for: item) != nil ? Color.orange.opacity(0.035) : (item.isPending ? accent.opacity(0.035) : .clear))
     }
 
     private func itemIcon(_ item: ManagedItemRow) -> some View {
@@ -862,131 +729,12 @@ struct SettingsView: View {
         .padding(24)
         .frame(width: 500)
     }
-    private func itemSubtitle(_ item: ManagedItemRow) -> String {
-        var components: [String] = []
-        if !item.ownerName.isEmpty, item.ownerName != item.name { components.append(item.ownerName) }
-        if !item.detail.isEmpty {
-            components.append(item.detail)
-        } else if !item.isAvailable {
-            components.append("应用未运行或图标不可用，已保存的规则仍保留。")
-        } else if !item.canMove {
-            components.append("系统或本应用保护项，不能改变显示方式。")
-        }
-        if components.isEmpty { components.append(item.bundleIdentifier ?? "菜单栏图标") }
-        return components.joined(separator: " · ")
-    }
     private func rowBadge(_ title: String, color: Color) -> some View {
         Text(title)
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(color)
             .padding(.horizontal, 5).padding(.vertical, 2)
             .background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: 4))
-    }
-
-    private var emptyList: some View {
-        VStack(spacing: 7) {
-            Image(systemName: !model.accessibilityGranted ? "lock.shield" : "menubar.rectangle")
-                .font(.system(size: 24, weight: .light)).foregroundStyle(.secondary)
-            if !model.accessibilityGranted {
-                Text("授权后，在这里管理菜单栏图标").font(.system(size: 12, weight: .medium))
-                Text("可以在列表中选择，也可以按住 ⌘ 拖动分组。")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-            } else if model.isRefreshing {
-                Text("正在读取菜单栏图标…").font(.system(size: 12))
-            } else if !searchText.isEmpty || groupFilter != "all" {
-                Text("没有匹配的图标").font(.system(size: 12, weight: .medium))
-                Button("清除搜索与筛选") { searchText = ""; groupFilter = "all" }
-                    .buttonStyle(.link)
-            } else {
-                Text("暂未发现菜单栏图标").font(.system(size: 12, weight: .medium))
-                Text("确认应用已显示菜单栏图标，再点击「刷新列表」。")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-        }
-        .multilineTextAlignment(.center)
-        .padding(20)
-    }
-
-    private var applyBar: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(applySummaryTitle)
-                    .font(.system(size: 12, weight: .medium))
-                Text(applySummaryDetail)
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            if usesPanelVisibility || !model.temporarilyRevealingAll {
-                Button("临时显示全部") { model.revealAllTemporarily() }
-                    .disabled(groupingControlsDisabled)
-                    .help(model.usesNativeVisibility
-                        ? "临时恢复被 Menu Tidy 收起的原生菜单栏图标。"
-                        : "在下方图标栏中临时展示包括「始终隐藏」在内的项目。")
-            }
-            Button { model.applyItemRules() } label: {
-                HStack(spacing: 6) {
-                    if model.isApplying { ProgressView().controlSize(.small) }
-                    Text(applyButtonTitle)
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .help(model.usesNativeVisibility
-                ? "应用高级维护中保留的显示选择。请先完成辅助功能与菜单栏显示设置授权；日常选择会立即处理。"
-                : (!requiresPositionAccess || model.menuBarPositionAccessAvailable
-                    ? "应用高级维护中的旧版分组选择。通过后台接口调整并验证位置；不支持的项目保留为待应用，不移动鼠标。"
-                    : "后台分组还需单独授权访问排序目录。选择仍保留为草稿，也可使用菜单栏 ⌘ 拖拽分组。"))
-            .disabled(groupingControlsDisabled || !groupingPermissionsGranted || model.actionablePendingCount == 0
-                      || model.positionRecoveryMessage != nil)
-        }
-        .padding(.top, 3)
-    }
-
-    private var applyButtonTitle: String {
-        if model.operationCancellationRequested { return "正在停止…" }
-        if model.isRecoveringPositions { return "正在恢复…" }
-        return model.isApplying ? "正在应用…" : "应用并收起"
-    }
-
-    private var applySummaryTitle: String {
-        if model.operationCancellationRequested { return "正在停止，等待临时改动恢复" }
-        if model.isRecoveringPositions { return model.usesNativeVisibility ? "正在恢复菜单栏图标" : "正在恢复菜单栏排序" }
-        if model.isArranging { return "请先完成菜单栏拖拽分组" }
-        if model.positionRecoveryMessage != nil { return model.usesNativeVisibility ? "请先恢复菜单栏图标" : "请先恢复菜单栏排序" }
-        if model.explicitDraftCount > 0 {
-            return "\(model.explicitDraftCount) 项草稿已保存，尚未应用"
-        }
-        if model.savedRulesNeedingVerificationCount > 0 {
-            return "\(model.savedRulesNeedingVerificationCount) 项已保存规则待核实"
-        }
-        if !model.offlineDrafts.isEmpty { return "离线草稿已保留，等待图标或明确关联" }
-        return "在列表中选择显示方式"
-    }
-
-    private var applySummaryDetail: String {
-        if model.operationCancellationRequested || model.isRecoveringPositions {
-            return "恢复结束前暂不开始其他操作；未完成的选择会保留。"
-        }
-        if model.isArranging { return "整理期间暂停列表修改，完成后重新读取分组。" }
-        if model.positionRecoveryMessage != nil { return "恢复操作见上方提示；完成后再应用草稿。" }
-        if !groupingPermissionsGranted {
-            return model.usesNativeVisibility ? "先在上方完成授权；已保存的显示选择会保留。" : "先在上方完成授权，也可使用菜单栏 ⌘ 拖拽整理。"
-        }
-        var parts: [String] = []
-        if applicationIssueCount > 0 {
-            parts.append("\(applicationIssueCount) 项未自动应用，可筛选查看原因。")
-        }
-        if model.explicitDraftCount > 0, model.savedRulesNeedingVerificationCount > 0 {
-            parts.append("另有 \(model.savedRulesNeedingVerificationCount) 项已保存规则待核实。")
-        }
-        if model.actionablePendingCount > 0 {
-            parts.append(model.usesNativeVisibility ? "应用后会检查实际显示状态。" : "应用时先检查支持情况，只有位置确认后才算成功。")
-        } else {
-            parts.append("选择会立即保存为草稿；应用后更新菜单栏。")
-        }
-        if !model.offlineDrafts.isEmpty { parts.append("\(model.offlineDrafts.count) 条离线草稿不参与本次操作。") }
-        return parts.joined(separator: " ")
     }
 
     private var temporaryRevealNotice: some View {

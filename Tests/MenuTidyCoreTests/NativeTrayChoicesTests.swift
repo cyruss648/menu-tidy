@@ -3,6 +3,34 @@ import XCTest
 @testable import MenuTidyCore
 
 final class NativeTrayChoicesTests: XCTestCase {
+    func testForgetOfflineExactBundlePreservesOtherApplicationAndCase() throws {
+        var choices = NativeTrayChoices(existing: ["org.example.App": .alwaysHidden,
+                                                   "org.example.AppHelper": .collapsible,
+                                                   "org.example.app": .visible])
+        XCTAssertTrue(choices.remove(bundle: "org.example.App", liveBundles: ["org.example.AppHelper"]))
+        XCTAssertNil(choices.group(bundle: "org.example.App"))
+        XCTAssertEqual(choices.group(bundle: "org.example.AppHelper"), .collapsible)
+        XCTAssertEqual(choices.group(bundle: "org.example.app"), .visible)
+        let reloaded = try JSONDecoder().decode(NativeTrayChoices.self, from: JSONEncoder().encode(choices))
+        XCTAssertNil(reloaded.group(bundle: "org.example.App"))
+    }
+
+    func testForgetCannotChangeChoiceWhileAnySiblingIsLive() {
+        var choices = NativeTrayChoices(existing: ["org.example.App": .alwaysHidden])
+        XCTAssertFalse(NativeTrayChoices.canForget(bundle: "org.example.App", liveBundles: ["org.example.App"]))
+        XCTAssertFalse(choices.remove(bundle: "org.example.App", liveBundles: ["org.example.App"]))
+        XCTAssertEqual(choices.group(bundle: "org.example.App"), .alwaysHidden)
+    }
+
+    func testForgetRejectsUnknownSystemOwnAndGuessedBundleIdentifiers() {
+        for bundle in ["", "App", "org.example.App ", "com.apple.App", "COM.APPLE.App", "dev.hdh.MenuTidy"] {
+            XCTAssertFalse(NativeTrayChoices.canForget(bundle: bundle, liveBundles: [], excluding: ["dev.hdh.MenuTidy"]), bundle)
+        }
+        var choices = NativeTrayChoices(existing: ["org.example.App": .alwaysHidden])
+        XCTAssertFalse(choices.remove(bundle: "org.example.app", liveBundles: []))
+        XCTAssertEqual(choices.group(bundle: "org.example.App"), .alwaysHidden)
+    }
+
     private func book(_ entries: [(String, String?, ItemVisibility)]) -> ItemRuleBook {
         ItemRuleBook(rules: Dictionary(uniqueKeysWithValues: entries.map { id, bundle, group in
             (id, ItemRule(id: id, name: "Fixture", bundleIdentifier: bundle, visibility: group))

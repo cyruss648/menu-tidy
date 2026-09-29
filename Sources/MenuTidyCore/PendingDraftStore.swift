@@ -126,6 +126,18 @@ public struct PendingDraftStore: Codable, Sendable {
         sessionBindings.removeValue(forKey: id)
     }
 
+    /// Explicitly forget all saved choices of one exact application, including
+    /// unassociated drafts and verified session baselines. Callers must first
+    /// exclude every live sibling and explain this application-wide scope.
+    public mutating func removeAll(bundleIdentifier: String) {
+        let ids = Set(savedRecords.filter { $0.rule.bundleIdentifier == bundleIdentifier }.map(\.id))
+        records.removeAll { ids.contains($0.id) }
+        for id in ids {
+            verifiedSessionChoices.removeValue(forKey: id)
+            sessionBindings.removeValue(forKey: id)
+        }
+    }
+
     /// A successful subset must not discard the remaining choices. Unknown or
     /// mismatching results never satisfy an edit.
     public mutating func removeVerified(_ rule: ItemRule,

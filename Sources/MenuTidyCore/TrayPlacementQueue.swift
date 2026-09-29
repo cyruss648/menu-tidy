@@ -6,19 +6,25 @@ public struct TrayPlacementQueue: Sendable {
     public struct Request: Equatable, Sendable {
         public let token: UUID
         public let id: String
-        public let desiredInTray: Bool
+        public let group: ItemVisibility
+        public var desiredInTray: Bool { group != .visible }
         public let resolveAmbiguousKey: Bool
 
-        public init(token: UUID, id: String, desiredInTray: Bool, resolveAmbiguousKey: Bool = false) {
+        public init(token: UUID, id: String, group: ItemVisibility, resolveAmbiguousKey: Bool = false) {
             self.token = token
             self.id = id
-            self.desiredInTray = desiredInTray
+            self.group = group
             self.resolveAmbiguousKey = resolveAmbiguousKey
+        }
+
+        public init(token: UUID, id: String, desiredInTray: Bool, resolveAmbiguousKey: Bool = false) {
+            self.init(token: token, id: id, group: desiredInTray ? .collapsible : .visible,
+                resolveAmbiguousKey: resolveAmbiguousKey)
         }
     }
 
     private struct Intent: Sendable {
-        let desiredInTray: Bool
+        let group: ItemVisibility
         let resolveAmbiguousKey: Bool
     }
 
@@ -34,8 +40,12 @@ public struct TrayPlacementQueue: Sendable {
     /// Key resolution belongs only to this explicit intent: an ordinary later
     /// choice replaces it even when the desired placement itself is unchanged.
     public mutating func enqueue(id: String, desiredInTray: Bool, resolveAmbiguousKey: Bool = false) {
+        enqueue(id: id, group: desiredInTray ? .collapsible : .visible, resolveAmbiguousKey: resolveAmbiguousKey)
+    }
+
+    public mutating func enqueue(id: String, group: ItemVisibility, resolveAmbiguousKey: Bool = false) {
         if pendingIntents[id] == nil { pendingOrder.append(id) }
-        pendingIntents[id] = Intent(desiredInTray: desiredInTray, resolveAmbiguousKey: resolveAmbiguousKey)
+        pendingIntents[id] = Intent(group: group, resolveAmbiguousKey: resolveAmbiguousKey)
     }
 
     public var pendingIDs: [String] { pendingOrder }
@@ -43,8 +53,19 @@ public struct TrayPlacementQueue: Sendable {
     /// UI displays the newer queued choice while an older placement completes.
     /// nil means this queue has no intent for the item; consult saved rules then.
     public func desired(id: String) -> Bool? {
-        if let pending = pendingIntents[id] { return pending.desiredInTray }
-        return active.flatMap { $0.id == id ? $0.desiredInTray : nil }
+        desiredGroup(id: id).map { $0 != .visible }
+    }
+
+    public func desiredGroup(id: String) -> ItemVisibility? {
+        if let pending = pendingIntents[id] { return pending.group }
+        return active.flatMap { $0.id == id ? $0.group : nil }
+    }
+
+    /// A native application switch can own several icons. A new explicit
+    /// choice supersedes their waiting requests, never their active cleanup.
+    public mutating func removePending(ids: Set<String>) {
+        pendingOrder.removeAll { ids.contains($0) }
+        for id in ids { pendingIntents.removeValue(forKey: id) }
     }
 
     /// Only one native placement may be claimed until its matching completion.
@@ -53,7 +74,7 @@ public struct TrayPlacementQueue: Sendable {
               let intent = pendingIntents[id] else { return nil }
         pendingOrder.removeFirst()
         pendingIntents.removeValue(forKey: id)
-        let request = Request(token: UUID(), id: id, desiredInTray: intent.desiredInTray,
+        let request = Request(token: UUID(), id: id, group: intent.group,
             resolveAmbiguousKey: intent.resolveAmbiguousKey)
         active = request
         return request

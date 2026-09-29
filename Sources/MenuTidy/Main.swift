@@ -30,6 +30,12 @@ enum MenuTidyApp {
         case .normal:
             break
         }
+        // A UI fixture can run only from its separately identified app bundle.
+        // Production launches cannot accidentally opt into mocked permissions.
+        if CommandLine.arguments.contains("--preview-ui") != (Bundle.main.bundleIdentifier == "dev.hdh.MenuTidy.preview") {
+            print("Menu Tidy: UI preview requires the isolated preview bundle.")
+            return
+        }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.setActivationPolicy(.accessory)
@@ -61,11 +67,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return
         }
         model = MenuTidyModel()
-        updates = UpdateController(model: model, enabled: !CommandLine.arguments.contains("--demo-items"))
+        updates = UpdateController(model: model, enabled: !CommandLine.arguments.contains("--demo-items") && !model.isUIPreview)
         configureMainMenu()
         model.onShowSettings = { [weak self] in self?.showSettings() }
         model.start()
-        if !model.hasCompletedSetup || !model.accessibilityGranted || CommandLine.arguments.contains("--settings") || CommandLine.arguments.contains("--demo-items") {
+        if !model.hasCompletedSetup || !model.accessibilityGranted || CommandLine.arguments.contains("--settings") || CommandLine.arguments.contains("--demo-items") || model.isUIPreview {
             showSettings()
         }
     }
@@ -77,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 740),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.minSize = NSSize(width: 820, height: 660)
-            window.title = "Menu Tidy · 菜单栏整理"
+            window.title = model.isUIPreview ? "Menu Tidy · 独立交互预览（模拟数据）" : "Menu Tidy · 菜单栏整理"
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: SettingsView(model: model, updates: updates))

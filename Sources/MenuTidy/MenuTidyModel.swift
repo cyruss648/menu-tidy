@@ -109,11 +109,12 @@ final class MenuTidyModel: ObservableObject {
     private let defaults: UserDefaults
     private var state = VisibilityState()
     private var statusBar: StatusBarController?
-    private let positionStore = MenuBarPositionStore()
-    private let positionAccess = MenuBarPositionAccess()
-    private let nativeVisibilityStore = NativeMenuBarVisibilityStore()
-    private let nativeSystemVisibilityStore = NativeSystemMenuBarVisibilityStore()
-    fileprivate enum NativeVisibilityTarget: Hashable {
+    // The isolated UI preview must never load the user's recovery journals.
+    private lazy var positionStore = MenuBarPositionStore()
+    private lazy var positionAccess = MenuBarPositionAccess()
+    private lazy var nativeVisibilityStore = NativeMenuBarVisibilityStore()
+    private lazy var nativeSystemVisibilityStore = NativeSystemMenuBarVisibilityStore()
+    fileprivate enum NativeVisibilityTarget: Hashable, Sendable {
         case application(bundle: String)
         case system(key: String)
     }
@@ -128,12 +129,12 @@ final class MenuTidyModel: ObservableObject {
     private var nativeTrayChoices = NativeTrayChoices()
     private var nativeChoicesLoadIssue: String?
     var usesNativeVisibility: Bool {
-        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 && !demoMode
+        isUIPreview || (ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 && !demoMode)
     }
     var usesIndependentTray: Bool { usesNativeVisibility || usesPositionHiding }
     var needsLegacyPositionRecovery: Bool {
-        !positionStore.managedHiddenEntries.isEmpty || !positionStore.pendingTransactions.isEmpty ||
-            positionStore.recoveryJournalIssue != nil || positionStore.hiddenLedgerRecoveryIssue != nil
+        !isUIPreview && (!positionStore.managedHiddenEntries.isEmpty || !positionStore.pendingTransactions.isEmpty ||
+            positionStore.recoveryJournalIssue != nil || positionStore.hiddenLedgerRecoveryIssue != nil)
     }
     private var pendingPositionRecoveries: [MenuBarPositionStore.Transaction] = []
     private var positionLayoutRecoveryNeeded = false {
@@ -166,6 +167,7 @@ final class MenuTidyModel: ObservableObject {
     private var lastInteraction = ProcessInfo.processInfo.systemUptime
     private var workspaceObservers: [NSObjectProtocol] = []
     private let demoMode = CommandLine.arguments.contains("--demo-items")
+    let isUIPreview = CommandLine.arguments.contains("--preview-ui")
     private let access = MenuBarAccessibility()
     private var rules = ItemRuleBook()
     private var drafts = ItemRuleBook()
@@ -209,26 +211,100 @@ final class MenuTidyModel: ObservableObject {
     }
     var panelItems: [ManagedItemRow] {
         items.filter { item in
-            item.isAvailable && item.canMove &&
-                (trayPlacementIsInTray(id: item.id) || verifiedPositionGroups[item.id].map { $0 != .visible } == true)
+            item.isAvailable && item.canMove && TrayPlacementPolicy.includesInPanel(
+                group: trayPlacementGroup(id: item.id),
+                verifiedGroup: actualGroups[item.id] ?? verifiedPositionGroups[item.id],
+                includeAlwaysHidden: panelIncludesAlwaysHidden)
         }
     }
 
     func trayPlacementIsPending(id: String) -> Bool {
-        trayPlacementQueue.desired(id: id) != nil || (isApplying && trayReconnectIDs.contains(id))
+        if trayPlacementQueue.desiredGroup(id: id) != nil || (isApplying && trayReconnectIDs.contains(id)) { return true }
+        guard usesNativeVisibility, let bundle = items.first(where: { $0.id == id })?.bundleIdentifier,
+              nativeTrayChoices.group(bundle: bundle) != nil else { return false }
+        let queuedIDs = Set(trayPlacementQueue.pendingIDs + [trayPlacementQueue.active?.id].compactMap { $0 })
+        return items.contains { queuedIDs.contains($0.id) && $0.bundleIdentifier == bundle }
     }
 
-    func trayPlacementIsInTray(id: String) -> Bool {
-        if let desired = trayPlacementQueue.desired(id: id) { return desired }
-        return (items.first { $0.id == id }?.group ?? rules.rule(for: id)?.visibility ?? .visible) != .visible
+    func trayPlacementGroup(id: String) -> ItemVisibility {
+        // Native application choices own every current sibling, including one
+        // whose earlier immutable request is still finishing.
+        if usesNativeVisibility, let bundle = items.first(where: { $0.id == id })?.bundleIdentifier,
+           let group = nativeTrayChoices.group(bundle: bundle) { return group }
+        return trayPlacementQueue.desiredGroup(id: id) ??
+            items.first(where: { $0.id == id })?.group ?? rules.rule(for: id)?.visibility ?? .visible
     }
+
+    func trayPlacementIsInTray(id: String) -> Bool { trayPlacementGroup(id: id) != .visible }
+
+    func trayPlacementFailure(id: String) -> String? { trayPlacementErrors[id] ?? itemApplicationIssues[id] }
 
     func trayPlacementMessage(id: String) -> String? {
-        if let error = trayPlacementErrors[id] ?? itemApplicationIssues[id] { return error }
+        if let error = trayPlacementFailure(id: id) { return error }
         if items.first(where: { $0.id == id })?.isPending == true && !trayPlacementIsPending(id: id) {
             return "此图标尚未连接到当前托盘，点击重试即可重新确认。"
         }
         return nil
+    }
+
+    /// Changing a choice may supersede work in flight. Recovery and requested
+    /// cancellation must complete before accepting another operation.
+    var trayPlacementBlockedReason: String? {
+        if stopping || preparingToTerminate { return "正在退出，暂时无法更改分类。" }
+        if isRecoveringPositions || positionRecoveryMessage != nil || (usesNativeVisibility && needsLegacyPositionRecovery) {
+            return "请先完成图标恢复，再应用分类。"
+        }
+        if operationCancellationRequested { return "正在停止并恢复，请稍候。" }
+        if isArranging { return "请先结束手动整理。" }
+        if !accessibilityGranted { return "请先授权辅助功能，再更改图标分类。" }
+        if let environmentIssue { return environmentIssue }
+        if usesNativeVisibility, let nativeChoicesLoadIssue { return nativeChoicesLoadIssue }
+        return nil
+    }
+
+    var trayPlacementSelectionAllowed: Bool { trayPlacementBlockedReason == nil }
+    var trayPlacementBatchActionsAllowed: Bool {
+        trayPlacementSelectionAllowed && !panelInteractionBusy && trayPlacementTask == nil
+    }
+
+    private var trayPlacementCandidates: [TrayPlacementPolicy.Candidate] {
+        let counts = Dictionary(grouping: snapshots, by: \.id).mapValues(\.count)
+        return items.map { row in
+            TrayPlacementPolicy.Candidate(id: row.id, group: trayPlacementGroup(id: row.id),
+                isAvailable: row.isAvailable, canMove: row.canMove,
+                hasUniqueIdentity: isUIPreview || counts[row.id] == 1,
+                isPending: row.isPending, hasFailure: trayPlacementFailure(id: row.id) != nil,
+                needsIdentification: trayPlacementNeedsIdentification(id: row.id),
+                isQueued: trayPlacementIsPending(id: row.id))
+        }
+    }
+
+    var trayPendingApplicationCount: Int {
+        TrayPlacementPolicy.candidates(trayPlacementCandidates, for: .applyPending).count
+    }
+    var trayRetryCount: Int {
+        TrayPlacementPolicy.candidates(trayPlacementCandidates, for: .retryFailed).count
+    }
+    var trayPlacementOutstandingCount: Int { trayPlacementCandidates.filter(\.isOutstanding).count }
+
+    func applyPendingTrayPlacements() {
+        if isUIPreview { previewApplyPending(retryOnly: false); return }
+        enqueueTrayPlacements(action: .applyPending)
+    }
+
+    func retryFailedTrayPlacements() {
+        if isUIPreview { previewApplyPending(retryOnly: true); return }
+        enqueueTrayPlacements(action: .retryFailed)
+    }
+
+    private func enqueueTrayPlacements(action: TrayPlacementPolicy.Action) {
+        guard trayPlacementBatchActionsAllowed else { return }
+        let candidates = TrayPlacementPolicy.candidates(trayPlacementCandidates, for: action)
+        // The same request path preserves exact groups, persistence checks and
+        // FIFO serialization. A confirmed sibling is skipped when claimed.
+        for candidate in candidates {
+            requestTrayPlacement(id: candidate.id, group: candidate.group)
+        }
     }
 
     func openTraySettings() {
@@ -243,48 +319,58 @@ final class MenuTidyModel: ObservableObject {
     func trayPlacementNeedsIdentification(id: String) -> Bool { itemsNeedingPositionKeyResolution.contains(id) }
 
     func retryTrayPlacement(id: String) {
-        requestTrayPlacement(id: id, inTray: trayPlacementIsInTray(id: id), resolveAmbiguousKey: true)
+        requestTrayPlacement(id: id, group: trayPlacementGroup(id: id), resolveAmbiguousKey: true)
     }
 
     /// User intent is saved immediately; only the newest intent for a source
     /// enters the serial native mutation path. Displaying the tray never waits
     /// for this queue, and stale completion cannot consume a newer choice.
     func requestTrayPlacement(id: String, inTray: Bool, resolveAmbiguousKey: Bool = false) {
-        requestTrayPlacement(id: id, group: inTray ? .collapsible : .visible,
-            resolveAmbiguousKey: resolveAmbiguousKey)
+        let group: ItemVisibility = inTray
+            ? (trayPlacementGroup(id: id) == .alwaysHidden ? .alwaysHidden : .collapsible) : .visible
+        requestTrayPlacement(id: id, group: group, resolveAmbiguousKey: resolveAmbiguousKey)
     }
 
-    private func requestTrayPlacement(id: String, group: ItemVisibility, resolveAmbiguousKey: Bool = false) {
-        guard !stopping, !preparingToTerminate, !isRecoveringPositions, !isArranging,
+    func requestTrayPlacement(id: String, group: ItemVisibility, resolveAmbiguousKey: Bool = false) {
+        if isUIPreview { previewSetGroup(id: id, group: group); return }
+        guard trayPlacementSelectionAllowed,
               let row = items.first(where: { $0.id == id && $0.canMove && $0.isAvailable }),
               snapshots.filter({ $0.id == id }).count == 1 else { return }
-        if usesNativeVisibility, let issue = nativeChoicesLoadIssue {
-            trayPlacementErrors[id] = issue
-            return
-        }
-        if usesNativeVisibility, let bundle = row.bundleIdentifier,
-           nativeTrayChoices.set(bundle: bundle, group: group,
-                excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 })),
-           let encoded = try? JSONEncoder().encode(nativeTrayChoices) {
-            defaults.set(encoded, forKey: "nativeTrayChoices.v1")
-        }
+        var updatedChoices = nativeTrayChoices
+        let sharesApplicationSwitch = usesNativeVisibility && row.bundleIdentifier.map {
+            updatedChoices.set(bundle: $0, group: group,
+                excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
+        } == true
+        let counts = Dictionary(grouping: snapshots, by: \.id).mapValues(\.count)
+        let affected = sharesApplicationSwitch ? items.filter {
+            $0.isAvailable && $0.canMove && $0.bundleIdentifier == row.bundleIdentifier && counts[$0.id] == 1
+        } : [row]
         do {
-            try pendingDrafts.set(ItemRule(id: id, name: row.name, bundleIdentifier: row.bundleIdentifier,
-                visibility: group), sessionIdentity: draftSessionIdentity(for: id))
-            persistDrafts()
-            guard draftPersistenceIssue == nil else {
-                trayPlacementErrors[id] = draftPersistenceIssue
-                rebuildRows()
-                return
-            }
+            // Prepare sibling drafts atomically. An unbound old session record
+            // rejects the request without changing the application-wide choice.
+            let updatedDrafts = try TrayPlacementPolicy.replacingDrafts(in: pendingDrafts,
+                targets: affected.map {
+                    TrayPlacementPolicy.DraftTarget(rule: ItemRule(id: $0.id, name: $0.name,
+                        bundleIdentifier: $0.bundleIdentifier, visibility: group),
+                        identity: draftSessionIdentity(for: $0.id))
+                }, group: group)
+            try saveTrayIntent(drafts: updatedDrafts, nativeChoices: sharesApplicationSwitch ? updatedChoices : nil)
+        } catch PendingDraftStore.StoreError.targetHasDraft {
+            trayPlacementErrors[id] = "此应用有尚未关联的旧草稿，请先在离线草稿中明确关联或删除后重试。"
+            return
         } catch {
             trayPlacementErrors[id] = "当前图标身份无法确认，选择未执行。请重新检测后再试。"
             return
         }
-        trayPlacementErrors.removeValue(forKey: id)
-        itemApplicationIssues.removeValue(forKey: id)
-        if let identity = draftSessionIdentity(for: id) { trayConnectionAttempts[id] = identity }
-        trayPlacementQueue.enqueue(id: id, desiredInTray: group != .visible, resolveAmbiguousKey: resolveAmbiguousKey)
+        for sibling in affected {
+            trayPlacementErrors.removeValue(forKey: sibling.id)
+            itemApplicationIssues.removeValue(forKey: sibling.id)
+            if let identity = draftSessionIdentity(for: sibling.id) { trayConnectionAttempts[sibling.id] = identity }
+        }
+        // Keep this item's FIFO position while removing obsolete queued choices
+        // for other icons controlled by the same native application switch.
+        trayPlacementQueue.removePending(ids: Set(affected.map(\.id)).subtracting([id]))
+        trayPlacementQueue.enqueue(id: id, group: group, resolveAmbiguousKey: resolveAmbiguousKey)
         rebuildRows()
         drainTrayPlacements()
     }
@@ -295,10 +381,8 @@ final class MenuTidyModel: ObservableObject {
             guard let self else { return }
             defer { self.trayPlacementTask = nil }
             while !Task.isCancelled && !self.stopping && !self.preparingToTerminate {
-                if self.isRecoveringPositions || self.positionRecoveryMessage != nil {
-                    for id in self.trayPlacementQueue.pendingIDs {
-                        self.trayPlacementErrors[id] = "请先完成位置恢复，再重试此图标。"
-                    }
+                if let blocked = self.trayPlacementBlockedReason {
+                    for id in self.trayPlacementQueue.pendingIDs { self.trayPlacementErrors[id] = blocked }
                     self.trayPlacementQueue.cancelAllPending()
                     return
                 }
@@ -309,16 +393,52 @@ final class MenuTidyModel: ObservableObject {
                     continue
                 }
                 guard let request = self.trayPlacementQueue.claimNext() else { return }
-                self.applyItemRules(requestedItemIDs: [request.id], preservePanel: true,
-                    resolveAmbiguousKeyFor: request.resolveAmbiguousKey ? request.id : nil)
+                guard let row = self.items.first(where: { $0.id == request.id && $0.isAvailable && $0.canMove }),
+                      self.snapshots.filter({ $0.id == request.id }).count == 1 else {
+                    _ = self.trayPlacementQueue.finish(token: request.token)
+                    continue
+                }
+                if self.trayPlacementGroup(id: request.id) != request.group {
+                    _ = self.trayPlacementQueue.finish(token: request.token)
+                    continue
+                }
+                var requestedIDs: Set<String> = [request.id]
+                if self.usesNativeVisibility, let bundle = row.bundleIdentifier,
+                   self.nativeTrayChoices.group(bundle: bundle) != nil {
+                    let counts = Dictionary(grouping: self.snapshots, by: \.id).mapValues(\.count)
+                    requestedIDs.formUnion(self.items.filter {
+                        $0.isAvailable && $0.canMove && $0.bundleIdentifier == bundle && counts[$0.id] == 1
+                    }.map(\.id))
+                }
+                // Skip native work only when the entire shared choice is
+                // confirmed. A confirmed source cannot stand in for a sibling
+                // that has yet to supply its own positive visibility evidence.
+                if requestedIDs.allSatisfy({ self.rules.rule(for: $0)?.visibility == request.group &&
+                    self.actualGroups[$0] == request.group }) {
+                    for confirmedRow in self.items where requestedIDs.contains(confirmedRow.id) {
+                        self.pendingDrafts.removeVerified(ItemRule(id: confirmedRow.id, name: confirmedRow.name,
+                            bundleIdentifier: confirmedRow.bundleIdentifier, visibility: request.group),
+                            sessionIdentity: self.draftSessionIdentity(for: confirmedRow.id))
+                        self.trayPlacementErrors.removeValue(forKey: confirmedRow.id)
+                        self.itemApplicationIssues.removeValue(forKey: confirmedRow.id)
+                    }
+                    self.persistDrafts()
+                    _ = self.trayPlacementQueue.finish(token: request.token)
+                    self.rebuildRows()
+                    continue
+                }
+                // A shared hidden switch confirms its siblings in one native
+                // operation. An unmanaged visible application instead needs a
+                // separate positive observation of each sibling in this batch.
+                self.applyItemRules(requestedItemIDs: requestedIDs, preservePanel: true,
+                    resolveAmbiguousKeyFor: request.resolveAmbiguousKey ? request.id : nil,
+                    requestedGroups: Dictionary(uniqueKeysWithValues: requestedIDs.map { ($0, request.group) }))
                 if self.isApplying { await self.workTask?.value }
-                let desiredGroup: ItemVisibility = self.usesNativeVisibility
-                    ? (self.items.first(where: { $0.id == request.id })?.group ?? (request.desiredInTray ? .collapsible : .visible))
-                    : (request.desiredInTray ? .collapsible : .visible)
-                let confirmed = self.rules.rule(for: request.id)?.visibility == desiredGroup &&
-                    self.actualGroups[request.id] == desiredGroup
+                let confirmed = self.rules.rule(for: request.id)?.visibility == request.group &&
+                    self.actualGroups[request.id] == request.group
                 _ = self.trayPlacementQueue.finish(token: request.token)
-                if self.trayPlacementQueue.desired(id: request.id) == nil {
+                if self.trayPlacementQueue.desiredGroup(id: request.id) == nil &&
+                    self.trayPlacementGroup(id: request.id) == request.group {
                     if confirmed {
                         self.trayPlacementErrors.removeValue(forKey: request.id)
                         self.trayItemErrors.removeValue(forKey: request.id)
@@ -401,13 +521,19 @@ final class MenuTidyModel: ObservableObject {
     }
 
     init() {
-        defaults = CommandLine.arguments.contains("--demo-items") ? UserDefaults(suiteName: "dev.hdh.MenuTidy.demo")! : .standard
+        defaults = CommandLine.arguments.contains("--preview-ui")
+            ? UserDefaults(suiteName: "dev.hdh.MenuTidy.preview.\(UUID().uuidString)")!
+            : (CommandLine.arguments.contains("--demo-items") ? UserDefaults(suiteName: "dev.hdh.MenuTidy.demo")! : .standard)
         defaults.register(defaults: ["autoCollapse": false, "autoCollapseDelay": 15.0, "startCollapsed": false, "shortcutEnabled": true])
         autoCollapseEnabled = defaults.bool(forKey: "autoCollapse")
         autoCollapseDelay = AutoCollapsePolicy(delay: defaults.double(forKey: "autoCollapseDelay")).delay
         startCollapsed = defaults.bool(forKey: "startCollapsed")
         shortcutEnabled = defaults.bool(forKey: "shortcutEnabled")
         hasCompletedSetup = defaults.bool(forKey: "hasCompletedSetup")
+        if isUIPreview {
+            configureUIPreview()
+            return
+        }
         usesNativeAlwaysSection = defaults.bool(forKey: "usesNativeAlwaysSection")
         if let data = defaults.data(forKey: "itemRules.v1") {
             do { rules = try JSONDecoder().decode(ItemRuleBook.self, from: data) }
@@ -453,6 +579,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func start() {
+        guard !isUIPreview else { return }
         controlRouter.start(model: self)
         statusBar = StatusBarController(model: self, demoMode: demoMode)
         shortcut.onPress = { [weak self] in self?.toggleVisibility() }
@@ -524,6 +651,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func requestAccessibility() {
+        if isUIPreview { accessibilityGranted = true; permissionCheckMessage = "预览：已模拟辅助功能授权。"; return }
         // This asks macOS to guide the user; it never edits the privacy database.
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
@@ -533,15 +661,18 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func openAccessibilitySettings() {
+        if isUIPreview { managementMessage = "预览不会打开或修改系统设置。"; return }
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
         NSWorkspace.shared.open(url)
     }
 
     func revealApplication() {
+        if isUIPreview { return }
         NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
     }
 
     func recheckPermissions() {
+        if isUIPreview { permissionCheckMessage = "预览：当前权限来自模拟数据。"; return }
         refreshPermissions()
         recheckMenuBarPositionAccess()
         permissionCheckMessage = accessibilityGranted
@@ -550,6 +681,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func recheckMenuBarPositionAccess() {
+        if isUIPreview { return }
         do {
             _ = try positionStore.readPositions()
             menuBarPositionAccessAvailable = true
@@ -561,6 +693,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func requestMenuBarPositionAccess() {
+        if isUIPreview { menuBarPositionAccessAvailable = true; return }
         guard !isApplying, !isRefreshing, !isActivatingPanelItem, !isRecoveringPositions else { return }
         Task {
             do {
@@ -574,6 +707,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func retryPositionRecovery() {
+        if isUIPreview { positionRecoveryMessage = nil; return }
         guard !isApplying, !isRefreshing, !isActivatingPanelItem, !isRecoveringPositions else { return }
         if usesNativeVisibility && !needsLegacyPositionRecovery {
             trayConnectionAttempts.removeAll()
@@ -621,6 +755,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func keepCurrentPositionLayout() {
+        if isUIPreview { positionRecoveryMessage = nil; return }
         guard !isApplying, !isRefreshing, !isActivatingPanelItem, !isRecoveringPositions else { return }
         if usesNativeVisibility && !needsLegacyPositionRecovery {
             _ = reloadAllNativeRecoveryJournalsIfNeeded()
@@ -670,6 +805,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func refreshPermissions() {
+        guard !isUIPreview else { return }
         lastPermissionCheck = ProcessInfo.processInfo.systemUptime
         let wasGranted = accessibilityGranted
         accessibilityGranted = AXIsProcessTrusted()
@@ -751,6 +887,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func requestScreenCapture() {
+        if isUIPreview { screenCaptureGranted = true; return }
         _ = CGRequestScreenCaptureAccess()
         screenCaptureGranted = CGPreflightScreenCaptureAccess()
         if !screenCaptureGranted {
@@ -760,11 +897,13 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func openScreenCaptureSettings() {
+        if isUIPreview { managementMessage = "预览不会打开或修改系统设置。"; return }
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else { return }
         NSWorkspace.shared.open(url)
     }
 
     func refreshMenuItems(collapseWhenFinished: Bool = false, prepareOverflow: Bool = false) {
+        if isUIPreview { managementMessage = "预览：图标列表已更新，当前选择已保留。"; return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         guard accessibilityGranted else { managementError = "先在权限页开启辅助功能权限，再读取菜单栏图标。"; return }
         if prepareOverflow { closeIconPanel() }
@@ -1059,7 +1198,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func setGroup(id: String, group: ItemVisibility) {
-        if usesNativeVisibility {
+        if usesIndependentTray {
             requestTrayPlacement(id: id, group: group)
             return
         }
@@ -1088,6 +1227,7 @@ final class MenuTidyModel: ObservableObject {
     func pendingDraftID(for itemID: String) -> UUID? { rowDraftIDs[itemID] }
 
     func discardDraft(id: UUID) {
+        if isUIPreview { offlineDrafts.removeAll { $0.id == id }; return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         cancelPassiveIconCapture()
         if let itemID = rowDraftIDs.first(where: { $0.value == id })?.key {
@@ -1100,40 +1240,129 @@ final class MenuTidyModel: ObservableObject {
 
     @discardableResult
     func reassociateDraft(id: UUID, to itemID: String) -> Bool {
-        guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging,
+        if isUIPreview { return false }
+        guard !stopping, !preparingToTerminate, !isRecoveringPositions, !isActivatingPanelItem,
+              !isApplying, !isRefreshing, !isArranging, trayPlacementTask == nil,
+              (!usesNativeVisibility || nativeChoicesLoadIssue == nil),
               offlineDrafts.contains(where: { $0.id == id }),
               let row = items.first(where: { $0.id == itemID && $0.isAvailable && $0.canMove }),
               snapshots.filter({ $0.id == itemID }).count == 1 else { return false }
         cancelPassiveIconCapture()
         do {
-            try pendingDrafts.reassociate(id: id, to: ItemRule(id: row.id, name: row.name,
+            let counts = Dictionary(grouping: snapshots, by: \.id).mapValues(\.count)
+            let currentTargets = items.filter { $0.isAvailable && $0.canMove && counts[$0.id] == 1 }.map {
+                TrayPlacementPolicy.DraftTarget(rule: ItemRule(id: $0.id, name: $0.name,
+                    bundleIdentifier: $0.bundleIdentifier, visibility: $0.group),
+                    identity: draftSessionIdentity(for: $0.id))
+            }
+            let target = TrayPlacementPolicy.DraftTarget(rule: ItemRule(id: row.id, name: row.name,
                 bundleIdentifier: row.bundleIdentifier, visibility: row.group),
-                sessionIdentity: draftSessionIdentity(for: row.id))
-            persistDrafts()
+                identity: draftSessionIdentity(for: row.id))
+            let prepared = try TrayPlacementPolicy.reassociatingDraft(in: pendingDrafts, id: id,
+                to: target, currentTargets: currentTargets,
+                nativeChoices: usesNativeVisibility ? nativeTrayChoices : nil,
+                excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
+            try saveTrayIntent(drafts: prepared.drafts, nativeChoices: prepared.nativeChoices)
+            for affectedID in prepared.affectedIDs {
+                itemApplicationIssues.removeValue(forKey: affectedID)
+                trayPlacementErrors.removeValue(forKey: affectedID)
+                // Association promises to save only. A routine refresh of this
+                // process must not turn it into an automatic native mutation.
+                if let identity = draftSessionIdentity(for: affectedID) { trayConnectionAttempts[affectedID] = identity }
+            }
             managementError = nil
+            managementMessage = "草稿已关联，原分类选择已保留。点击应用后生效。"
             rebuildRows()
             return true
         } catch PendingDraftStore.StoreError.targetHasDraft {
-            managementError = "此图标已有待应用草稿，未覆盖任何选择。请先撤销该图标的草稿，或选择其他图标。"
+            managementError = "此应用还有其他待关联草稿，未覆盖任何选择。请先处理对应草稿，或选择其他图标。"
         } catch {
-            managementError = "图标身份已变化，未关联草稿。请刷新列表后重新选择。"
+            managementError = "图标身份已变化或草稿暂时无法保存，未关联草稿。请刷新列表后重新选择。"
         }
         return false
     }
 
+    /// Pre-encode every changed intent store before assigning either in memory
+    /// or UserDefaults. Encoding failure leaves both previous choices intact.
+    private func saveTrayIntent(drafts updatedDrafts: PendingDraftStore,
+                                nativeChoices updatedChoices: NativeTrayChoices?) throws {
+        let encodedDrafts = try JSONEncoder().encode(updatedDrafts)
+        let encodedChoices = try updatedChoices.map { try JSONEncoder().encode($0) }
+        pendingDrafts = updatedDrafts
+        defaults.set(encodedDrafts, forKey: "itemDrafts.v1")
+        if let updatedChoices, let encodedChoices {
+            nativeTrayChoices = updatedChoices
+            defaults.set(encodedChoices, forKey: "nativeTrayChoices.v1")
+        }
+        draftPersistenceIssue = nil
+    }
+
+    func forgetItemAffectsApplication(id: String) -> Bool {
+        guard usesNativeVisibility,
+              let row = items.first(where: { $0.id == id }), let bundle = row.bundleIdentifier,
+              rules.rule(for: id)?.bundleIdentifier == bundle || isUIPreview else { return false }
+        return NativeTrayChoices.canForget(bundle: bundle, liveBundles: [],
+            excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
+    }
+
+    func canForgetItem(id: String) -> Bool {
+        guard !stopping, !preparingToTerminate, !isRecoveringPositions, !isActivatingPanelItem,
+              !isApplying, !isRefreshing, !isArranging, trayPlacementTask == nil,
+              let row = items.first(where: { $0.id == id && !$0.isAvailable }),
+              !items.contains(where: { $0.id == id && $0.isAvailable }) else { return false }
+        guard forgetItemAffectsApplication(id: id) else { return true }
+        guard nativeChoicesLoadIssue == nil, let bundle = row.bundleIdentifier else { return false }
+        return NativeTrayChoices.canForget(bundle: bundle,
+            liveBundles: Set(items.filter(\.isAvailable).compactMap(\.bundleIdentifier)),
+            excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
+    }
+
     func forgetItem(id: String) {
-        guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging, !items.contains(where: { $0.id == id && $0.isAvailable }) else { return }
+        guard canForgetItem(id: id) else { return }
+        if isUIPreview { items.removeAll { $0.id == id }; return }
         cancelPassiveIconCapture()
-        rules.remove(id: id)
-        drafts.remove(id: id)
-        lastKnownObservedGroups.remove(id: id)
-        persistRules()
+        if forgetItemAffectsApplication(id: id), let bundle = rules.rule(for: id)?.bundleIdentifier {
+            let liveBundles = Set(items.filter(\.isAvailable).compactMap(\.bundleIdentifier))
+            var updatedChoices = nativeTrayChoices
+            updatedChoices.remove(bundle: bundle, liveBundles: liveBundles,
+                excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
+            var updatedDrafts = pendingDrafts
+            updatedDrafts.removeAll(bundleIdentifier: bundle)
+            var updatedRules = rules
+            let forgottenIDs = Set(rules.rules.values.filter { $0.bundleIdentifier == bundle }.map(\.id))
+            for forgottenID in forgottenIDs { updatedRules.remove(id: forgottenID) }
+            do {
+                let persistentRules = ItemRuleBook(rules: updatedRules.rules.filter { !$0.key.hasPrefix("session:") })
+                let encodedRules = try JSONEncoder().encode(persistentRules)
+                try saveTrayIntent(drafts: updatedDrafts, nativeChoices: updatedChoices)
+                rules = updatedRules
+                defaults.set(encodedRules, forKey: "itemRules.v1")
+                for forgottenID in forgottenIDs {
+                    drafts.remove(id: forgottenID)
+                    lastKnownObservedGroups.remove(id: forgottenID)
+                    trayPlacementErrors.removeValue(forKey: forgottenID)
+                    itemApplicationIssues.removeValue(forKey: forgottenID)
+                    trayConnectionAttempts.removeValue(forKey: forgottenID)
+                }
+                managementMessage = "已忘记此应用的离线分类与草稿。下次出现时将重新选择；必要的恢复记录仍保留。"
+            } catch {
+                managementError = "暂时无法保存忘记操作，原有规则和草稿均已保留。"
+                return
+            }
+        } else {
+            rules.remove(id: id)
+            drafts.remove(id: id)
+            lastKnownObservedGroups.remove(id: id)
+            persistRules()
+        }
         rebuildRows()
         applyState()
     }
 
     func applyItemRules(onlySavedRules: Bool = false, requestedItemIDs: Set<String>? = nil,
-                        preservePanel: Bool = false, resolveAmbiguousKeyFor resolutionID: String? = nil) {
+                        preservePanel: Bool = false, resolveAmbiguousKeyFor resolutionID: String? = nil,
+                        requestedGroups: [String: ItemVisibility]? = nil) {
+        if isUIPreview { previewApplyPending(retryOnly: false); return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         if !preservePanel { closeIconPanel() }
         panelTask?.cancel()
@@ -1149,7 +1378,8 @@ final class MenuTidyModel: ObservableObject {
         guard !requestedIDs.isEmpty else { return }
         let fixedRules = requestedItemIDs.map { _ in
             items.filter { requestedIDSet.contains($0.id) }.map {
-                ItemRule(id: $0.id, name: $0.name, bundleIdentifier: $0.bundleIdentifier, visibility: $0.group)
+                ItemRule(id: $0.id, name: $0.name, bundleIdentifier: $0.bundleIdentifier,
+                    visibility: requestedGroups?[$0.id] ?? $0.group)
             }
         }
         for id in requestedIDs { itemApplicationIssues.removeValue(forKey: id) }
@@ -2830,11 +3060,13 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func revealAllTemporarily() {
+        if isUIPreview { temporarilyRevealingAll = true; return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         showIconPanel(includeAlwaysHidden: true)
     }
 
     func endTemporaryReveal() {
+        if isUIPreview { temporarilyRevealingAll = false; return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging, temporarilyRevealingAll else { return }
         let shouldCollapse = beforeTemporaryRevealCollapsed == true
         temporarilyRevealingAll = false
@@ -2846,6 +3078,7 @@ final class MenuTidyModel: ObservableObject {
     /// This operates only our own separators. A pending automatic move or a
     /// missing screenshot must not make the existing native group unusable.
     func collapseNativeGroups() {
+        if isUIPreview { isPanelPresented = false; return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         closeIconPanel()
         temporarilyRevealingAll = false
@@ -2859,6 +3092,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func toggleVisibility() {
+        if isUIPreview { isPanelPresented.toggle(); return }
         if isArranging { finishArrangement(); return }
         if isPanelPresented { closeIconPanel(); return }
         if temporarilyRevealingAll {
@@ -2878,6 +3112,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func showIconPanelFromControl() {
+        if isUIPreview { isPanelPresented = true; return }
         guard !isArranging, !preparingToTerminate else { return }
         showIconPanel(includeAlwaysHidden: false)
     }
@@ -3109,6 +3344,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func closeIconPanel() {
+        if isUIPreview { isPanelPresented = false; return }
         panelTask?.cancel()
         panelTask = nil
         isPanelPresented = false
@@ -3128,6 +3364,7 @@ final class MenuTidyModel: ObservableObject {
     /// Use one native AX action. A managed item is temporarily placed beside
     /// our control, then returned to its hidden weight after its presentation closes.
     func activatePanelItem(id: String) {
+        if isUIPreview { return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging,
               !preparingToTerminate, isPanelPresented,
               panelItems.contains(where: { $0.id == id }) else { return }
@@ -3355,6 +3592,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func beginArrangement() {
+        if isUIPreview { managementMessage = "预览不会移动真实菜单栏图标。"; return }
         guard !usesNativeVisibility else { openTraySettings(); return }
         guard !preparingToTerminate, !stopping, !isRecoveringPositions, !isActivatingPanelItem,
               !isApplying, !isRefreshing, !isArranging else { return }
@@ -3497,6 +3735,7 @@ final class MenuTidyModel: ObservableObject {
     /// Native dragging belongs to macOS. We only read the settled positions;
     /// never run synthetic moves or acquire the automated overflow pointer lease.
     func finishArrangement() {
+        if isUIPreview { return }
         guard !preparingToTerminate, !stopping, !isRecoveringPositions,
               isArranging, !isApplying, !isRefreshing else { return }
         refreshPermissions()
@@ -3612,6 +3851,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func leaveArrangementExpanded() {
+        if isUIPreview { return }
         guard !preparingToTerminate, !stopping, !isRecoveringPositions, isArranging else { return }
         arrangementSequence += 1
         workTask?.cancel()
@@ -3625,6 +3865,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func recoverVisibility() {
+        if isUIPreview { return }
         if usesNativeVisibility {
             guard !preparingToTerminate, !stopping else { return }
             statusBar?.restoreControlVisibility()
@@ -3743,6 +3984,7 @@ final class MenuTidyModel: ObservableObject {
         }
     }
     private func configureShortcut() {
+        guard !isUIPreview else { return }
         shortcutIssue = nil
         if shortcutEnabled { shortcutIssue = shortcut.register() } else { shortcut.unregister() }
     }
@@ -3752,11 +3994,13 @@ final class MenuTidyModel: ObservableObject {
         environmentIssue = active.isEmpty ? nil : "检测到 \(active.joined(separator: "、")) 正在运行。应用分类前请先退出其他整理器，避免重复控制图标。"
     }
     func refreshLoginStatus() {
+        guard !isUIPreview else { return }
         launchAtLoginEnabled = SMAppService.mainApp.status == .enabled
         if loginIssue == "请在系统设置的登录项中允许 Menu Tidy。" { loginIssue = nil }
         if SMAppService.mainApp.status == .requiresApproval { loginIssue = "请在系统设置的登录项中允许 Menu Tidy。" }
     }
     func setLaunchAtLogin(_ enabled: Bool) {
+        if isUIPreview { launchAtLoginEnabled = enabled; return }
         loginIssue = nil
         if demoMode { loginIssue = "演示模式不修改登录项。"; return }
         do {
@@ -3764,18 +4008,19 @@ final class MenuTidyModel: ObservableObject {
         } catch { loginIssue = "登录项设置未生效：\(error.localizedDescription)" }
         refreshLoginStatus()
     }
-    func showSystemLoginSettings() { SMAppService.openSystemSettingsLoginItems() }
+    func showSystemLoginSettings() { if !isUIPreview { SMAppService.openSystemSettingsLoginItems() } }
     var requiresTerminationCleanup: Bool {
-        preparingToTerminate || isApplying || isRefreshing || isRecoveringPositions || trayPlacementTask != nil ||
+        !isUIPreview && (preparingToTerminate || isApplying || isRefreshing || isRecoveringPositions || trayPlacementTask != nil ||
             panelActivationTask != nil || passiveIconCaptureTask != nil ||
             !positionStore.managedHiddenEntries.isEmpty || !positionStore.pendingTransactions.isEmpty ||
             positionLayoutRecoveryNeeded || !nativeVisibilityStore.managedBundles.isEmpty ||
-            !nativeSystemVisibilityStore.managedKeys.isEmpty || nativeRecoveryIssue != nil
+            !nativeSystemVisibilityStore.managedKeys.isEmpty || nativeRecoveryIssue != nil)
     }
 
     func quit() { NSApp.terminate(nil) }
 
     func prepareForTermination() async -> Bool {
+        if isUIPreview { return true }
         preparingToTerminate = true
         // Hold the shared operation gate across every suspension in cleanup.
         // An older task's defer may clear its own busy flag, but its recovery
@@ -3830,6 +4075,7 @@ final class MenuTidyModel: ObservableObject {
         return true
     }
     func stop() {
+        guard !isUIPreview else { return }
         closeIconPanel()
         controlRouter.stop()
         stopping = true
@@ -4087,7 +4333,7 @@ private extension MenuTidyModel {
         }
         guard let targets = ManualArrangementRules.applicationRules(requestedIDs: requestedIDs,
             displayed: displayed, confirmed: confirmedRules) else { throw MenuBarAccessError.disappeared }
-        var processed: Set<NativeVisibilityTarget> = []
+        var attempted = NativeVisibilityAttemptLedger<NativeVisibilityTarget>()
         for rule in targets {
             try checkOperationDeadline()
             let targetStarted = ProcessInfo.processInfo.systemUptime
@@ -4115,17 +4361,20 @@ private extension MenuTidyModel {
                 guard let target = discoveredTarget else {
                     throw MenuTidyManagementError.positionApplication("此系统图标尚无经过验证的独立隐藏方式，当前保留在菜单栏。")
                 }
-                if processed.contains(target) { continue }
                 // A newer click already superseded this queued rule; its own
                 // queued request owns the next mutation and draft consumption.
                 guard latestNativeGroup(id: rule.id, target: target) == rule.visibility else { continue }
+                // Failure owns this attempt too. Another sibling must not
+                // silently repeat a rejected hide/restore within the same batch.
+                guard attempted.claim(target) else { continue }
                 let affected: [MenuBarItemSnapshot]
                 switch target {
                 case .application(let bundle):
+                    affected = snapshots.filter { $0.canMove && $0.ownIdentifier == nil && $0.bundleIdentifier == bundle }
+                    affectedIDs = Set(affected.map(\.id))
                     guard nativeVisibilityAccessAvailable else {
                         throw MenuTidyManagementError.positionApplication("请先授权菜单栏显示设置文件，之后即可收进托盘。当前选择已保存。")
                     }
-                    affected = snapshots.filter { $0.canMove && $0.ownIdentifier == nil && $0.bundleIdentifier == bundle }
                     let siblings = items.filter { $0.isAvailable && $0.canMove && $0.bundleIdentifier == bundle }
                     guard siblings.allSatisfy({ ($0.group == .visible) == (rule.visibility == .visible) }) else {
                         throw MenuTidyManagementError.positionApplication("同一应用的多个图标共用显示开关，请统一选择常驻或托盘。")
@@ -4173,7 +4422,6 @@ private extension MenuTidyModel {
                         visibility: rule.visibility), identity: observed, target: target)
                 }
                 cleanupTarget = nil
-                processed.insert(target)
                 let targetElapsed = ProcessInfo.processInfo.systemUptime - targetStarted
                 Self.diagnosticLogger.notice("nativeVisibility classificationConfirmed=true hidden=\(rule.visibility != .visible) itemCount=\(identities.count) elapsedSeconds=\(targetElapsed)")
             } catch {
@@ -4209,7 +4457,11 @@ private extension MenuTidyModel {
         persistRules()
         pendingDrafts.removeVerified(rule, sessionIdentity: identity)
         persistDrafts()
-        itemApplicationIssues.removeValue(forKey: rule.id)
+        if trayPlacementGroup(id: rule.id) == rule.visibility {
+            itemApplicationIssues.removeValue(forKey: rule.id)
+            trayPlacementErrors.removeValue(forKey: rule.id)
+            trayItemErrors.removeValue(forKey: rule.id)
+        }
     }
 
     func waitForNativeVisibility(id: String, target: NativeVisibilityTarget,
@@ -4288,6 +4540,7 @@ private extension MenuTidyModel {
 
 extension MenuTidyModel {
     func requestNativeSystemVisibilityAccess() {
+        if isUIPreview { nativeSystemVisibilityAccessNeeded = false; return }
         guard !panelInteractionBusy, !preparingToTerminate, !stopping else { return }
         Task {
             do {
@@ -4305,6 +4558,7 @@ extension MenuTidyModel {
     }
 
     func recheckNativeVisibilityAccess() {
+        if isUIPreview { return }
         guard usesNativeVisibility else { return }
         nativeVisibilityAccessAvailable = nativeVisibilityStore.accessAvailable
         if nativeSystemVisibilityStore.managedKeys.contains("AirDrop"),
@@ -4318,6 +4572,7 @@ extension MenuTidyModel {
     }
 
     func requestNativeVisibilityAccess() {
+        if isUIPreview { nativeVisibilityAccessAvailable = true; return }
         guard !isApplying, !isRefreshing, !isActivatingPanelItem, !isRecoveringPositions else { return }
         Task {
             do {
@@ -4330,5 +4585,86 @@ extension MenuTidyModel {
                 }
             } catch { nativeVisibilityAccessMessage = error.localizedDescription }
         }
+    }
+}
+
+// This fixture uses the real SettingsView and the same published row state,
+// while every system-facing entry point above returns before its live backend.
+@MainActor
+private extension MenuTidyModel {
+    func configureUIPreview() {
+        let needsPermissions = CommandLine.arguments.contains("--preview-permissions")
+        accessibilityGranted = !needsPermissions
+        nativeVisibilityAccessAvailable = !needsPermissions
+        menuBarPositionAccessAvailable = !needsPermissions
+        screenCaptureGranted = false
+        hasCompletedSetup = true
+        shortcutEnabled = false
+        items = [
+            previewRow("chat", "Chat", "会话与通知", "bubble.left.and.bubble.right.fill", .visible),
+            previewRow("cloud", "Cloud Drive", "文件同步", "icloud.fill", .collapsible),
+            previewRow("timer", "Focus Timer", "专注计时", "timer", .alwaysHidden),
+            previewRow("vpn", "Work VPN", "安全连接", "network", .collapsible, pending: true),
+            previewRow("sync", "Sync Helper", "同步服务", "arrow.triangle.2.circlepath", .alwaysHidden, pending: true),
+            previewRow("bluetooth", "蓝牙", "系统图标", "wave.3.right", .visible, canMove: false),
+            previewRow("legacy", "Legacy Helper", "保留的应用规则", "archivebox.fill", .collapsible, available: false)
+        ]
+        itemApplicationIssues["item:preview.sync"] = "应用暂未响应，当前显示状态尚未确认。选择已保留，可以重试。"
+        for row in items where !row.isPending {
+            let rule = ItemRule(id: row.id, name: row.name, bundleIdentifier: row.bundleIdentifier, visibility: row.group)
+            rules.set(rule)
+            actualGroups[row.id] = row.group
+        }
+        rowDraftIDs["item:preview.vpn"] = UUID()
+        let offline = try? PendingDraftStore(unassociatedRules: [
+            ItemRule(id: "item:preview.offline", name: "Archive Sync", bundleIdentifier: "preview.offline", visibility: .collapsible)
+        ])
+        offlineDrafts = offline?.records ?? []
+        previewUpdateCounts()
+    }
+
+    func previewRow(_ key: String, _ name: String, _ owner: String, _ symbol: String,
+                    _ group: ItemVisibility, pending: Bool = false, canMove: Bool = true,
+                    available: Bool = true) -> ManagedItemRow {
+        ManagedItemRow(id: "item:preview.\(key)", name: name, ownerName: owner,
+            bundleIdentifier: "preview.\(key)", icon: NSImage(systemSymbolName: symbol, accessibilityDescription: name),
+            group: group, isAvailable: available, canMove: canMove,
+            detail: canMove ? "" : "由 macOS 管理，请在系统设置中调整。", isPending: pending)
+    }
+
+    func previewUpdateCounts() {
+        actionablePendingCount = items.filter { $0.isPending && $0.isAvailable && $0.canMove }.count
+        hasPendingChanges = actionablePendingCount > 0 || !offlineDrafts.isEmpty
+    }
+
+    func previewReplacing(_ row: ManagedItemRow, group: ItemVisibility, pending: Bool) -> ManagedItemRow {
+        ManagedItemRow(id: row.id, name: row.name, ownerName: row.ownerName, bundleIdentifier: row.bundleIdentifier,
+            icon: row.icon, group: group, isAvailable: row.isAvailable, canMove: row.canMove,
+            detail: row.detail, isPending: pending)
+    }
+}
+
+@MainActor
+extension MenuTidyModel {
+    func previewSetGroup(id: String, group: ItemVisibility) {
+        guard isUIPreview, accessibilityGranted, nativeVisibilityAccessAvailable,
+              let index = items.firstIndex(where: { $0.id == id && $0.canMove && $0.isAvailable }) else { return }
+        let row = items[index]
+        items[index] = previewReplacing(row, group: group, pending: false)
+        rules.set(ItemRule(id: id, name: row.name, bundleIdentifier: row.bundleIdentifier, visibility: group))
+        actualGroups[id] = group
+        itemApplicationIssues.removeValue(forKey: id)
+        trayPlacementErrors.removeValue(forKey: id)
+        rowDraftIDs.removeValue(forKey: id)
+        previewUpdateCounts()
+        managementMessage = "预览：已模拟确认「\(row.name)」的显示选择。"
+    }
+
+    func previewApplyPending(retryOnly: Bool) {
+        guard isUIPreview, accessibilityGranted, nativeVisibilityAccessAvailable else { return }
+        let targets = items.filter { $0.isPending && $0.canMove && $0.isAvailable &&
+            (!retryOnly || itemApplicationIssues[$0.id] != nil || trayPlacementErrors[$0.id] != nil) }
+        for row in targets { previewSetGroup(id: row.id, group: row.group) }
+        managementMessage = "预览：已模拟确认 \(targets.count) 项；离线选择继续保留。"
     }
 }

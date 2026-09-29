@@ -22,6 +22,20 @@ public struct NativeTrayChoices: Codable, Equatable, Sendable {
 
     public func group(bundle: String) -> ItemVisibility? { choices[bundle] }
 
+    /// Forgetting is application-wide, so any current sibling blocks it. Use
+    /// only the exact stored bundle; never infer a parent or normalize case.
+    public static func canForget(bundle: String, liveBundles: Set<String>,
+                                 excluding: Set<String> = []) -> Bool {
+        accepts(bundle: bundle, excluding: excluding) && !liveBundles.contains(bundle)
+    }
+
+    @discardableResult
+    public mutating func remove(bundle: String, liveBundles: Set<String>,
+                                excluding: Set<String> = []) -> Bool {
+        guard Self.canForget(bundle: bundle, liveBundles: liveBundles, excluding: excluding) else { return false }
+        return choices.removeValue(forKey: bundle) != nil
+    }
+
     /// Explicit visible choices are retained so a later legacy migration cannot
     /// revive an old hidden choice. Identifiers are never trimmed or rewritten.
     @discardableResult

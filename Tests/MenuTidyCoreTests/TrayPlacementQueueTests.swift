@@ -3,6 +3,58 @@ import XCTest
 @testable import MenuTidyCore
 
 final class TrayPlacementQueueTests: XCTestCase {
+    func testAllThreeGroupsSurviveQueueAndExplicitRetry() throws {
+        for group in ItemVisibility.allCases {
+            var queue = TrayPlacementQueue()
+            queue.enqueue(id: "a", group: group)
+            let first = try XCTUnwrap(queue.claimNext())
+            XCTAssertEqual(first.group, group)
+            queue.finish(token: first.token)
+            queue.enqueue(id: "a", group: first.group, resolveAmbiguousKey: true)
+            let retry = try XCTUnwrap(queue.claimNext())
+            XCTAssertEqual(retry.group, group)
+            XCTAssertTrue(retry.resolveAmbiguousKey)
+            queue.finish(token: retry.token)
+            XCTAssertNil(queue.claimNext())
+        }
+    }
+
+    func testAlwaysHiddenAndCollapsibleAreDistinctLatestChoices() throws {
+        var queue = TrayPlacementQueue()
+        queue.enqueue(id: "a", group: .alwaysHidden)
+        let first = try XCTUnwrap(queue.claimNext())
+        queue.enqueue(id: "a", group: .collapsible)
+        XCTAssertEqual(first.group, .alwaysHidden)
+        XCTAssertEqual(queue.desiredGroup(id: "a"), .collapsible)
+        queue.enqueue(id: "a", group: .alwaysHidden)
+        XCTAssertEqual(queue.desiredGroup(id: "a"), .alwaysHidden)
+        queue.finish(token: first.token)
+        XCTAssertEqual(queue.claimNext()?.group, .alwaysHidden)
+    }
+
+    func testNewSiblingChoiceSupersedesWaitingWorkButPreservesActiveCleanup() throws {
+        var queue = TrayPlacementQueue()
+        queue.enqueue(id: "a", group: .alwaysHidden)
+        let active = try XCTUnwrap(queue.claimNext())
+        queue.enqueue(id: "a", group: .collapsible)
+        queue.enqueue(id: "other-app", group: .alwaysHidden)
+        queue.removePending(ids: ["a", "b"])
+        queue.enqueue(id: "b", group: .visible)
+
+        XCTAssertEqual(queue.active, active)
+        XCTAssertEqual(queue.pendingIDs, ["other-app", "b"])
+        XCTAssertNil(queue.claimNext())
+        queue.finish(token: active.token)
+        let other = try XCTUnwrap(queue.claimNext())
+        XCTAssertEqual(other.id, "other-app")
+        queue.finish(token: other.token)
+        let latest = try XCTUnwrap(queue.claimNext())
+        XCTAssertEqual(latest.id, "b")
+        XCTAssertEqual(latest.group, .visible)
+        queue.finish(token: latest.token)
+        XCTAssertNil(queue.claimNext())
+    }
+
     func testRapidChoicesCoalesceToLatestWithoutDuplicateWork() throws {
         var queue = TrayPlacementQueue()
         queue.enqueue(id: "a", desiredInTray: true)

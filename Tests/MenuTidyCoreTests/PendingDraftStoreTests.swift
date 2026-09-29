@@ -3,6 +3,23 @@ import XCTest
 @testable import MenuTidyCore
 
 final class PendingDraftStoreTests: XCTestCase {
+    func testForgetApplicationRemovesUnassociatedEditsAndVerifiedBaselinesButPreservesOthers() throws {
+        let owner = identity("session:verified")
+        var store = try PendingDraftStore(unassociatedRules: [rule("session:offline", .alwaysHidden)])
+        try store.set(rule("session:verified", .collapsible), sessionIdentity: owner)
+        store.removeVerified(rule("session:verified", .collapsible), sessionIdentity: owner)
+        try store.set(rule("item:stable", .visible), sessionIdentity: nil)
+        let unrelated = ItemRule(id: "item:other", name: "Same display name",
+            bundleIdentifier: "example.appHelper", visibility: .alwaysHidden)
+        try store.set(unrelated, sessionIdentity: nil)
+        store.removeAll(bundleIdentifier: "example.app")
+        store.retainSessionBindings { _ in false }
+
+        XCTAssertEqual(store.records.map(\.rule), [unrelated])
+        XCTAssertEqual(try roundTrip(store).records.map(\.rule), [unrelated],
+            "A forgotten verified session baseline must not resurrect at restart.")
+    }
+
     private func rule(_ id: String, _ visibility: ItemVisibility = .collapsible) -> ItemRule {
         ItemRule(id: id, name: "Same display name", bundleIdentifier: "example.app", visibility: visibility)
     }

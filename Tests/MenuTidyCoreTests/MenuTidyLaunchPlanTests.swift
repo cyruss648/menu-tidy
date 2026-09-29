@@ -2,6 +2,16 @@ import XCTest
 @testable import MenuTidyCore
 
 final class MenuTidyLaunchPlanTests: XCTestCase {
+    func testIsolatedUIPreviewCannotMixWithLiveOrDiagnosticModes() {
+        XCTAssertEqual(MenuTidyLaunchPlan.parse(["--preview-ui"]), .normal)
+        XCTAssertEqual(MenuTidyLaunchPlan.parse(["--preview-ui", "--preview-permissions"]), .normal)
+        for flags in [["--preview-permissions"], ["--preview-ui", "--demo-items"],
+                      ["--preview-ui", "--settings"], ["--preview-ui", "--probe-targeted-events"],
+                      ["--preview-ui", "--preview-ui"], ["--preview-ui", "--unknown"]] {
+            XCTAssertEqual(MenuTidyLaunchPlan.parse(flags), .rejected)
+        }
+    }
+
     func testNormalLaunchAcceptsOnlyKnownApplicationOptions() {
         for flags in [[], ["--settings"], ["--demo-items"], ["--settings", "--demo-items"]] {
             XCTAssertEqual(MenuTidyLaunchPlan.parse(flags), .normal)
