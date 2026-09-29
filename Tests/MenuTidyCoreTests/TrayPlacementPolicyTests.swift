@@ -21,6 +21,18 @@ final class TrayPlacementPolicyTests: XCTestCase {
         XCTAssertEqual(candidates.filter(\.isOutstanding).map(\.id), ["pending", "failed", "queued", "identify"])
     }
 
+    func testOwnershipConflictRemainsOutstandingButIsExcludedFromBothBatchActions() {
+        let conflict = Candidate(id: "conflict", group: .alwaysHidden, isPending: true,
+                                 hasFailure: true, needsOwnershipRepair: true)
+        let transient = Candidate(id: "transient", group: .collapsible, isPending: true, hasFailure: true)
+        XCTAssertTrue(conflict.isOutstanding)
+        for action in [TrayPlacementPolicy.Action.applyPending, .retryFailed] {
+            XCTAssertEqual(TrayPlacementPolicy.candidates([conflict, transient], for: action).map(\.id), ["transient"])
+        }
+        let repaired = Candidate(id: "conflict", group: .alwaysHidden, isPending: true, hasFailure: true)
+        XCTAssertEqual(TrayPlacementPolicy.candidates([repaired], for: .retryFailed).map(\.group), [.alwaysHidden])
+    }
+
     func testDuplicateIdentityIsExcludedInsteadOfChoosingOneRow() {
         let candidates = [Candidate(id: "same", group: .alwaysHidden, isPending: true),
                           Candidate(id: "same", group: .visible, isPending: true, hasFailure: true)]

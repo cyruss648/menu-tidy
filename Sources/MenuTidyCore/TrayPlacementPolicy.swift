@@ -21,11 +21,12 @@ public enum TrayPlacementPolicy {
         public let isPending: Bool
         public let hasFailure: Bool
         public let needsIdentification: Bool
+        public let needsOwnershipRepair: Bool
         public let isQueued: Bool
 
         public init(id: String, group: ItemVisibility, isAvailable: Bool = true, canMove: Bool = true,
                     hasUniqueIdentity: Bool = true, isPending: Bool, hasFailure: Bool = false,
-                    needsIdentification: Bool = false, isQueued: Bool = false) {
+                    needsIdentification: Bool = false, needsOwnershipRepair: Bool = false, isQueued: Bool = false) {
             self.id = id
             self.group = group
             self.isAvailable = isAvailable
@@ -34,6 +35,7 @@ public enum TrayPlacementPolicy {
             self.isPending = isPending
             self.hasFailure = hasFailure
             self.needsIdentification = needsIdentification
+            self.needsOwnershipRepair = needsOwnershipRepair
             self.isQueued = isQueued
         }
 
@@ -47,7 +49,7 @@ public enum TrayPlacementPolicy {
     public static func candidates(_ candidates: [Candidate], for action: Action) -> [Candidate] {
         let counts = Dictionary(grouping: candidates, by: \.id).mapValues(\.count)
         return candidates.filter {
-            counts[$0.id] == 1 && $0.isOutstanding && !$0.isQueued && !$0.needsIdentification &&
+            counts[$0.id] == 1 && $0.isOutstanding && !$0.isQueued && !$0.needsIdentification && !$0.needsOwnershipRepair &&
                 (action == .applyPending || $0.hasFailure)
         }
     }

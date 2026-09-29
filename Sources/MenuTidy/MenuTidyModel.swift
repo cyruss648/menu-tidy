@@ -75,6 +75,7 @@ final class MenuTidyModel: ObservableObject {
     @Published private(set) var trayItemErrors: [String: String] = [:]
     @Published private var trayPlacementQueue = TrayPlacementQueue()
     @Published private var trayPlacementErrors: [String: String] = [:]
+    @Published private var trayOwnershipConflictIDs: Set<String> = []
     @Published private var trayReconnectIDs: Set<String> = []
     @Published private var itemsNeedingPositionKeyResolution: Set<String> = []
     @Published private(set) var iconImageWarning: String?
@@ -275,6 +276,7 @@ final class MenuTidyModel: ObservableObject {
                 hasUniqueIdentity: isUIPreview || counts[row.id] == 1,
                 isPending: row.isPending, hasFailure: trayPlacementFailure(id: row.id) != nil,
                 needsIdentification: trayPlacementNeedsIdentification(id: row.id),
+                needsOwnershipRepair: trayPlacementNeedsOwnershipRepair(id: row.id),
                 isQueued: trayPlacementIsPending(id: row.id))
         }
     }
@@ -312,8 +314,11 @@ final class MenuTidyModel: ObservableObject {
         onShowSettings?()
     }
 
+    func trayPlacementNeedsOwnershipRepair(id: String) -> Bool { trayOwnershipConflictIDs.contains(id) }
+
     func trayPlacementRetryTitle(id: String) -> String {
-        trayPlacementNeedsIdentification(id: id) ? "识别并连接" : "重试"
+        if trayPlacementNeedsOwnershipRepair(id: id) { return "重新检查" }
+        return trayPlacementNeedsIdentification(id: id) ? "识别并连接" : "重试"
     }
 
     func trayPlacementNeedsIdentification(id: String) -> Bool { itemsNeedingPositionKeyResolution.contains(id) }
@@ -1265,6 +1270,7 @@ final class MenuTidyModel: ObservableObject {
             try saveTrayIntent(drafts: prepared.drafts, nativeChoices: prepared.nativeChoices)
             for affectedID in prepared.affectedIDs {
                 itemApplicationIssues.removeValue(forKey: affectedID)
+                trayOwnershipConflictIDs.remove(affectedID)
                 trayPlacementErrors.removeValue(forKey: affectedID)
                 // Association promises to save only. A routine refresh of this
                 // process must not turn it into an automatic native mutation.
@@ -1340,6 +1346,7 @@ final class MenuTidyModel: ObservableObject {
                 for forgottenID in forgottenIDs {
                     drafts.remove(id: forgottenID)
                     lastKnownObservedGroups.remove(id: forgottenID)
+                    trayOwnershipConflictIDs.remove(forgottenID)
                     trayPlacementErrors.removeValue(forKey: forgottenID)
                     itemApplicationIssues.removeValue(forKey: forgottenID)
                     trayConnectionAttempts.removeValue(forKey: forgottenID)
@@ -4440,6 +4447,11 @@ private extension MenuTidyModel {
                 for id in affectedIDs {
                     nativeVisibilityEvidence.removeValue(forKey: id)
                     actualGroups.removeValue(forKey: id)
+                    if let failure = error as? NativeMenuBarVisibilityCodec.Failure, failure == .unsafeTarget {
+                        trayOwnershipConflictIDs.insert(id)
+                    } else {
+                        trayOwnershipConflictIDs.remove(id)
+                    }
                     itemApplicationIssues[id] = error.localizedDescription
                 }
                 if Task.isCancelled || positionRecoveryMessage != nil { throw error }
@@ -4451,6 +4463,7 @@ private extension MenuTidyModel {
     }
 
     func confirmNativeRule(_ rule: ItemRule, identity: ObservedItemGroupHistory.Identity, target: NativeVisibilityTarget?) {
+        trayOwnershipConflictIDs.remove(rule.id)
         nativeVisibilityEvidence[rule.id] = NativeVisibilityEvidence(identity: identity, target: target, group: rule.visibility)
         actualGroups[rule.id] = rule.visibility
         rules.set(rule)

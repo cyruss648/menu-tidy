@@ -13,7 +13,7 @@ public enum NativeMenuBarVisibilityCodec {
             case .malformed: "系统菜单栏显示记录的格式无法确认，未修改设置。"
             case .duplicateLocation: "系统菜单栏显示记录有重复项目，未修改设置。"
             case .missingTarget: "此应用尚未出现在系统菜单栏显示记录中，请启动应用后重试。"
-            case .unsafeTarget: "此应用的图标归属无法单独确认，未修改其他应用的显示设置。"
+            case .unsafeTarget: "系统记录中的图标归属不一致，隐藏尚未执行。请重新启动对应应用后点击“重新检查”；若仍失败，需要修复旧归属记录。重复批量重试无法解决。"
             }
         }
     }

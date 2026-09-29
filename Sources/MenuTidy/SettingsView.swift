@@ -273,20 +273,20 @@ struct SettingsView: View {
                 model.retryFailedTrayPlacements()
             }
             .disabled(!model.trayPlacementBatchActionsAllowed || model.trayRetryCount == 0)
-            .help("仅重试当前可处理的失败项，保留各自的三项选择；需要单独识别的图标请使用行内按钮。范围不受搜索与筛选影响。")
+            .help("仅重试当前可处理的失败项，保留各自的三项选择；归属待修复项不参与批量重试；需要单独识别的图标请使用行内按钮。范围不受搜索与筛选影响。")
             Button("应用全部待处理\(model.trayPendingApplicationCount > 0 ? " · \(model.trayPendingApplicationCount)" : "")") {
                 model.applyPendingTrayPlacements()
             }
             .buttonStyle(.borderedProminent)
             .disabled(!model.trayPlacementBatchActionsAllowed || model.trayPendingApplicationCount == 0)
-            .help("继续处理所有可直接应用的未完成选择，包括失败项。已确认、离线和需要单独识别的图标不重复处理。范围不受搜索与筛选影响。")
+            .help("继续处理所有可直接应用的未完成选择，包括失败项。已确认、离线、归属待修复和需要单独识别的图标不重复处理。范围不受搜索与筛选影响。")
         }
     }
 
     private var managementSummary: String {
         if let reason = model.trayPlacementBlockedReason { return reason }
         if model.trayPlacementOutstandingCount > 0 {
-            return "\(model.trayPlacementOutstandingCount) 项尚未完成 · 选择已保留，批量操作覆盖全部图标"
+            return "\(model.trayPlacementOutstandingCount) 项尚未完成 · 选择已保留，批量处理可直接应用的项目"
         }
         return "三项选择，即改即用 · 未完成时可统一应用或重试"
     }
@@ -392,15 +392,15 @@ struct SettingsView: View {
                     } else if !item.canMove {
                         rowBadge("系统保留", color: .secondary)
                     } else if message != nil {
-                        rowBadge("需处理", color: .orange)
+                        rowBadge(model.trayPlacementNeedsOwnershipRepair(id: item.id) ? "归属待修复" : "需处理", color: .orange)
                     } else if needsConfirmation {
                         rowBadge("待应用", color: .secondary)
                     }
                 }
                 if let message, !pending {
-                    Text(issueSummary(message))
+                    Text(model.trayPlacementNeedsOwnershipRepair(id: item.id) ? message : issueSummary(message))
                         .font(.system(size: 11)).foregroundStyle(.orange)
-                        .lineLimit(2).help(message)
+                        .lineLimit(model.trayPlacementNeedsOwnershipRepair(id: item.id) ? 4 : 2).help(message)
                         .accessibilityLabel("需要处理：\(message)")
                 } else if pending {
                     Text("正在按顺序处理，可继续更改选择。")
