@@ -1240,6 +1240,23 @@ actor MenuBarAccessibility {
         return nil
     }
 
+    /// A reopen request can bring forward an existing window. Verify an actual
+    /// visible in-scope window; activation or a successful launch callback alone
+    /// is not proof. This path never dispatches an AX action to the tray item.
+    func applicationWindowIsPresented(id: String) throws -> Bool {
+        try Task.checkCancellation()
+        guard AXIsProcessTrusted(), let entry = entries[id], liveOwnerMatches(entry) else {
+            throw MenuBarAccessError.disappeared
+        }
+        let owners = try presentationOwners(for: entry)
+        let probe = probePresentations(for: entry, owners: owners)
+        guard livePresentationScopeMatches(entry, owners: owners) else { throw MenuBarAccessError.disappeared }
+        for node in probe.nodes {
+            if node.kind == .window && node.visible && node.owner.identity.pid == entry.owner.pid { return true }
+        }
+        return false
+    }
+
     /// Queries the same retained AX object. An IPC failure or occlusion is not
     /// evidence of closure. The caller may require consecutive closed samples.
     func presentationStatus(_ token: MenuBarItemPresentation) -> MenuBarPresentationStatus {

@@ -3368,9 +3368,94 @@ final class MenuTidyModel: ObservableObject {
         closeIconPanel()
     }
 
+    func panelPrimaryActionTitle(id: String) -> String {
+        let bundle = items.first(where: { $0.id == id })?.bundleIdentifier
+        return TrayActivationPolicy.defaultAction(bundleIdentifier: bundle) == .application ? "打开应用" : "打开图标"
+    }
+
+    func canOpenPanelApplication(id: String) -> Bool {
+        guard let source = snapshots.first(where: { $0.id == id }),
+              let bundle = source.bundleIdentifier, !bundle.hasPrefix("com.apple."),
+              bundle != Bundle.main.bundleIdentifier,
+              let app = NSRunningApplication(processIdentifier: source.processIdentifier),
+              app.bundleIdentifier == bundle, app.bundleURL?.pathExtension == "app" else { return false }
+        return true
+    }
+
+    func openPanelApplication(id: String) {
+        guard !isUIPreview, !panelInteractionBusy, !preparingToTerminate, isPanelPresented,
+              panelItems.contains(where: { $0.id == id }), canOpenPanelApplication(id: id) else { return }
+        panelTask?.cancel()
+        panelTask = nil
+        panelError = nil
+        isActivatingPanelItem = true
+        activePanelItemID = id
+        panelIsPreparingNativeAction = true
+        panelActivationError = nil
+        trayItemErrors.removeValue(forKey: id)
+        panelItemProgress = "正在打开应用窗口…"
+        panelActivationTask = Task { [weak self] in
+            guard let self else { return }
+            var suspendedToken: UUID?
+            defer {
+                self.panelActivationTask = nil
+                self.isActivatingPanelItem = false
+                self.activePanelItemID = nil
+                self.panelIsPreparingNativeAction = false
+                self.panelItemProgress = nil
+                if let suspendedToken, self.isPanelPresented, !self.preparingToTerminate, !self.stopping {
+                    self.iconPanel?.restoreAfterNativePresentationFailure(token: suspendedToken)
+                }
+            }
+            do {
+                await self.passiveIconCaptureTask?.value
+                try Task.checkCancellation()
+                try await self.scanNow()
+                guard let source = self.snapshots.first(where: { $0.id == id }),
+                      let identity = self.observedItemIdentity(source), Self.observedOwnerIsCurrent(identity),
+                      self.canOpenPanelApplication(id: id),
+                      let app = NSRunningApplication(processIdentifier: source.processIdentifier),
+                      let url = app.bundleURL else { throw MenuBarAccessError.disappeared }
+                suspendedToken = self.iconPanel?.suspendForNativePresentation()
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.activates = true
+                configuration.createsNewApplicationInstance = false
+                let opened = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+                try Task.checkCancellation()
+                guard opened.processIdentifier == source.processIdentifier,
+                      Self.observedOwnerIsCurrent(identity) else { throw MenuBarAccessError.disappeared }
+                let deadline = ProcessInfo.processInfo.systemUptime + 3
+                var confirmed = false
+                while ProcessInfo.processInfo.systemUptime < deadline {
+                    try Task.checkCancellation()
+                    guard !self.stopping, !self.preparingToTerminate, Self.observedOwnerIsCurrent(identity) else {
+                        throw MenuBarAccessError.disappeared
+                    }
+                    if app.isActive {
+                        if try await self.access.applicationWindowIsPresented(id: id) { confirmed = true; break }
+                    }
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+                guard confirmed else {
+                    throw MenuTidyManagementError.positionApplication("已请求打开应用，但尚未确认窗口出现。未补发图标点击；可将图标设为常驻后使用原生菜单。")
+                }
+                Self.diagnosticLogger.notice("trayApplicationOpen windowConfirmed=true iconVisibilityUnchanged=true")
+                self.closeIconPanel()
+            } catch {
+                let message = error is CancellationError ? "打开应用已取消。" : error.localizedDescription
+                self.panelActivationError = message
+                self.trayItemErrors[id] = message
+            }
+        }
+    }
+
     /// Use one native AX action. A managed item is temporarily placed beside
     /// our control, then returned to its hidden weight after its presentation closes.
-    func activatePanelItem(id: String) {
+    func activatePanelItem(id: String, useNativeAction: Bool = false) {
+        if !useNativeAction, TrayActivationPolicy.defaultAction(bundleIdentifier: items.first(where: { $0.id == id })?.bundleIdentifier) == .application {
+            openPanelApplication(id: id)
+            return
+        }
         if isUIPreview { return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging,
               !preparingToTerminate, isPanelPresented,

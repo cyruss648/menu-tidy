@@ -153,6 +153,8 @@ private struct TrayPanelHeightKey: PreferenceKey {
 
 private enum TrayPanelAction: Equatable {
     case activation
+    case application
+    case nativeActivation
     case placement
 }
 
@@ -188,9 +190,9 @@ private struct HiddenItemsPanelView: View {
             if lastInteraction == .placement, let message = model.trayPlacementMessage(id: id) {
                 return TrayPanelError(itemID: id, message: message, retryAction: .placement)
             }
-            if lastInteraction == .activation,
+            if let lastInteraction, lastInteraction != .placement,
                let message = model.trayItemErrors[id] ?? model.panelActivationError {
-                return TrayPanelError(itemID: id, message: message, retryAction: .activation)
+                return TrayPanelError(itemID: id, message: message, retryAction: lastInteraction)
             }
         }
         for item in model.panelItems {
@@ -278,8 +280,16 @@ private struct HiddenItemsPanelView: View {
                             openItem(id: item.id)
                         }
                         .contextMenu {
-                            Button("打开菜单") { openItem(id: item.id) }
+                            Button(model.panelPrimaryActionTitle(id: item.id)) { openItem(id: item.id) }
                                 .disabled(model.panelInteractionBusy)
+                            if model.canOpenPanelApplication(id: item.id) {
+                                if model.panelPrimaryActionTitle(id: item.id) != "打开应用" {
+                                    Button("打开应用") { openItem(id: item.id, action: .application) }
+                                        .disabled(model.panelInteractionBusy)
+                                }
+                                Button("尝试原生图标操作") { openItem(id: item.id, action: .nativeActivation) }
+                                    .disabled(model.panelInteractionBusy)
+                            }
                             Divider()
                             Button("常驻菜单栏") {
                                 lastInteractedItemID = item.id
@@ -295,10 +305,15 @@ private struct HiddenItemsPanelView: View {
         .frame(height: TrayPanelLayout.gridHeight(itemCount: model.panelItems.count, limit: maximumGridHeight))
     }
 
-    private func openItem(id: String) {
+    private func openItem(id: String, action: TrayPanelAction = .activation) {
         lastInteractedItemID = id
-        lastInteraction = .activation
-        model.activatePanelItem(id: id)
+        lastInteraction = action
+        switch action {
+        case .application: model.openPanelApplication(id: id)
+        case .nativeActivation: model.activatePanelItem(id: id, useNativeAction: true)
+        case .activation: model.activatePanelItem(id: id)
+        case .placement: model.retryTrayPlacement(id: id)
+        }
     }
 
     private func errorNotice(_ error: TrayPanelError) -> some View {
@@ -325,8 +340,8 @@ private struct HiddenItemsPanelView: View {
                         lastInteractedItemID = id
                         lastInteraction = .placement
                         model.retryTrayPlacement(id: id)
-                    case .activation:
-                        openItem(id: id)
+                    case .activation, .application, .nativeActivation:
+                        openItem(id: id, action: action)
                     }
                 }
                 .buttonStyle(.plain)
