@@ -1,8 +1,8 @@
 # 构建与发布
 
-Menu Tidy 当前版本为 **0.5.0（build 52）**。本轮独立托盘与原生隐藏的本地验收见[当前托盘记录](TRAY-EXPERIENCE.md)；历史隔离更新器的签名安装、重启与偏好保留证据仍分别记录。`SPARKLE_PRIVATE_KEY` 已获用户明确授权并上传。下面的流程只在对应 Actions 与 Release 实际完成后构成公开发布，不把本地打包视为 GitHub 发布物安装验收。
+Menu Tidy 当前版本为 **0.6.0（build 53）**。本轮独立托盘与原生隐藏的本地验收见[当前托盘记录](TRAY-EXPERIENCE.md)；历史隔离更新器的签名安装、重启与偏好保留证据仍分别记录。`SPARKLE_PRIVATE_KEY` 已获用户明确授权并上传。下面的流程只在对应 Actions 与 Release 实际完成后构成公开发布，不把本地打包视为 GitHub 发布物安装验收。
 
-普通提交和 Pull Request 会生成供检查的构建产物；只有推送与应用版本一致的 `v*` 标签，才会尝试创建 GitHub Release。**版本带预发布后缀时进入 preview，并标为 Prerelease；没有后缀时进入 stable。** 例如 `v0.5.0-beta.1` 不改变稳定版 Latest，`v0.5.0` 则作为稳定版发布并更新 Latest。不要用文案中的“预览版”代替实际版本后缀。
+普通提交和 Pull Request 会生成供检查的构建产物；只有推送与应用版本一致的 `v*` 标签，才会尝试创建 GitHub Release。**版本带预发布后缀时进入 preview，并标为 Prerelease；没有后缀时进入 stable。** 例如 `v0.6.0-beta.1` 不改变稳定版 Latest，`v0.6.0` 则作为稳定版发布并更新 Latest。不要用文案中的“预览版”代替实际版本后缀。
 
 工作流定义在 [ci.yml](../.github/workflows/ci.yml)。工作流文件、脚本检查或本地打包成功，都不代表某次 GitHub 构建已经通过；以对应提交的 Actions 运行结果和 Release 中的实际附件为准。
 
@@ -32,12 +32,12 @@ Menu Tidy 当前版本为 **0.5.0（build 52）**。本轮独立托盘与原生�
 ./scripts/package.sh
 ```
 
-打包脚本读取 `Resources/Info.plist` 的版本，构建本机原生架构，检查 Mach-O 架构和应用签名，然后产生以下文件。以 0.5.0 的 Apple Silicon 包为例：
+打包脚本读取 `Resources/Info.plist` 的版本，构建本机原生架构，检查 Mach-O 架构和应用签名，然后产生以下文件。以 0.6.0 的 Apple Silicon 包为例：
 
 ```text
-dist/Menu-Tidy-0.5.0-macos-arm64.zip
-dist/Menu-Tidy-0.5.0-macos-arm64.zip.sha256
-dist/Menu-Tidy-0.5.0-macos-arm64.zip.metadata.json
+dist/Menu-Tidy-0.6.0-macos-arm64.zip
+dist/Menu-Tidy-0.6.0-macos-arm64.zip.sha256
+dist/Menu-Tidy-0.6.0-macos-arm64.zip.metadata.json
 ```
 
 Intel runner 产生同名规则的 `x86_64` 文件。当前发布两个独立架构包，不生成 Universal 包。元数据记录源码提交、工作区是否有改动、版本、架构、最低系统版本、工具链、摘要和签名 designated requirement；不要把签名自检等同于 Apple 公证或 Gatekeeper 放行。
@@ -45,7 +45,7 @@ Intel runner 产生同名规则的 `x86_64` 文件。当前发布两个独立架
 应用先由 `ditto` 打包成 zip，再作为一个文件上传，避免直接上传 `.app` 目录时 Actions artifact 丢失可执行文件的权限。下载后可以在文件所在目录检查完整性：
 
 ```sh
-shasum -a 256 -c Menu-Tidy-0.5.0-macos-arm64.zip.sha256
+shasum -a 256 -c Menu-Tidy-0.6.0-macos-arm64.zip.sha256
 ```
 
 SHA-256 用于检查文件内容是否与发布的摘要一致，不替代发行者身份认证。
@@ -77,12 +77,12 @@ Sparkle 2.10.0 的 framework 和内部辅助组件嵌入应用后，由构建签
 3. 确认远端、GitHub 登录身份与发布签名 secrets 配置正确，再运行发布脚本：
 
    ```sh
-   ./scripts/release.sh 0.5.0
+   ./scripts/release.sh 0.6.0
    ```
 
 发布脚本接收不带 `v` 的版本号，要求从已推送到远端的 `main` 分支发布，且当前提交最近一次分支 push 工作流已成功完成。它会使用与最终 feed 相同的规则校验语义版本和构建号，再校验标签、GitHub 登录状态、工作区及对应 CI 结果。完整检查结束后，`release-preflight.py` 会只读获取远端 `updates` 分支、验签两个架构的既有 feed，并再次检查构建号和同通道版本递增，然后才创建和推送 annotated tag。网络或认证失败不会被当作首次发布；只在明确没有该分支时允许没有历史 feed。远端内容仅存于临时目录，不 checkout 远端代码，也不改变本地分支。不要通过强制移动已有标签来重复发布同一个版本。
 
-标签必须是应用版本前加 `v`，例如 `v0.5.0` 对应 `CFBundleShortVersionString` 的 `0.5.0`。推送标签后，工作流重新测试并构建两个架构，成功后才进入发布任务。
+标签必须是应用版本前加 `v`，例如 `v0.6.0` 对应 `CFBundleShortVersionString` 的 `0.6.0`。推送标签后，工作流重新测试并构建两个架构，成功后才进入发布任务。
 
 ## 发布前的自动校验
 
