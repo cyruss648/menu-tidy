@@ -2108,7 +2108,7 @@ actor MenuBarAccessibility {
     }
 
     private var inputMenuPersistentID: String {
-        "system-input-menu:com.apple.TextInputMenuAgent:v1"
+        MenuItemIdentity.systemInputMenuID
     }
 
     private func verifiedInputMenuPersistentID(owner: MenuBarOwner, element: AXUIElement) -> String? {

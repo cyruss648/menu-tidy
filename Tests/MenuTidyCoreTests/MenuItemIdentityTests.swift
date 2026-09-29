@@ -3,6 +3,19 @@ import XCTest
 @testable import MenuTidyCore
 
 final class MenuItemIdentityTests: XCTestCase {
+    func testInputMenuIdentitySupportsSavedThreeStateDraftsWithoutSessionBinding() throws {
+        let id = MenuItemIdentity.systemInputMenuID
+        XCTAssertEqual(try decode(id), ["native-system-input-v1", "com.apple.TextInputMenuAgent", "singleton"])
+        XCTAssertNil(MenuItemIdentity.positionKey(inPersistentID: id, bundleIdentifier: "com.apple.TextInputMenuAgent"))
+        for group in [ItemVisibility.visible, .collapsible, .alwaysHidden] {
+            let rule = ItemRule(id: id, name: "输入法切换", bundleIdentifier: "com.apple.TextInputMenuAgent", visibility: group)
+            let drafts = try TrayPlacementPolicy.replacingDrafts(in: PendingDraftStore(),
+                targets: [.init(rule: rule, identity: nil)], group: group)
+            let loaded = try JSONDecoder().decode(PendingDraftStore.self, from: JSONEncoder().encode(drafts))
+            XCTAssertEqual(loaded.record(for: id, sessionIdentity: nil)?.rule, rule)
+        }
+    }
+
     func testStructuredPairPreventsSeparatorCollisions() throws {
         let first = try XCTUnwrap(MenuItemIdentity.persistentID(
             bundleIdentifier: "example.app:status",

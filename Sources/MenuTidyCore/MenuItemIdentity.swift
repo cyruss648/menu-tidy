@@ -4,6 +4,11 @@ import Foundation
 /// in the current scan. Display names and accessibility labels are deliberately
 /// excluded because applications may change them as their state changes.
 public enum MenuItemIdentity {
+    /// Logical identity for the exact system input-menu singleton. The caller
+    /// must prove the system bundle path, live owner epoch and complete unique
+    /// AXExtrasMenuBar census before using it. This is not an AX identifier.
+    public static let systemInputMenuID = #"item:["native-system-input-v1","com.apple.TextInputMenuAgent","singleton"]"#
+
     private static let positionNamespace = "menu-bar-position-v1"
 
     public static func persistentID(
