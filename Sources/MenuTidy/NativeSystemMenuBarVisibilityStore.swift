@@ -2,7 +2,7 @@ import AppKit
 import Darwin
 import MenuTidyCore
 
-/// Owns only the verified AirDrop menu-bar bits in the current-host preference.
+/// Owns only the verified AirDrop bits and the input-menu visibility Boolean.
 /// It never toggles the whole Control Center host or rewrites a preference table.
 @MainActor
 final class NativeSystemMenuBarVisibilityStore {
@@ -10,10 +10,11 @@ final class NativeSystemMenuBarVisibilityStore {
     private let journal = NativeSystemVisibilityJournalFile()
     private let hostIdentifier: String?
     private let access: NativeSystemVisibilityAccess?
+    private let inputAccess: NativeSystemVisibilityAccess?
     private var entries: [String: Ledger.Entry] = [:]
     private var knownUnwritten: [String: Ledger.Entry] = [:]
     private var initialJournalWasUnreadable = false
-    private var needsWriteAccess = false
+    private var needsWriteAccess: Set<String> = []
     private(set) var pendingRecoveryIssue: String?
     private let domain = "com.apple.controlcenter" as CFString
 
@@ -24,6 +25,7 @@ final class NativeSystemMenuBarVisibilityStore {
         let host = Self.currentHostIdentifier()
         hostIdentifier = host
         access = host.map { NativeSystemVisibilityAccess(hostIdentifier: $0) }
+        inputAccess = host.map { NativeSystemVisibilityAccess(hostIdentifier: $0, textInput: true) }
         do {
             guard host != nil else { throw failure("无法确认当前主机，未改变系统图标设置。") }
             let loaded = try journal.load().map(Ledger.decode) ?? []
@@ -35,7 +37,7 @@ final class NativeSystemMenuBarVisibilityStore {
         }
     }
 
-    func accessAvailable(key: String) -> Bool { !needsWriteAccess && (try? readValue(key: key)) != nil }
+    func accessAvailable(key: String) -> Bool { !needsWriteAccess.contains(key) && (try? readValue(key: key)) != nil }
     func isTemporarilyRevealed(key: String) -> Bool { entries[key]?.isTemporarilyRevealed == true }
 
     /// Ordinary preferences may already be accessible. Ask for one precise file
@@ -43,10 +45,10 @@ final class NativeSystemMenuBarVisibilityStore {
     func requestAccess(key: String) async throws -> Bool {
         try validateKey(key)
         if accessAvailable(key: key) { return true }
-        guard let access else { throw failure("无法定位当前主机的系统图标偏好文件。") }
+        guard let access = key == "TextInputMenu" ? inputAccess : access else { throw failure("无法定位系统图标偏好文件。") }
         guard try await access.requestAccess() else { return false }
         _ = try readValue(key: key)
-        needsWriteAccess = false
+        needsWriteAccess.remove(key)
         return true
     }
 
@@ -154,14 +156,14 @@ final class NativeSystemMenuBarVisibilityStore {
     }
 
     private func validateKey(_ key: String) throws {
-        guard key == "AirDrop", hostIdentifier != nil else {
+        guard ["AirDrop", "TextInputMenu"].contains(key), hostIdentifier != nil else {
             throw failure("此系统图标尚无经过验证的独立显示开关，未改变设置。")
         }
     }
 
     private func validateHosts(_ loaded: [Ledger.Entry]) throws {
         guard let hostIdentifier,
-              loaded.allSatisfy({ $0.key == "AirDrop" && $0.hostIdentifier.uppercased() == hostIdentifier }) else {
+              loaded.allSatisfy({ ["AirDrop", "TextInputMenu"].contains($0.key) && $0.hostIdentifier.uppercased() == hostIdentifier }) else {
             throw failure("系统图标恢复记录与当前主机不匹配，未修改设置。")
         }
     }
@@ -208,25 +210,43 @@ final class NativeSystemMenuBarVisibilityStore {
             throw error
         }
         knownUnwritten.removeValue(forKey: entry.key)
-        CFPreferencesSetValue(entry.key as CFString, NSNumber(value: replacement), domain,
-                              kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
-        guard CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost) else {
-            needsWriteAccess = true
+        let input = entry.key == "TextInputMenu"
+        let targetDomain = input ? inputDomain : domain
+        let targetHost = input ? kCFPreferencesAnyHost : kCFPreferencesCurrentHost
+        let value = input ? NSNumber(value: replacement == Ledger.shownMask) : NSNumber(value: replacement)
+        CFPreferencesSetValue(input ? "visible" as CFString : entry.key as CFString, value, targetDomain,
+                              kCFPreferencesCurrentUser, targetHost)
+        guard CFPreferencesSynchronize(targetDomain, kCFPreferencesCurrentUser, targetHost) else {
+            needsWriteAccess.insert(entry.key)
             throw failure("系统图标显示开关尚未确认，恢复记录已保留。")
         }
         let readback: Int64
         do { readback = try readValue(key: entry.key) }
-        catch { needsWriteAccess = true; throw error }
+        catch { needsWriteAccess.insert(entry.key); throw error }
         guard readback & 0xA == replacementMask else {
-            needsWriteAccess = true
+            needsWriteAccess.insert(entry.key)
             throw failure("系统图标显示结果尚未确认，恢复记录已保留；未覆盖新的设置。")
         }
         var completed = entries; completed[entry.key] = entry.completingPending()
         try save(completed)
     }
 
+    private var inputDomain: CFString {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
+            "Library/Preferences/com.apple.TextInputMenu").path as CFString
+    }
+
     private func readValue(key: String) throws -> Int64 {
         try validateKey(key)
+        if key == "TextInputMenu" {
+            guard CFPreferencesSynchronize(inputDomain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost),
+                  let raw = CFPreferencesCopyValue("visible" as CFString, inputDomain,
+                      kCFPreferencesCurrentUser, kCFPreferencesAnyHost),
+                  CFGetTypeID(raw) == CFBooleanGetTypeID(), let value = raw as? Bool else {
+                throw failure("无法确认输入菜单显示开关，请允许访问 TextInputMenu 的精确偏好文件。")
+            }
+            return value ? Ledger.shownMask : Ledger.hiddenMask
+        }
         guard CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost),
               let raw = CFPreferencesCopyValue(key as CFString, domain,
                                               kCFPreferencesCurrentUser, kCFPreferencesCurrentHost) else {
@@ -256,7 +276,7 @@ final class NativeSystemMenuBarVisibilityStore {
     }
 
     private func conflict() -> StoreFailure {
-        failure("AirDrop 的显示设置已被其他操作修改，未覆盖新设置；恢复记录已保留。")
+        failure("系统图标的显示设置已被其他操作修改，未覆盖新设置；恢复记录已保留。")
     }
     private func failure(_ message: String) -> StoreFailure { StoreFailure(message: message) }
     private struct StoreFailure: LocalizedError {
@@ -274,10 +294,14 @@ private final class NativeSystemVisibilityAccess {
     private var scopedURL: URL?
     private var panel: NSOpenPanel?
 
-    init(hostIdentifier: String) {
+    private let textInput: Bool
+
+    init(hostIdentifier: String, textInput: Bool = false) {
+        self.textInput = textInput
         preferenceFile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            "Library/Preferences/ByHost/com.apple.controlcenter.\(hostIdentifier).plist")
-        bookmarkKey = "nativeSystemVisibilityFileBookmark.v1.\(hostIdentifier)"
+            textInput ? "Library/Preferences/com.apple.TextInputMenu.plist" :
+                "Library/Preferences/ByHost/com.apple.controlcenter.\(hostIdentifier).plist")
+        bookmarkKey = textInput ? "nativeTextInputVisibilityBookmark.v1" : "nativeSystemVisibilityFileBookmark.v1.\(hostIdentifier)"
         if let data = UserDefaults.standard.data(forKey: bookmarkKey) {
             var stale = false
             if let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope, .withoutUI],
@@ -298,8 +322,8 @@ private final class NativeSystemVisibilityAccess {
         let picker = NSOpenPanel()
         panel = picker
         defer { panel = nil }
-        picker.title = "允许管理 AirDrop 菜单栏图标"
-        picker.message = "请选择已定位的当前主机 com.apple.controlcenter 偏好文件。Menu Tidy 只使用其中 AirDrop 的菜单栏显示开关。"
+        picker.title = textInput ? "允许管理输入法切换图标" : "允许管理 AirDrop 菜单栏图标"
+        picker.message = textInput ? "请选择已定位的 com.apple.TextInputMenu.plist；仅使用 visible 显示开关，不修改输入法和快捷键。" : "请选择已定位的当前主机 com.apple.controlcenter 偏好文件。Menu Tidy 只使用其中 AirDrop 的菜单栏显示开关。"
         picker.prompt = "允许访问"
         picker.directoryURL = preferenceFile.deletingLastPathComponent()
         picker.nameFieldStringValue = preferenceFile.lastPathComponent

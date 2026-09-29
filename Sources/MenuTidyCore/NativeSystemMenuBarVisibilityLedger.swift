@@ -1,15 +1,15 @@
 import CoreFoundation
 import Foundation
 
-/// Ownership of the verified AirDrop visibility bits in the current user's
-/// current-host Control Center preferences. Other system modules are excluded.
+/// Recovery for AirDrop visibility bits and the TextInputMenu boolean, normalized
+/// to shown/hidden masks. Other system modules are excluded.
 /// Restore changes only our mask in a fresh integer, preserving foreign bits.
 public enum NativeSystemMenuBarVisibilityLedger {
     public static let visibilityMask: Int64 = 0xA
     public static let shownMask: Int64 = 0x2
     public static let hiddenMask: Int64 = 0x8
     public static let maximumDataSize = 16_384
-    public static let maximumEntries = 1
+    public static let maximumEntries = 2
 
     public enum Mode: String, Sendable { case original, hidden, revealed }
     public enum Operation: String, Sendable { case hide, reveal, rehide, restore }
@@ -148,8 +148,8 @@ public enum NativeSystemMenuBarVisibilityLedger {
             if let pending = entry.pending { value["pending"] = pending.rawValue }
             return value
         }
-        let payload: [String: Any] = ["schemaVersion": 1, "applicationID": "dev.hdh.MenuTidy",
-            "domain": "com.apple.controlcenter", "userScope": "currentUser", "hostScope": "currentHost",
+        let payload: [String: Any] = ["schemaVersion": 2, "applicationID": "dev.hdh.MenuTidy",
+            "domain": "menu-tidy-system-visibility-v2", "userScope": "currentUser", "hostScope": "recordHost",
             "entries": records]
         let data = try PropertyListSerialization.data(fromPropertyList: payload, format: .binary, options: 0)
         guard data.count <= maximumDataSize else { throw Failure.archiveTooLarge }
@@ -160,12 +160,17 @@ public enum NativeSystemMenuBarVisibilityLedger {
         guard data.count <= maximumDataSize else { throw Failure.archiveTooLarge }
         guard let payload = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
               Set(payload.keys) == ["schemaVersion", "applicationID", "domain", "userScope", "hostScope", "entries"],
-              let version = payload["schemaVersion"], try integerValue(version) == 1,
+              let version = payload["schemaVersion"],
+              [1, 2].contains(try integerValue(version)),
               payload["applicationID"] as? String == "dev.hdh.MenuTidy",
-              payload["domain"] as? String == "com.apple.controlcenter",
               payload["userScope"] as? String == "currentUser",
-              payload["hostScope"] as? String == "currentHost",
               let values = payload["entries"] as? [[String: Any]], values.count <= maximumEntries else {
+            throw Failure.invalidArchive
+        }
+        let legacy = try integerValue(version) == 1
+        guard payload["domain"] as? String == (legacy ? "com.apple.controlcenter" : "menu-tidy-system-visibility-v2"),
+              payload["hostScope"] as? String == (legacy ? "currentHost" : "recordHost"),
+              !legacy || values.allSatisfy({ $0["key"] as? String == "AirDrop" }) else {
             throw Failure.invalidArchive
         }
         let entries = try values.map { value -> Entry in
@@ -188,8 +193,9 @@ public enum NativeSystemMenuBarVisibilityLedger {
     }
 
     private static func validate(_ entry: Entry) throws {
-        guard entry.key == "AirDrop" else { throw Failure.unsupportedKey }
+        guard ["AirDrop", "TextInputMenu"].contains(entry.key) else { throw Failure.unsupportedKey }
         guard UUID(uuidString: entry.hostIdentifier) != nil, try isAllowed(entry.originalValue) else { throw Failure.invalidEntry }
+        if entry.key == "TextInputMenu", entry.originalValue != shownMask { throw Failure.invalidEntry }
         switch entry.mode {
         case .original: guard entry.pending == .hide else { throw Failure.invalidEntry }
         case .hidden:

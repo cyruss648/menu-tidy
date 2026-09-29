@@ -87,6 +87,7 @@ final class MenuTidyModel: ObservableObject {
     @Published private(set) var nativeVisibilityAccessAvailable = false
     @Published private(set) var nativeVisibilityAccessMessage: String?
     @Published private(set) var nativeSystemVisibilityAccessNeeded = false
+    private var nativeSystemVisibilityAccessKey = "AirDrop"
     @Published private(set) var nativeSystemVisibilityAccessMessage: String?
     @Published private(set) var menuBarPositionAccessAvailable = false
     @Published private(set) var menuBarPositionAccessMessage: String?
@@ -4474,8 +4475,9 @@ private extension MenuTidyModel {
                 case .system(let key):
                     guard nativeSystemVisibilityStore.accessAvailable(key: key) else {
                         nativeSystemVisibilityAccessNeeded = true
-                        nativeSystemVisibilityAccessMessage = "需要允许访问 AirDrop 的菜单栏显示设置，当前选择已保留。"
-                        throw MenuTidyManagementError.positionApplication("请先点击页面上的“授权 AirDrop 显示设置”，然后重试此图标。")
+                        nativeSystemVisibilityAccessKey = key
+                        nativeSystemVisibilityAccessMessage = "需要允许访问此系统图标的显示设置，当前选择已保留。"
+                        throw MenuTidyManagementError.positionApplication("请先点击页面上的“授权系统图标显示设置”，然后重试此图标。")
                     }
                     affected = [source]
                 }
@@ -4640,13 +4642,14 @@ extension MenuTidyModel {
     func requestNativeSystemVisibilityAccess() {
         if isUIPreview { nativeSystemVisibilityAccessNeeded = false; return }
         guard !panelInteractionBusy, !preparingToTerminate, !stopping else { return }
+        let key = nativeSystemVisibilityAccessKey
         Task {
             do {
-                guard try await nativeSystemVisibilityStore.requestAccess(key: "AirDrop") else { return }
-                nativeSystemVisibilityAccessNeeded = !nativeSystemVisibilityStore.accessAvailable(key: "AirDrop")
+                guard try await nativeSystemVisibilityStore.requestAccess(key: key) else { return }
+                nativeSystemVisibilityAccessNeeded = !nativeSystemVisibilityStore.accessAvailable(key: key)
                 nativeSystemVisibilityAccessMessage = nativeSystemVisibilityAccessNeeded
-                    ? "AirDrop 显示设置尚不可访问，请重新检测授权。"
-                    : "AirDrop 显示设置已授权，可在图标旁重试连接。"
+                    ? "系统图标显示设置尚不可访问，请重新检测授权。"
+                    : "系统图标显示设置已授权，可在图标旁重试连接。"
                 if !nativeSystemVisibilityAccessNeeded { rebuildRows() }
             } catch {
                 nativeSystemVisibilityAccessNeeded = true
@@ -4659,10 +4662,12 @@ extension MenuTidyModel {
         if isUIPreview { return }
         guard usesNativeVisibility else { return }
         nativeVisibilityAccessAvailable = nativeVisibilityStore.accessAvailable
-        if nativeSystemVisibilityStore.managedKeys.contains("AirDrop"),
-           !nativeSystemVisibilityStore.accessAvailable(key: "AirDrop") {
+        if let key = nativeSystemVisibilityStore.managedKeys.sorted().first(where: {
+            !nativeSystemVisibilityStore.accessAvailable(key: $0)
+        }) {
+            nativeSystemVisibilityAccessKey = key
             nativeSystemVisibilityAccessNeeded = true
-            nativeSystemVisibilityAccessMessage = "请先授权 AirDrop 显示设置，再点击恢复图标。恢复完成前保留现有记录。"
+            nativeSystemVisibilityAccessMessage = "请先授权系统图标显示设置，再点击恢复图标。恢复完成前保留现有记录。"
         }
         nativeVisibilityAccessMessage = nativeVisibilityAccessAvailable
             ? "菜单栏显示设置文件可访问。选择图标后即可连接托盘。"

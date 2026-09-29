@@ -166,7 +166,7 @@ actor MenuBarAccessibility {
     /// This protects its system identity, never the identity of an old AX object.
     private struct NativeSystemVisibilityIdentity {
         let owner: MenuBarOwner
-        let identifier: String
+        let identifier: String?
         let key: String
     }
     private struct PositionReadBudget {
@@ -536,7 +536,8 @@ actor MenuBarAccessibility {
                 positionPersistent = nil
             }
             try Task.checkCancellation()
-            let persistent = accessibilityPersistent ?? positionPersistent
+            let inputPersistent = verifiedInputMenuPersistentID(owner: candidate.owner, element: candidate.element)
+            let persistent = inputPersistent ?? accessibilityPersistent ?? positionPersistent
             let reusableSessionID = existing?.snapshot.id.hasPrefix("session:") == true ? existing?.snapshot.id : nil
             let id = persistent ?? reusableSessionID ?? "session:\(candidate.owner.pid):\(UUID().uuidString)"
             if let identity = nativeSystemVisibilityIdentities[id], let previous = entries[id],
@@ -585,7 +586,7 @@ actor MenuBarAccessibility {
             if let identifier = candidate.identifier, Self.anchorIdentifiers.contains(identifier) {
                 Self.logger.notice("anchorMapping id=\(identifier, privacy: .public) ownIdentifier=\(own ?? "nil", privacy: .public) ownerPID=\(candidate.owner.pid) ownPID=\(ProcessInfo.processInfo.processIdentifier) ownerBundle=\(candidate.owner.bundleIdentifier ?? "nil", privacy: .public) ownBundle=\(ownBundle ?? "nil", privacy: .public) role=\(candidate.role, privacy: .public) source=\(String(describing: candidate.source), privacy: .public) frame=\(String(describing: candidate.frame), privacy: .public)")
             }
-            let snapshot = MenuBarItemSnapshot(id: id, processIdentifier: candidate.owner.pid, name: candidate.name, ownerName: candidate.owner.name,
+            let snapshot = MenuBarItemSnapshot(id: id, processIdentifier: candidate.owner.pid, name: inputPersistent != nil ? "输入法切换" : candidate.name, ownerName: candidate.owner.name,
                 bundleIdentifier: candidate.owner.bundleIdentifier, frame: candidate.frame,
                 hasReliableGeometry: hasReliableGeometry, canMove: !protected,
                 detail: systemOverflow ? "系统菜单栏溢出入口，用于恢复隐藏图标，不参与分组" :
@@ -2018,20 +2019,25 @@ actor MenuBarAccessibility {
     /// Later reads keep that identity across disappearance in this owner epoch.
     func nativeSystemVisibilityKey(id: String) -> String? {
         guard AXIsProcessTrusted(), !Task.isCancelled, let entry = entries[id],
-              entry.snapshot.ownIdentifier == nil,
-              entry.accessibilityIdentifier == "com.apple.menuextra.airdrop",
-              SystemModuleIdentity.positionKey(ownerBundleIdentifier: entry.owner.bundleIdentifier,
-                  accessibilityIdentifier: entry.accessibilityIdentifier) == "module:AirDrop",
-              MenuItemIdentity.persistentID(bundleIdentifier: entry.owner.bundleIdentifier,
-                  accessibilityIdentifier: entry.accessibilityIdentifier, occurrenceCount: 1) == id,
-              nativeSystemOwnerIsCurrent(entry.owner) else { return nil }
+              entry.snapshot.ownIdentifier == nil, nativeSystemOwnerIsCurrent(entry.owner) else { return nil }
+        let key: String
+        if entry.owner.bundleIdentifier == "com.apple.TextInputMenuAgent",
+           entry.accessibilityIdentifier == nil, id == inputMenuPersistentID {
+            key = "TextInputMenu"
+        } else if entry.accessibilityIdentifier == "com.apple.menuextra.airdrop",
+                  SystemModuleIdentity.positionKey(ownerBundleIdentifier: entry.owner.bundleIdentifier,
+                      accessibilityIdentifier: entry.accessibilityIdentifier) == "module:AirDrop",
+                  MenuItemIdentity.persistentID(bundleIdentifier: entry.owner.bundleIdentifier,
+                      accessibilityIdentifier: entry.accessibilityIdentifier, occurrenceCount: 1) == id {
+            key = "AirDrop"
+        } else { return nil }
         if let registered = nativeSystemVisibilityIdentities[id],
            sameNativeSystemOwner(registered.owner, entry.owner),
-           registered.identifier == entry.accessibilityIdentifier, registered.key == "AirDrop" {
+           registered.identifier == entry.accessibilityIdentifier, registered.key == key {
             return registered.key
         }
         let identity = NativeSystemVisibilityIdentity(owner: entry.owner,
-            identifier: "com.apple.menuextra.airdrop", key: "AirDrop")
+            identifier: entry.accessibilityIdentifier, key: key)
         guard let matches = try? nativeSystemSources(identity, id: id), matches.count == 1,
               let source = matches.first, CFEqual(source, entry.element),
               liveOwnerMatches(entry) else { return nil }
@@ -2043,9 +2049,9 @@ actor MenuBarAccessibility {
     /// host. A replacement source is tested as itself, never as the old object.
     /// Unknown structure, transport, duplicate identities and occlusion are nil.
     func inspectNativeSystemVisibility(id: String, key: String) -> Bool? {
-        guard AXIsProcessTrusted(), !Task.isCancelled, key == "AirDrop",
+        guard AXIsProcessTrusted(), !Task.isCancelled, ["AirDrop", "TextInputMenu"].contains(key),
               let entry = entries[id], let identity = nativeSystemVisibilityIdentities[id],
-              identity.key == key, identity.identifier == "com.apple.menuextra.airdrop",
+              identity.key == key,
               entry.accessibilityIdentifier == identity.identifier,
               sameNativeSystemOwner(identity.owner, entry.owner),
               nativeSystemOwnerIsCurrent(identity.owner),
@@ -2078,15 +2084,86 @@ actor MenuBarAccessibility {
     }
 
     private func nativeSystemOwnerIsCurrent(_ owner: MenuBarOwner) -> Bool {
-        guard owner.bundleIdentifier == SystemModuleIdentity.ownerBundleIdentifier,
-              let running = NSRunningApplication(processIdentifier: owner.pid), !running.isTerminated,
-              running.bundleURL?.standardizedFileURL.path == "/System/Library/CoreServices/MenuBarAgent.app" else { return false }
+        let path: String
+        switch owner.bundleIdentifier {
+        case "com.apple.MenuBarAgent": path = "/System/Library/CoreServices/MenuBarAgent.app"
+        case "com.apple.TextInputMenuAgent": path = "/System/Library/CoreServices/TextInputMenuAgent.app"
+        default: return false
+        }
+        guard let running = NSRunningApplication(processIdentifier: owner.pid), !running.isTerminated,
+              running.bundleURL?.standardizedFileURL.path == path else { return false }
         // Query the live application identity, not the removed item's AX object.
         return liveOwnerMatches(element: AXUIElementCreateApplication(owner.pid), owner: owner)
     }
 
+    private var inputMenuPersistentID: String {
+        "system-input-menu:com.apple.TextInputMenuAgent:v1"
+    }
+
+    private func verifiedInputMenuPersistentID(owner: MenuBarOwner, element: AXUIElement) -> String? {
+        guard owner.bundleIdentifier == "com.apple.TextInputMenuAgent",
+              let sources = try? inputMenuSources(owner: owner, id: inputMenuPersistentID),
+              sources.count == 1, let source = sources.first, CFEqual(source, element) else { return nil }
+        return inputMenuPersistentID
+    }
+
+    /// The input host has no AX identifier. Its exact system bundle, process
+    /// epoch and twice-enumerated singleton extras root define this identity.
+    /// Failure or unsupported reads never count as proof of disappearance.
+    private func inputMenuSources(owner: MenuBarOwner, id: String) throws -> [AXUIElement] {
+        guard AXIsProcessTrusted(), owner.bundleIdentifier == "com.apple.TextInputMenuAgent",
+              nativeSystemOwnerIsCurrent(owner) else {
+            throw MenuBarPositionBindingError(id: id, reason: .ownerChanged)
+        }
+        var budget = PositionReadBudget()
+        let app = AXUIElementCreateApplication(owner.pid)
+        func census() throws -> (root: AXUIElement?, items: [AXUIElement]) {
+            let extras = try positionAttribute(app, kAXExtrasMenuBarAttribute, id: id, budget: &budget)
+            if extras.error == .noValue { return (nil, []) }
+            guard extras.error == .success, let root = element(extras.value),
+                  liveOwnerMatches(element: root, owner: owner),
+                  try positionAttribute(root, kAXRoleAttribute, id: id, budget: &budget).value as? String == kAXMenuBarRole else {
+                throw MenuBarPositionBindingError(id: id, reason: .incompleteSource)
+            }
+            let children = try positionElementArray(root, attribute: kAXChildrenAttribute, id: id, budget: &budget)
+            guard children.count <= 1 else { throw MenuBarPositionBindingError(id: id, reason: .ambiguousSource) }
+            for child in children {
+                guard liveOwnerMatches(element: child, owner: owner),
+                      try positionAttribute(child, kAXRoleAttribute, id: id, budget: &budget).value as? String == kAXMenuBarItemRole else {
+                    throw MenuBarPositionBindingError(id: id, reason: .unsupportedSource)
+                }
+                let identifier = try positionAttribute(child, kAXIdentifierAttribute, id: id, budget: &budget)
+                guard identifier.error == .noValue || identifier.error == .attributeUnsupported else {
+                    throw MenuBarPositionBindingError(id: id, reason: .identityChanged)
+                }
+            }
+            return (root, children)
+        }
+        let first = try census()
+        let second = try census()
+        let rootsMatch: Bool
+        if let lhs = first.root, let rhs = second.root { rootsMatch = CFEqual(lhs, rhs) }
+        else { rootsMatch = first.root == nil && second.root == nil }
+        var itemsMatch = first.items.count == second.items.count
+        for (lhs, rhs) in zip(first.items, second.items) {
+            if !CFEqual(lhs, rhs) { itemsMatch = false }
+        }
+        guard rootsMatch, itemsMatch,
+              nativeSystemOwnerIsCurrent(owner), AXIsProcessTrusted(), !Task.isCancelled else {
+            throw MenuBarPositionBindingError(id: id, reason: .identityChanged)
+        }
+        return second.items
+    }
+
     private func nativeSystemSources(_ identity: NativeSystemVisibilityIdentity, id: String) throws -> [AXUIElement] {
+        if identity.key == "TextInputMenu" {
+            guard identity.identifier == nil, id == inputMenuPersistentID else {
+                throw MenuBarPositionBindingError(id: id, reason: .identityChanged)
+            }
+            return try inputMenuSources(owner: identity.owner, id: id)
+        }
         guard AXIsProcessTrusted(), !Task.isCancelled, identity.key == "AirDrop",
+              identity.owner.bundleIdentifier == "com.apple.MenuBarAgent",
               identity.identifier == "com.apple.menuextra.airdrop",
               nativeSystemOwnerIsCurrent(identity.owner) else {
             throw MenuBarPositionBindingError(id: id, reason: .identityChanged)
@@ -2137,8 +2214,14 @@ actor MenuBarAccessibility {
                mirrorFrame(entry.element, budget: &budget) == rect {
                 let second = Self.copyElementAtPositionOnMainThread(point)
                 let identifier = mirrorAttribute(entry.element, kAXIdentifierAttribute, budget: &budget)
+                let identifierMatches: Bool
+                if entry.owner.bundleIdentifier == "com.apple.TextInputMenuAgent", entry.accessibilityIdentifier == nil {
+                    identifierMatches = identifier.error == .noValue || identifier.error == .attributeUnsupported
+                } else {
+                    identifierMatches = identifier.error == .success && identifier.value as? String == entry.accessibilityIdentifier
+                }
                 if second.error == .success, second.element.map({ CFEqual($0, entry.element) }) == true,
-                   identifier.error == .success, identifier.value as? String == entry.accessibilityIdentifier,
+                   identifierMatches,
                    mirrorFrame(entry.element, budget: &budget) == rect, liveOwnerMatches(entry), budget.isValid {
                     return true
                 }
@@ -4145,7 +4228,7 @@ actor MenuBarAccessibility {
                 continue
             }
             if role == kAXMenuRole || role == kAXMenuItemRole { continue }
-            if role == kAXMenuBarItemRole || role == kAXButtonRole {
+            if role == kAXMenuBarItemRole || role == kAXButtonRole || (role == kAXMenuButtonRole && pid != owner.pid) {
                 if pid == owner.pid { items.append(next.node) }
                 continue
             }

@@ -18,6 +18,41 @@ final class NativeSystemMenuBarVisibilityLedgerTests: XCTestCase {
         return try PropertyListSerialization.data(fromPropertyList: value, format: .binary, options: 0)
     }
 
+    func testInputMenuLifecycleAndIndependentAirDropReceipt() throws {
+        let input = Ledger.Entry(key: "TextInputMenu", hostIdentifier: host, originalValue: 2, mode: .original, pending: .hide)
+        let hidden = input.completingPending()!
+        XCTAssertEqual(try Ledger.recovery(for: input, current: 8), .completed(hidden))
+        let revealing = hidden.preparing(.reveal)
+        let revealed = revealing.completingPending()!
+        XCTAssertEqual(try Ledger.recovery(for: revealing, current: 2), .completed(revealed))
+        XCTAssertEqual(try Ledger.recovery(for: revealed.preparing(.rehide), current: 8), .completed(hidden))
+        XCTAssertEqual(try Ledger.recovery(for: hidden.preparing(.restore), current: 2), .completed(nil))
+        let both = [entry(.hidden, original: 0x42), hidden]
+        XCTAssertEqual(try Ledger.decode(Ledger.encode(both)), both)
+        XCTAssertEqual(try Ledger.discardingKnownUnwritten(entries: [both[0], input], known: [input]), [both[0]])
+    }
+
+    func testInputMenuCannotClaimIntegerBitsOrPreexistingHiddenState() {
+        for original: Int64 in [0, 8, 10, 0x42, 0x48] {
+            XCTAssertThrowsError(try Ledger.encode([Ledger.Entry(key: "TextInputMenu", hostIdentifier: host,
+                originalValue: original, mode: .hidden)]))
+        }
+    }
+
+    func testLegacyAirDropReceiptRemainsRecoverableButCannotContainInputMenu() throws {
+        let data = try alteredArchive {
+            $0["schemaVersion"] = 1
+            $0["domain"] = "com.apple.controlcenter"
+            $0["hostScope"] = "currentHost"
+        }
+        XCTAssertEqual(try Ledger.decode(data), [entry(.hidden)])
+        var archive = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        var records = try XCTUnwrap(archive["entries"] as? [[String: Any]])
+        records[0]["key"] = "TextInputMenu"
+        archive["entries"] = records
+        XCTAssertThrowsError(try Ledger.decode(PropertyListSerialization.data(fromPropertyList: archive, format: .binary, options: 0)))
+    }
+
     func testAcceptsOnlyNonnegativeIntegerNumbers() throws {
         for value: Int64 in [0, 2, 8, 0x42, Int64.max] {
             XCTAssertEqual(try Ledger.integerValue(NSNumber(value: value)), value)

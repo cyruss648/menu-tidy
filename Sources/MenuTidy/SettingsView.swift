@@ -1003,11 +1003,11 @@ struct SettingsView: View {
 
     private var nativeSystemVisibilityAccessCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("允许管理 AirDrop 图标").font(.system(size: 13, weight: .semibold))
-            Text("AirDrop 使用单独的系统显示设置。只需在选择窗口中授权已定位的设置文件，完成后可重试连接。")
+            Text("允许管理系统图标").font(.system(size: 13, weight: .semibold))
+            Text("隔空投送和输入法切换图标使用各自的系统显示设置。只需在选择窗口中授权已定位的设置文件，完成后可重试连接。")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("授权 AirDrop 显示设置…") { model.requestNativeSystemVisibilityAccess() }
+            Button("授权系统图标显示设置…") { model.requestNativeSystemVisibilityAccess() }
                 .disabled(groupingControlsDisabled)
             if let message = model.nativeSystemVisibilityAccessMessage {
                 issueNotice(message, symbol: "info.circle", tint: .orange)
