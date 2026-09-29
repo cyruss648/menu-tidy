@@ -536,8 +536,19 @@ actor MenuBarAccessibility {
                 positionPersistent = nil
             }
             try Task.checkCancellation()
+            var systemPersistent: String?
+            if candidate.owner.bundleIdentifier == "com.apple.MenuBarAgent",
+               candidate.identifier == "com.apple.menuextra.airdrop",
+               let systemID = MenuItemIdentity.persistentID(bundleIdentifier: candidate.owner.bundleIdentifier,
+                   accessibilityIdentifier: candidate.identifier, occurrenceCount: 1) {
+                let identity = NativeSystemVisibilityIdentity(owner: candidate.owner, identifier: candidate.identifier, key: "AirDrop")
+                if let sources = try? nativeSystemSources(identity, id: systemID), let source = sources.first {
+                    guard CFEqual(source, candidate.element) else { continue }
+                    systemPersistent = systemID
+                }
+            }
             let inputPersistent = verifiedInputMenuPersistentID(owner: candidate.owner, element: candidate.element)
-            let persistent = inputPersistent ?? accessibilityPersistent ?? positionPersistent
+            let persistent = systemPersistent ?? inputPersistent ?? accessibilityPersistent ?? positionPersistent
             let reusableSessionID = existing?.snapshot.id.hasPrefix("session:") == true ? existing?.snapshot.id : nil
             let id = persistent ?? reusableSessionID ?? "session:\(candidate.owner.pid):\(UUID().uuidString)"
             if let identity = nativeSystemVisibilityIdentities[id], let previous = entries[id],
@@ -2189,13 +2200,42 @@ actor MenuBarAccessibility {
             }
         }
         let matches = observed.filter { $0.identifier == identity.identifier }.map(\.element)
-        guard matches.count <= 1 else {
+        if matches.isEmpty {
+            guard nativeSystemOwnerIsCurrent(identity.owner), AXIsProcessTrusted(), !Task.isCancelled else {
+                throw MenuBarPositionBindingError(id: id, reason: .ownerChanged)
+            }
+            return []
+        }
+        // The system module has one canonical extras source and may project
+        // another source on each attached display. Only the canonical source
+        // drives tray actions. A duplicate within one display remains unsafe.
+        let canonicalItems = try systemPositionSourceItems(owner: identity.owner, id: id, includeWindows: false)
+        var canonical: [AXUIElement] = []
+        for item in canonicalItems {
+            if try identifier(of: item) == identity.identifier { canonical.append(item) }
+        }
+        guard canonical.count == 1, let source = canonical.first else {
             throw MenuBarPositionBindingError(id: id, reason: .ambiguousSource)
         }
-        guard AXIsProcessTrusted(), !Task.isCancelled, nativeSystemOwnerIsCurrent(identity.owner) else {
+        var containsSource = false
+        var occupiedBands: Set<Int> = []
+        for match in matches {
+            if CFEqual(match, source) { containsSource = true }
+            if matches.count > 1 {
+                guard let rect = frame(match), rect.width > 0, rect.height > 0, rect.height <= 64,
+                      let band = menuBands.firstIndex(where: {
+                          rect.minY >= $0.minY - 1 && rect.maxY <= $0.maxY + 1 &&
+                              $0.contains(CGPoint(x: rect.midX, y: rect.midY))
+                      }),
+                      occupiedBands.insert(band).inserted else {
+                    throw MenuBarPositionBindingError(id: id, reason: .ambiguousSource)
+                }
+            }
+        }
+        guard containsSource, AXIsProcessTrusted(), !Task.isCancelled, nativeSystemOwnerIsCurrent(identity.owner) else {
             throw MenuBarPositionBindingError(id: id, reason: .ownerChanged)
         }
-        return matches
+        return [source]
     }
 
     /// The caller has just established unique protected identity from a full
@@ -2465,7 +2505,7 @@ actor MenuBarAccessibility {
         if !sourceVerified {
             guard verifiedSystemModuleSource(entry) else { return nil }
         }
-        guard let band = menuBands.first else { return nil }
+        guard !menuBands.isEmpty else { return nil }
         do {
             var budget = PositionReadBudget()
             let id = entry.snapshot.id
@@ -2478,7 +2518,10 @@ actor MenuBarAccessibility {
                 guard role.error == .success, role.value as? String == kAXWindowRole,
                       liveOwnerMatches(element: window, owner: entry.owner), let windowFrame = frame(window),
                       windowFrame.width > 0, windowFrame.height > 0,
-                      windowFrame.minY >= band.minY - 1, windowFrame.maxY <= band.maxY + 1 else { continue }
+                      let band = menuBands.first(where: {
+                          windowFrame.minY >= $0.minY - 1 && windowFrame.maxY <= $0.maxY + 1 &&
+                              $0.contains(CGPoint(x: windowFrame.midX, y: windowFrame.midY))
+                      }) else { continue }
                 let containers = try positionElementArray(window, attribute: kAXChildrenAttribute, id: id, budget: &budget)
                 for container in containers {
                     var pending: [(node: AXUIElement, path: [AXUIElement])] = [(container, [container])]
@@ -2586,7 +2629,7 @@ actor MenuBarAccessibility {
         let role = copyAttribute(hit, kAXRoleAttribute)
         guard role.error == .success, let hitRole = role.value as? String,
               hitRole == kAXButtonRole || hitRole == kAXMenuBarItemRole,
-              let band = menuBands.first, band.contains(point), !CFEqual(hit, source.element),
+              let band = menuBands.first(where: { $0.contains(point) }), !CFEqual(hit, source.element),
               source.hostPresentation?.path.contains(where: { CFEqual($0, hit) }) != true else { return false }
         let candidates = entries.values.filter { other in
             guard !CFEqual(other.element, source.element), let host = other.hostPresentation,
@@ -2636,7 +2679,7 @@ actor MenuBarAccessibility {
     private func verifiedMainMenuBarWindowOccupies(point: CGPoint, hitPath: [AXUIElement],
         excluding source: Entry, callerVerifiedTransition: Bool) -> Bool {
         guard AXIsProcessTrusted(), !Task.isCancelled, !hitPath.isEmpty, hitPath.count <= 8,
-              let window = hitPath.last, let band = menuBands.first, band.contains(point) else { return false }
+              let window = hitPath.last, let band = menuBands.first(where: { $0.contains(point) }) else { return false }
         var windowPID: pid_t = 0
         let pidResult = AXUIElementGetPid(window, &windowPID)
         let applications = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").filter {
@@ -2743,7 +2786,7 @@ actor MenuBarAccessibility {
             return positionHiddenInspectionResult(nil, stage: "source-owner")
         }
         guard let sourceFrame = frame(entry.element), sourceFrame.width > 0, sourceFrame.height > 0,
-              let band = menuBands.first,
+              let band = menuBands.first(where: { $0.contains(CGPoint(x: sourceFrame.midX, y: sourceFrame.midY)) }),
               sourceFrame.minY >= band.minY - 1, sourceFrame.maxY <= band.maxY + 1,
               sourceFrame.width <= band.width else {
             return positionHiddenInspectionResult(nil, stage: "source-frame")
@@ -4111,7 +4154,7 @@ actor MenuBarAccessibility {
     /// Census the real system host, including its menu-bar windows. Several
     /// distinct modules are expected; exact identifier uniqueness is checked
     /// afterwards. Remote application leaves never become system-owned items.
-    private func systemPositionSourceItems(owner: MenuBarOwner, id: String) throws -> [AXUIElement] {
+    private func systemPositionSourceItems(owner: MenuBarOwner, id: String, includeWindows: Bool = true) throws -> [AXUIElement] {
         guard owner.bundleIdentifier == SystemModuleIdentity.ownerBundleIdentifier else {
             Self.logger.notice("systemPositionCensus complete=false stage=owner-bundle")
             throw MenuBarPositionBindingError(id: id, reason: .unsupportedSource)
@@ -4134,7 +4177,7 @@ actor MenuBarAccessibility {
         let windows = try positionElementArray(application, attribute: kAXWindowsAttribute, id: id, budget: &budget)
         guard windows.count <= 32 else { throw MenuBarPositionBindingError(id: id, reason: .incompleteSource) }
         var pending: [(node: AXUIElement, depth: Int, ancestors: [AXUIElement], rootRole: String?)] =
-            windows.map { ($0, 0, [], kAXWindowRole) }
+            includeWindows ? windows.map { ($0, 0, [], kAXWindowRole) } : []
         if let extras { pending.append((extras, 0, [], kAXMenuBarRole)) }
         var visited: [AXUIElement] = []
         var items: [AXUIElement] = []

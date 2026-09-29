@@ -2817,7 +2817,7 @@ final class MenuTidyModel: ObservableObject {
             MenuBarOwner(pid: $0.processIdentifier, bundleIdentifier: $0.bundleIdentifier,
                          name: $0.localizedName ?? "应用 \($0.processIdentifier)", launchTime: MenuBarProcessIdentity.launchTime(for: $0) ?? 0)
         }
-        let bands = NSScreen.screens.prefix(1).compactMap { screen -> CGRect? in
+        let bands = NSScreen.screens.compactMap { screen -> CGRect? in
             guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
             let bounds = CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
             return CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: max(28, screen.safeAreaInsets.top, NSStatusBar.system.thickness))
