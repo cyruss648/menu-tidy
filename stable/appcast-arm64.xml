@@ -6,18 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.6.2</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.2</link>
-      <pubDate>Wed, 30 Sep 2026 05:56:49 +0000</pubDate>
-      <sparkle:version>58</sparkle:version>
-      <sparkle:shortVersionString>0.6.2</sparkle:shortVersionString>
+      <title>Menu Tidy 0.6.3</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.3</link>
+      <pubDate>Wed, 30 Sep 2026 08:52:27 +0000</pubDate>
+      <sparkle:version>59</sparkle:version>
+      <sparkle:shortVersionString>0.6.3</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="plain-text">## [0.6.2] - 2026-09-30
+      <description sparkle:format="plain-text">## [0.6.3] - 2026-09-30
 
-正式版构建号为 58，可通过应用内更新升级，保留现有分类与偏好。
+正式版构建号为 59，可通过应用内更新升级，保留现有分类与偏好。
 
-- 软件更新卡片增加应用内历史更新记录、GitHub 发布及问题反馈入口；历史记录随安装包附带，支持离线阅读和按版本展开。
+- 修复 WPS Office Service 等辅助进程图标的显示记录匹配：支持系统明确记录的主应用与辅助进程归属，仅在唯一记录且所有图标归属一致时修改开关；继续拒绝混合归属和歧义记录。
+- 待关联草稿增加“一键删除草稿”和“撤销删除”。仅清理当前待关联草稿，保留已保存分类与当前图标显示；撤销不覆盖删除后产生的新选择，撤销记录保留至本次应用退出。
+- 修复已应用选择重复保存成会话草稿、重启后大量回到待关联列表的问题。分类确认成功后移除重复会话记录；旧版选择确认成功时补齐持久分类，已有的新选择优先。
+- 支持 Snow Shot 等真实应用标识中的下划线，修复图标能隐藏却无法持久保存分类的问题。身份确认仍依赖实际图标及精确系统记录，不按名称猜测。
+
+验证：本地完整检查通过 481 项 Swift 测试与 80 项 Python 测试；macOS 27 Apple Silicon 实测 WPS 与 Snow Shot 分类确认、草稿批量删除及撤销、清理后的重启和偏好保留。旧版 macOS、Intel 桌面交互及所有第三方应用兼容性不在本次实机验证范围内。
 
 ### 软件内更新与首次安装
 
@@ -29,8 +34,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.6.2-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.6.2-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.6.3-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.6.3-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -53,12 +58,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.2/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.2/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.2/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.3/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.3/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.3/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.2/Menu-Tidy-0.6.2-macos-arm64.zip" length="3640762" type="application/octet-stream" sparkle:edSignature="b4DUtsTCV94q4O5rVhJiWM4zAHP+LItnNOfiilTTw499nPdKTmLemuTJbaw7LA6rO2eS6LkcN1Tp0BlbiJF5Dw=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.3/Menu-Tidy-0.6.3-macos-arm64.zip" length="3651793" type="application/octet-stream" sparkle:edSignature="+F+v3VyejPzZ8FIFQfZciEs552NxH7fCHtn6txtNdzB8/+GhGizJJ2EUd8hfSkpHIBFkuG8XBNhsDn6M9CZgCA=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: Zja3awdy8vW8CjQs95F/Hm+cpd2qTJ5F9P0HZPip6k7N6CDFNtytS4/c4o3eaPtya9iLbN0cF1jDYT/1ud5aAw==
-length: 5218
+edSignature: S/gOAmen8D1lt6ZcyY3KL/JYFE3HSnEHagVIyJS2MX8nhZapOxbym4QFRC3opKHaru5FqA2siBXU4hl3iA4tCA==
+length: 6264
 -->
