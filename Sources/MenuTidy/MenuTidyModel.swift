@@ -18,6 +18,13 @@ struct ManagedItemRow: Identifiable {
     let detail: String
     let isPending: Bool
 
+    func hasSamePresentation(as other: ManagedItemRow) -> Bool {
+        id == other.id && name == other.name && ownerName == other.ownerName &&
+            bundleIdentifier == other.bundleIdentifier && icon === other.icon && group == other.group &&
+            isAvailable == other.isAvailable && canMove == other.canMove && detail == other.detail &&
+            isPending == other.isPending
+    }
+
     func replacingGroup(_ group: ItemVisibility) -> ManagedItemRow {
         ManagedItemRow(id: id, name: name, ownerName: ownerName, bundleIdentifier: bundleIdentifier,
             icon: icon, group: group, isAvailable: isAvailable, canMove: canMove, detail: detail, isPending: isPending)
@@ -51,10 +58,10 @@ private enum MenuTidyManagementError: LocalizedError {
 final class MenuTidyModel: ObservableObject {
     private static let diagnosticLogger = Logger(subsystem: "dev.hdh.MenuTidy", category: "Management")
     private static let ownAnchorIdentifiers = ["menu-tidy-toggle", "menu-tidy-divider", "menu-tidy-always-divider"]
-    @Published private(set) var isCollapsed = false { didSet { if oldValue != isCollapsed { cancelPassiveIconCapture() } } }
-    @Published private(set) var isArranging = false { didSet { if isArranging { cancelPassiveIconCapture() } } }
-    @Published var autoCollapseEnabled: Bool { didSet { defaults.set(autoCollapseEnabled, forKey: "autoCollapse"); resetIdleTime() } }
-    @Published var autoCollapseDelay: Double { didSet { defaults.set(autoCollapseDelay, forKey: "autoCollapseDelay"); resetIdleTime() } }
+    @Published private(set) var isCollapsed = false { didSet { if oldValue != isCollapsed { cancelPassiveIconCapture(); requestPassiveCaptureAfterEvent() }; rescheduleMaintenanceTimer() } }
+    @Published private(set) var isArranging = false { didSet { if isArranging { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
+    @Published var autoCollapseEnabled: Bool { didSet { defaults.set(autoCollapseEnabled, forKey: "autoCollapse"); resetIdleTime(); rescheduleMaintenanceTimer() } }
+    @Published var autoCollapseDelay: Double { didSet { defaults.set(autoCollapseDelay, forKey: "autoCollapseDelay"); resetIdleTime(); rescheduleMaintenanceTimer() } }
     @Published var startCollapsed: Bool { didSet { defaults.set(startCollapsed, forKey: "startCollapsed") } }
     @Published var shortcutEnabled: Bool { didSet { defaults.set(shortcutEnabled, forKey: "shortcutEnabled"); configureShortcut() } }
     @Published private(set) var shortcutIssue: String?
@@ -62,12 +69,20 @@ final class MenuTidyModel: ObservableObject {
     @Published private(set) var environmentIssue: String?
     @Published private(set) var launchAtLoginEnabled = false
     @Published private(set) var loginIssue: String?
-    @Published private(set) var hasCompletedSetup: Bool
-    @Published private(set) var items: [ManagedItemRow] = []
-    @Published private(set) var accessibilityGranted = false { didSet { if !accessibilityGranted { cancelPassiveIconCapture() } } }
-    @Published private(set) var screenCaptureGranted = CGPreflightScreenCaptureAccess() { didSet { if !screenCaptureGranted { cancelPassiveIconCapture() } } }
-    @Published private(set) var isPanelPresented = false { didSet { if isPanelPresented { cancelPassiveIconCapture() } } }
-    @Published private(set) var isActivatingPanelItem = false { didSet { if isActivatingPanelItem { cancelPassiveIconCapture() } } }
+    @Published private(set) var hasCompletedSetup: Bool { didSet { rescheduleMaintenanceTimer() } }
+    @Published private(set) var items: [ManagedItemRow] = [] {
+        didSet { itemsByID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) }
+    }
+    @Published private(set) var accessibilityGranted = false { didSet { if !accessibilityGranted { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
+    @Published private(set) var screenCaptureGranted = CGPreflightScreenCaptureAccess() {
+        didSet {
+            if !screenCaptureGranted { cancelPassiveIconCapture() }
+            else if !oldValue { requestPassiveCaptureAfterEvent() }
+            rescheduleMaintenanceTimer()
+        }
+    }
+    @Published private(set) var isPanelPresented = false { didSet { if isPanelPresented { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
+    @Published private(set) var isActivatingPanelItem = false { didSet { if isActivatingPanelItem { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
     @Published private(set) var panelItemProgress: String?
     @Published private(set) var panelError: String?
     @Published private(set) var panelActivationError: String?
@@ -92,22 +107,23 @@ final class MenuTidyModel: ObservableObject {
     @Published private(set) var menuBarPositionAccessAvailable = false
     @Published private(set) var menuBarPositionAccessMessage: String?
     @Published private(set) var positionRecoveryMessage: String?
-    @Published private(set) var isRecoveringPositions = false
-    @Published private(set) var isRefreshing = false { didSet { if isRefreshing { cancelPassiveIconCapture() } } }
-    @Published private(set) var isApplying = false { didSet { if isApplying { cancelPassiveIconCapture() } } }
+    @Published private(set) var isRecoveringPositions = false { didSet { rescheduleMaintenanceTimer() } }
+    @Published private(set) var isRefreshing = false { didSet { if isRefreshing { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
+    @Published private(set) var isApplying = false { didSet { if isApplying { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
     @Published private(set) var managementMessage: String?
     @Published private(set) var managementError: String?
     @Published private(set) var itemApplicationIssues: [String: String] = [:]
     @Published private var operationState = ManagementOperationState()
-    @Published private(set) var temporarilyRevealingAll = false
+    @Published private(set) var temporarilyRevealingAll = false { didSet { rescheduleMaintenanceTimer() } }
     @Published private(set) var hasPendingChanges = false
     @Published private(set) var actionablePendingCount = 0
     @Published private(set) var offlineDrafts: [PendingDraftRecord] = []
     @Published private(set) var discardedOfflineDrafts: [PendingDraftRecord] = []
     @Published private(set) var draftPersistenceIssue: String?
-    var settingsVisible = false { didSet { resetIdleTime() } }
-    var contextMenuVisible = false { didSet { resetIdleTime(); if contextMenuVisible { cancelPassiveIconCapture() } } }
+    var settingsVisible = false { didSet { resetIdleTime(); rescheduleMaintenanceTimer() } }
+    var contextMenuVisible = false { didSet { resetIdleTime(); if contextMenuVisible { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
     var onShowSettings: (() -> Void)?
+    var onMemoryPressure: (() -> Void)?
 
     private let defaults: UserDefaults
     private var state = VisibilityState()
@@ -160,15 +176,21 @@ final class MenuTidyModel: ObservableObject {
     /// Explicit image refresh temporarily changes managed weights without
     /// changing the accepted classification or its original evidence.
     private var isRefreshingManagedIcons = false
-    private var needsPositionRevalidation = false
+    private var needsPositionRevalidation = false { didSet { rescheduleMaintenanceTimer() } }
     private var positionRecoveryGeneration = 0
     var usesPositionHiding: Bool {
         ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 && !demoMode && !usesNativeVisibility
     }
     private let shortcut = GlobalShortcut()
     private var timer: Timer?
+    private var started = false
+    private var maintenanceFireAt: TimeInterval?
+    private var lastAutoCollapseCheck = ProcessInfo.processInfo.systemUptime
+    private var lastRecoveryCheck = ProcessInfo.processInfo.systemUptime
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
     private var lastInteraction = ProcessInfo.processInfo.systemUptime
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var applicationObservers: [NSObjectProtocol] = []
     private let demoMode = CommandLine.arguments.contains("--demo-items")
     let isUIPreview = CommandLine.arguments.contains("--preview-ui")
     private let access = MenuBarAccessibility()
@@ -176,7 +198,8 @@ final class MenuTidyModel: ObservableObject {
     private var drafts = ItemRuleBook()
     private var pendingDrafts = PendingDraftStore()
     private var rowDraftIDs: [String: UUID] = [:]
-    private var applicationIcons: [String: NSImage] = [:]
+    private var applicationIcons = BoundedValueCache<String, NSImage>(countLimit: 64, costLimit: 1_048_576)
+    private var itemsByID: [String: ManagedItemRow] = [:]
     private var snapshots: [MenuBarItemSnapshot] = []
     private var actualGroups: [String: ItemVisibility] = [:]
     private var lastKnownObservedGroups = ObservedItemGroupHistory()
@@ -199,15 +222,15 @@ final class MenuTidyModel: ObservableObject {
     private var trayPlacementTask: Task<Void, Never>?
     private var panelIsPreparingNativeAction = false
     private var trayConnectionAttempts: [String: ObservedItemGroupHistory.Identity] = [:]
-    private var trayDiscoveryNeeded = false
+    private var trayDiscoveryNeeded = false { didSet { rescheduleMaintenanceTimer() } }
     private var passiveIconCaptureTask: Task<Void, Never>?
     private var passiveIconCaptureID: UUID?
-    private var lastPassiveIconCaptureAttempt = -Double.infinity
+    private var passiveCaptureSchedule = PassiveIconCaptureSchedule()
     private var passiveOverflowRebindAttempts = 0
     private var lastPassiveOverflowRebind = -Double.infinity
     private var passiveOverflowRebindNeedsRetry = false
     private var iconImagePreparationIssues: [String] = []
-    private var preparingToTerminate = false
+    private var preparingToTerminate = false { didSet { rescheduleMaintenanceTimer() } }
     var isPanelItemOperationRunning: Bool { panelActivationTask != nil }
     var panelInteractionBusy: Bool {
         isRecoveringPositions || isApplying || isRefreshing || isArranging || isActivatingPanelItem || preparingToTerminate
@@ -223,7 +246,7 @@ final class MenuTidyModel: ObservableObject {
 
     func trayPlacementIsPending(id: String) -> Bool {
         if trayPlacementQueue.desiredGroup(id: id) != nil || (isApplying && trayReconnectIDs.contains(id)) { return true }
-        guard usesNativeVisibility, let bundle = items.first(where: { $0.id == id })?.bundleIdentifier,
+        guard usesNativeVisibility, let bundle = itemsByID[id]?.bundleIdentifier,
               nativeTrayChoices.group(bundle: bundle) != nil else { return false }
         let queuedIDs = Set(trayPlacementQueue.pendingIDs + [trayPlacementQueue.active?.id].compactMap { $0 })
         return items.contains { queuedIDs.contains($0.id) && $0.bundleIdentifier == bundle }
@@ -232,10 +255,10 @@ final class MenuTidyModel: ObservableObject {
     func trayPlacementGroup(id: String) -> ItemVisibility {
         // Native application choices own every current sibling, including one
         // whose earlier immutable request is still finishing.
-        if usesNativeVisibility, let bundle = items.first(where: { $0.id == id })?.bundleIdentifier,
+        if usesNativeVisibility, let bundle = itemsByID[id]?.bundleIdentifier,
            let group = nativeTrayChoices.group(bundle: bundle) { return group }
         return trayPlacementQueue.desiredGroup(id: id) ??
-            items.first(where: { $0.id == id })?.group ?? rules.rule(for: id)?.visibility ?? .visible
+            itemsByID[id]?.group ?? rules.rule(for: id)?.visibility ?? .visible
     }
 
     func trayPlacementIsInTray(id: String) -> Bool { trayPlacementGroup(id: id) != .visible }
@@ -244,7 +267,7 @@ final class MenuTidyModel: ObservableObject {
 
     func trayPlacementMessage(id: String) -> String? {
         if let error = trayPlacementFailure(id: id) { return error }
-        if items.first(where: { $0.id == id })?.isPending == true && !trayPlacementIsPending(id: id) {
+        if itemsByID[id]?.isPending == true && !trayPlacementIsPending(id: id) {
             return "此图标尚未连接到当前托盘，点击重试即可重新确认。"
         }
         return nil
@@ -588,6 +611,7 @@ final class MenuTidyModel: ObservableObject {
 
     func start() {
         guard !isUIPreview else { return }
+        started = true
         controlRouter.start(model: self)
         statusBar = StatusBarController(model: self, demoMode: demoMode)
         shortcut.onPress = { [weak self] in self?.toggleVisibility() }
@@ -624,21 +648,16 @@ final class MenuTidyModel: ObservableObject {
         } else if accessibilityGranted {
             refreshMenuItems(collapseWhenFinished: startCollapsed && hasCompletedSetup && !demoMode)
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        rescheduleMaintenanceTimer()
+        let pressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        pressure.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
-                self?.checkAutoCollapse()
-                guard let self else { return }
-                if self.needsPositionRevalidation { self.recoverVisibility() }
-                if (self.settingsVisible || self.isArranging) && ProcessInfo.processInfo.systemUptime - self.lastPermissionCheck > 2 {
-                    self.refreshPermissions()
-                }
-                self.schedulePassiveIconCapture()
-                if self.trayDiscoveryNeeded && !self.panelInteractionBusy {
-                    self.trayDiscoveryNeeded = false
-                    self.refreshMenuItems()
-                }
+                self?.applicationIcons.removeAll()
+                self?.onMemoryPressure?()
             }
         }
+        pressure.resume()
+        memoryPressureSource = pressure
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
@@ -647,15 +666,82 @@ final class MenuTidyModel: ObservableObject {
                     self?.pruneObservedGroupHistory()
                     self?.rebuildRows()
                     self?.refreshEnvironment()
+                    self?.requestPassiveCaptureAfterEvent()
                     self?.trayDiscoveryNeeded = true
                 }
             })
         }
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.recoverVisibility() }
+                MainActor.assumeIsolated { self?.requestPassiveCaptureAfterEvent(); self?.recoverVisibility() }
             })
         }
+        applicationObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.requestPassiveCaptureAfterEvent() }
+            })
+    }
+
+    private var shouldMonitorAutoCollapse: Bool {
+        autoCollapseEnabled && (isPanelPresented || !isCollapsed) && !isArranging && hasCompletedSetup &&
+            !(settingsVisible && !isPanelPresented) && !contextMenuVisible && !panelInteractionBusy &&
+            !temporarilyRevealingAll
+    }
+
+    private func rescheduleMaintenanceTimer() {
+        guard started, !stopping, !preparingToTerminate else {
+            timer?.invalidate(); timer = nil; maintenanceFireAt = nil
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        let passiveDue = canSchedulePassiveIconCapture && passiveIconCaptureTask == nil
+            ? passiveCaptureSchedule.nextAttemptAt : nil
+        let recoveryDue = needsPositionRevalidation || (trayDiscoveryNeeded && !panelInteractionBusy)
+            ? lastRecoveryCheck + BackgroundMaintenanceSchedule.interactionInterval : nil
+        guard let delay = BackgroundMaintenanceSchedule.nextDelay(at: now,
+            autoCollapseDue: shouldMonitorAutoCollapse ? lastAutoCollapseCheck + BackgroundMaintenanceSchedule.interactionInterval : nil,
+            permissionDue: settingsVisible || isArranging ? lastPermissionCheck + BackgroundMaintenanceSchedule.permissionInterval : nil,
+            passiveCaptureDue: passiveDue, recoveryDue: recoveryDue) else {
+            timer?.invalidate(); timer = nil; maintenanceFireAt = nil
+            return
+        }
+        let fireAt = now + delay
+        if let maintenanceFireAt, timer?.isValid == true, abs(maintenanceFireAt - fireAt) < 0.01 { return }
+        timer?.invalidate()
+        let next = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.runMaintenance() }
+        }
+        next.tolerance = BackgroundMaintenanceSchedule.tolerance(for: delay)
+        timer = next
+        maintenanceFireAt = fireAt
+        RunLoop.main.add(next, forMode: .common)
+    }
+
+    private func runMaintenance() {
+        timer = nil
+        maintenanceFireAt = nil
+        guard started, !stopping, !preparingToTerminate else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if shouldMonitorAutoCollapse && now >= lastAutoCollapseCheck + BackgroundMaintenanceSchedule.interactionInterval {
+            lastAutoCollapseCheck = now
+            checkAutoCollapse()
+        }
+        if (settingsVisible || isArranging) && now >= lastPermissionCheck + BackgroundMaintenanceSchedule.permissionInterval { refreshPermissions() }
+        if now >= lastRecoveryCheck + BackgroundMaintenanceSchedule.interactionInterval {
+            lastRecoveryCheck = now
+            if needsPositionRevalidation { recoverVisibility() }
+            if trayDiscoveryNeeded && !panelInteractionBusy {
+                trayDiscoveryNeeded = false
+                refreshMenuItems()
+            }
+        }
+        schedulePassiveIconCapture()
+        rescheduleMaintenanceTimer()
+    }
+
+    private func requestPassiveCaptureAfterEvent() {
+        passiveCaptureSchedule.requestAfterEvent(at: ProcessInfo.processInfo.systemUptime)
+        rescheduleMaintenanceTimer()
     }
 
     func requestAccessibility() {
@@ -816,9 +902,11 @@ final class MenuTidyModel: ObservableObject {
         guard !isUIPreview else { return }
         lastPermissionCheck = ProcessInfo.processInfo.systemUptime
         let wasGranted = accessibilityGranted
-        accessibilityGranted = AXIsProcessTrusted()
-        screenCaptureGranted = CGPreflightScreenCaptureAccess()
-        if !screenCaptureGranted { panelImages = [:] }
+        let trusted = AXIsProcessTrusted()
+        let captureGranted = CGPreflightScreenCaptureAccess()
+        if accessibilityGranted != trusted { accessibilityGranted = trusted }
+        if screenCaptureGranted != captureGranted { screenCaptureGranted = captureGranted }
+        if !screenCaptureGranted { setPanelImages([:]) }
         if !accessibilityGranted && wasGranted {
             permissionCheckMessage = "macOS 已撤销当前应用的辅助功能访问，请重新授权。"
             workTask?.cancel()
@@ -850,6 +938,7 @@ final class MenuTidyModel: ObservableObject {
             managementMessage = "辅助功能已授权，正在读取菜单栏图标。"
             refreshMenuItems()
         }
+        rescheduleMaintenanceTimer()
     }
 
     private func beginPositionRecovery() -> Int {
@@ -914,6 +1003,7 @@ final class MenuTidyModel: ObservableObject {
         if isUIPreview { managementMessage = "预览：图标列表已更新，当前选择已保留。"; return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         guard accessibilityGranted else { managementError = "先在权限页开启辅助功能权限，再读取菜单栏图标。"; return }
+        requestPassiveCaptureAfterEvent()
         if prepareOverflow { closeIconPanel() }
         isRefreshing = true
         managementError = nil
@@ -1170,20 +1260,23 @@ final class MenuTidyModel: ObservableObject {
                                         unobservedConfiguredCount: Int, issues: [String]? = nil,
                                         clearPanelError: Bool = true) {
         if let issues { iconImagePreparationIssues = issues }
+        passiveCaptureSchedule.updateMissingIDs(summary.missing, at: ProcessInfo.processInfo.systemUptime)
+        rescheduleMaintenanceTimer()
         // A preparation failure is not a missing image when a valid snapshot
         // already supplies every requested item. Do not retain that false alarm.
-        if clearPanelError { panelError = nil }
+        if clearPanelError && panelError != nil { panelError = nil }
         guard summary.hasMissingImages || (summary.requested.isEmpty && unobservedConfiguredCount > 0) else {
-            iconImageWarning = nil
-            iconImageWarningDetails = nil
+            if iconImageWarning != nil { iconImageWarning = nil }
+            if iconImageWarningDetails != nil { iconImageWarningDetails = nil }
             return
         }
+        let warning: String
         var details: [String]
         if summary.requested.isEmpty {
-            iconImageWarning = "本次未能核对隐藏图标图像"
+            warning = "本次未能核对隐藏图标图像"
             details = ["已保存的 \(unobservedConfiguredCount) 个隐藏图标本次均未能确认；应用可能未运行，或图标暂时无法唯一读取。本次检查范围为 0，不代表这些图标的图像已经齐全。"]
         } else {
-            iconImageWarning = "部分图标图像尚未获取（\(summary.missing.count)/\(summary.requested.count)）"
+            warning = "部分图标图像尚未获取（\(summary.missing.count)/\(summary.requested.count)）"
             details = ["仅统计本次读取到的 \(summary.requested.count) 个「收起后隐藏」或「始终隐藏」图标，其中 \(summary.captured.count) 个已有可用图像；不包含常驻显示、系统保护项或未读取到的项目。"]
             if unobservedConfiguredCount > 0 {
                 details.append("另有 \(unobservedConfiguredCount) 个已保存的隐藏图标本次未能确认，不计入上述范围。")
@@ -1191,7 +1284,9 @@ final class MenuTidyModel: ObservableObject {
         }
         for issue in iconImagePreparationIssues where !details.contains(issue) { details.append(issue) }
         details.append("可展开系统溢出区并保持片刻；应用会在图标可见且身份确认后自动补采，不会移动鼠标。图像获取结果不代表分类是否已应用。")
-        iconImageWarningDetails = details.joined(separator: "\n")
+        let warningDetails = details.joined(separator: "\n")
+        if iconImageWarning != warning { iconImageWarning = warning }
+        if iconImageWarningDetails != warningDetails { iconImageWarningDetails = warningDetails }
     }
 
     /// Derive coverage after the capture checkpoint has accepted or restored
@@ -1202,7 +1297,7 @@ final class MenuTidyModel: ObservableObject {
         let available = (try? iconCapture.availableCachedImageIDs(matching: snapshots)) ?? []
         updateIconImageWarning(summary: ImageAvailabilitySummary(requested: coverage.requested, available: available),
             unobservedConfiguredCount: coverage.unobservedConfiguredCount, clearPanelError: false)
-        panelLastCaptureDate = iconCapture.lastCacheDate
+        if panelLastCaptureDate != iconCapture.lastCacheDate { panelLastCaptureDate = iconCapture.lastCacheDate }
     }
 
     func setGroup(id: String, group: ItemVisibility) {
@@ -1210,7 +1305,7 @@ final class MenuTidyModel: ObservableObject {
             requestTrayPlacement(id: id, group: group)
             return
         }
-        guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging, let row = items.first(where: { $0.id == id }), row.canMove, row.isAvailable,
+        guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging, let row = itemsByID[id], row.canMove, row.isAvailable,
               snapshots.filter({ $0.id == id }).count == 1 else { return }
         cancelPassiveIconCapture()
         itemApplicationIssues.removeValue(forKey: id)
@@ -1355,7 +1450,7 @@ final class MenuTidyModel: ObservableObject {
 
     func forgetItemAffectsApplication(id: String) -> Bool {
         guard usesNativeVisibility,
-              let row = items.first(where: { $0.id == id }), let bundle = row.bundleIdentifier,
+              let row = itemsByID[id], let bundle = row.bundleIdentifier,
               rules.rule(for: id)?.bundleIdentifier == bundle || isUIPreview else { return false }
         return NativeTrayChoices.canForget(bundle: bundle, liveBundles: [],
             excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
@@ -3069,8 +3164,9 @@ final class MenuTidyModel: ObservableObject {
                         (observedMismatch || (usesIndependentTray && actualGroups[item.id] == nil)))))
         }
         let boundDraftIDs = Set(rowDraftIDs.values)
-        offlineDrafts = pendingDrafts.records.filter { !boundDraftIDs.contains($0.id) }
+        let nextOfflineDrafts = pendingDrafts.records.filter { !boundDraftIDs.contains($0.id) }
             .sorted { $0.rule.name.localizedStandardCompare($1.rule.name) == .orderedAscending }
+        if offlineDrafts != nextOfflineDrafts { offlineDrafts = nextOfflineDrafts }
         let offlineTargetIDs = Set(offlineDrafts.map(\.rule.id))
         for rule in rules.rules.values where !result.contains(where: { $0.id == rule.id }) && !offlineTargetIDs.contains(rule.id) {
             if usesNativeVisibility, let bundle = rule.bundleIdentifier,
@@ -3080,19 +3176,45 @@ final class MenuTidyModel: ObservableObject {
                 bundleIdentifier: rule.bundleIdentifier, icon: nil, group: rule.visibility, isAvailable: false, canMove: false,
                 detail: "已应用规则；当前未读到此图标。启动对应应用后刷新。", isPending: false))
         }
-        items = result.sorted { $0.isAvailable != $1.isAvailable ? $0.isAvailable : $0.ownerName.localizedStandardCompare($1.ownerName) == .orderedAscending }
-        actionablePendingCount = items.filter { $0.isPending && $0.isAvailable && $0.canMove }.count
-        hasPendingChanges = actionablePendingCount > 0 || !offlineDrafts.isEmpty
+        let nextItems = result.sorted { $0.isAvailable != $1.isAvailable ? $0.isAvailable : $0.ownerName.localizedStandardCompare($1.ownerName) == .orderedAscending }
+        if items.count != nextItems.count || !zip(items, nextItems).allSatisfy({ $0.hasSamePresentation(as: $1) }) {
+            items = nextItems
+        }
+        let nextPendingCount = items.filter { $0.isPending && $0.isAvailable && $0.canMove }.count
+        if actionablePendingCount != nextPendingCount { actionablePendingCount = nextPendingCount }
+        let nextHasPendingChanges = nextPendingCount > 0 || !offlineDrafts.isEmpty
+        if hasPendingChanges != nextHasPendingChanges { hasPendingChanges = nextHasPendingChanges }
+        if !demoMode {
+            let coverage = hiddenImageCoverage()
+            let available = (try? iconCapture.availableCachedImageIDs(matching: snapshots)) ?? []
+            passiveCaptureSchedule.updateMissingIDs(coverage.requested.subtracting(available),
+                at: ProcessInfo.processInfo.systemUptime)
+            rescheduleMaintenanceTimer()
+        }
     }
 
     /// Repeated layout observations rebuild rows frequently. App icons are
     /// display metadata; looking them up again must not lengthen each check.
     private func applicationIcon(for bundleIdentifier: String?) -> NSImage? {
         guard let bundleIdentifier else { return nil }
-        if let cached = applicationIcons[bundleIdentifier] { return cached }
+        if let cached = applicationIcons.value(for: bundleIdentifier) { return cached }
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else { return nil }
-        let icon = NSWorkspace.shared.icon(forFile: url.path)
-        applicationIcons[bundleIdentifier] = icon
+        // Keep just the 32-point, 2x presentation bitmap, not an application's
+        // multi-resolution icon archive. Rules and captured menu icons are separate.
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 64, pixelsHigh: 64,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 256, bitsPerPixel: 32),
+            let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.imageInterpolation = .high
+        NSWorkspace.shared.icon(forFile: url.path).draw(in: NSRect(x: 0, y: 0, width: 64, height: 64),
+            from: .zero, operation: .copy, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        bitmap.size = NSSize(width: 32, height: 32)
+        let icon = NSImage(size: bitmap.size)
+        icon.addRepresentation(bitmap)
+        applicationIcons.insert(icon, for: bundleIdentifier, cost: bitmap.bytesPerRow * bitmap.pixelsHigh)
         return icon
     }
 
@@ -3176,11 +3298,16 @@ final class MenuTidyModel: ObservableObject {
 
     func iconPanelContains(_ point: NSPoint) -> Bool { iconPanel?.contains(point) == true }
 
-    private var canPassivelyCaptureIcons: Bool {
-        !demoMode && !stopping && !preparingToTerminate && accessibilityGranted && screenCaptureGranted &&
+    private var canSchedulePassiveIconCapture: Bool {
+        if #unavailable(macOS 15.2) { return false }
+        return !demoMode && !stopping && !preparingToTerminate && accessibilityGranted && screenCaptureGranted &&
             !isRecoveringPositions && !isRefreshing && !isApplying && !isArranging && !isActivatingPanelItem &&
-            !isPanelPresented && !contextMenuVisible && panelActivationTask == nil &&
-            NSEvent.pressedMouseButtons == 0 && AXIsProcessTrusted() && CGPreflightScreenCaptureAccess()
+            !isPanelPresented && !contextMenuVisible && panelActivationTask == nil
+    }
+
+    private var canPassivelyCaptureIcons: Bool {
+        canSchedulePassiveIconCapture && NSEvent.pressedMouseButtons == 0 &&
+            AXIsProcessTrusted() && CGPreflightScreenCaptureAccess()
     }
 
     private func cancelPassiveIconCapture() {
@@ -3195,27 +3322,36 @@ final class MenuTidyModel: ObservableObject {
     }
 
     private func schedulePassiveIconCapture() {
-        guard #available(macOS 15.2, *) else { return }
-        guard canPassivelyCaptureIcons else { cancelPassiveIconCapture(); return }
-        guard passiveIconCaptureTask == nil else { return }
+        guard canSchedulePassiveIconCapture, passiveIconCaptureTask == nil else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        guard now - lastPassiveIconCaptureAttempt >= 2 else { return }
+        guard passiveCaptureSchedule.isDue(at: now) else { return }
+        guard canPassivelyCaptureIcons else {
+            refreshPermissions()
+            passiveCaptureSchedule.finishAttempt(generation: passiveCaptureSchedule.generation,
+                madeProgress: false, cancelled: true, at: now)
+            return
+        }
         let coverage = hiddenImageCoverage()
-        guard !coverage.requested.isEmpty,
-              let available = try? iconCapture.availableCachedImageIDs(matching: snapshots) else { return }
+        let available = (try? iconCapture.availableCachedImageIDs(matching: snapshots)) ?? []
         let summary = ImageAvailabilitySummary(requested: coverage.requested, available: available)
+        passiveCaptureSchedule.updateMissingIDs(summary.missing, at: now)
         guard summary.hasMissingImages else { return }
-        lastPassiveIconCaptureAttempt = now
+        let attemptGeneration = passiveCaptureSchedule.generation
         let id = UUID()
         passiveIconCaptureID = id
         let candidates = snapshots.filter { summary.missing.contains($0.id) }
         passiveIconCaptureTask = Task { [weak self] in
             guard let self else { return }
+            var madeProgress = false
+            var cancelled = false
             defer {
+                self.passiveCaptureSchedule.finishAttempt(generation: attemptGeneration,
+                    madeProgress: madeProgress, cancelled: cancelled, at: ProcessInfo.processInfo.systemUptime)
                 if self.passiveIconCaptureID == id {
                     self.passiveIconCaptureTask = nil
                     self.passiveIconCaptureID = nil
                 }
+                self.rescheduleMaintenanceTimer()
             }
             do {
                 try self.checkPassiveIconCapture(id)
@@ -3246,12 +3382,14 @@ final class MenuTidyModel: ObservableObject {
                 let currentCoverage = self.hiddenImageCoverage()
                 let currentAvailable = try self.iconCapture.availableCachedImageIDs(matching: self.snapshots)
                 let currentSummary = ImageAvailabilitySummary(requested: currentCoverage.requested, available: currentAvailable)
+                madeProgress = currentSummary.missing.count < summary.missing.count
                 self.updateIconImageWarning(summary: currentSummary,
                     unobservedConfiguredCount: currentCoverage.unobservedConfiguredCount)
-                self.panelLastCaptureDate = self.iconCapture.lastCacheDate
+                if self.panelLastCaptureDate != self.iconCapture.lastCacheDate { self.panelLastCaptureDate = self.iconCapture.lastCacheDate }
                 Self.diagnosticLogger.notice("passiveIconCapture candidates=\(visible.count) captured=\(captured.count) remaining=\(currentSummary.missing.count)")
             } catch is CancellationError {
                 // Cancellation never removes a previously valid cached image.
+                cancelled = true
             } catch {
                 // A hidden or changed item is retried only while still missing.
                 // Do not replace an actionable explicit-refresh message every
@@ -3366,7 +3504,8 @@ final class MenuTidyModel: ObservableObject {
         panelError = nil
         // Cache lookup never captures or enumerates windows. Without screen
         // permission the tray still opens using labelled application icons.
-        panelImages = (try? iconCapture.cachedImages(matching: snapshots)) ?? [:]
+        setPanelImages((try? iconCapture.cachedImages(matching: snapshots)) ?? [:])
+        recomputeIconImageWarning()
         statusBar?.apply(collapsed: true, arranging: false)
         let controller = iconPanel ?? HiddenItemsPanelController()
         iconPanel = controller
@@ -3383,19 +3522,24 @@ final class MenuTidyModel: ObservableObject {
                     let ids = self.panelItems.map(\.id)
                     let images = try await self.iconCapture.capture(ids: ids)
                     try Task.checkCancellation()
-                    self.panelImages = images
-                    self.recomputeIconImageWarning()
-                    self.panelUsesCachedImages = self.iconCapture.usesCachedImages
-                    self.panelLastCaptureDate = self.iconCapture.lastCacheDate
-                    self.panelError = nil
+                    let imagesChanged = self.setPanelImages(images)
+                    let cacheStateChanged = self.panelLastCaptureDate != self.iconCapture.lastCacheDate ||
+                        self.panelUsesCachedImages != self.iconCapture.usesCachedImages
+                    if imagesChanged || cacheStateChanged { self.recomputeIconImageWarning() }
+                    if self.panelUsesCachedImages != self.iconCapture.usesCachedImages {
+                        self.panelUsesCachedImages = self.iconCapture.usesCachedImages
+                    }
+                    if self.panelError != nil { self.panelError = nil }
                     try await Task.sleep(for: .milliseconds(750))
                 }
             } catch is CancellationError {
                 return
             } catch {
                 guard self.isPanelPresented && !Task.isCancelled else { return }
-                self.panelImages = (try? self.iconCapture.cachedImages(matching: self.snapshots)) ?? [:]
-                self.panelError = nil
+                if self.setPanelImages((try? self.iconCapture.cachedImages(matching: self.snapshots)) ?? [:]) {
+                    self.recomputeIconImageWarning()
+                }
+                if self.panelError != nil { self.panelError = nil }
             }
         }
     }
@@ -3406,9 +3550,16 @@ final class MenuTidyModel: ObservableObject {
         panelTask = nil
         isPanelPresented = false
         controlRouter.presentationChanged(isPresented: false)
-        panelImages = [:]
+        setPanelImages([:])
         iconPanel?.close()
         statusBar?.apply(collapsed: isCollapsed, arranging: isArranging)
+    }
+
+    @discardableResult
+    private func setPanelImages(_ images: [String: NSImage]) -> Bool {
+        guard panelImages.count != images.count || !images.allSatisfy({ panelImages[$0.key] === $0.value }) else { return false }
+        panelImages = images
+        return true
     }
 
     func dismissIconPanelForFocusChange() {
@@ -3419,7 +3570,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func panelPrimaryActionTitle(id: String) -> String {
-        let bundle = items.first(where: { $0.id == id })?.bundleIdentifier
+        let bundle = itemsByID[id]?.bundleIdentifier
         return TrayActivationPolicy.defaultAction(bundleIdentifier: bundle) == .application ? "打开应用" : "打开图标"
     }
 
@@ -3502,7 +3653,7 @@ final class MenuTidyModel: ObservableObject {
     /// Use one native AX action. A managed item is temporarily placed beside
     /// our control, then returned to its hidden weight after its presentation closes.
     func activatePanelItem(id: String, useNativeAction: Bool = false) {
-        if !useNativeAction, TrayActivationPolicy.defaultAction(bundleIdentifier: items.first(where: { $0.id == id })?.bundleIdentifier) == .application {
+        if !useNativeAction, TrayActivationPolicy.defaultAction(bundleIdentifier: itemsByID[id]?.bundleIdentifier) == .application {
             openPanelApplication(id: id)
             return
         }
@@ -4221,6 +4372,7 @@ final class MenuTidyModel: ObservableObject {
         closeIconPanel()
         controlRouter.stop()
         stopping = true
+        started = false
         cancelPassiveIconCapture()
         arrangementSequence += 1
         visibilityDiagnosticsStopped = true
@@ -4230,8 +4382,13 @@ final class MenuTidyModel: ObservableObject {
         trayPlacementQueue.cancelAllPending()
         timer?.invalidate()
         timer = nil
+        maintenanceFireAt = nil
+        memoryPressureSource?.cancel()
+        memoryPressureSource = nil
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         workspaceObservers.removeAll()
+        applicationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        applicationObservers.removeAll()
         shortcut.unregister()
         statusBar?.stop()
         statusBar = nil
@@ -4405,7 +4562,7 @@ private extension MenuTidyModel {
     }
     func latestNativeGroup(id: String, target: NativeVisibilityTarget) -> ItemVisibility {
         if case .application(let bundle) = target, let group = nativeTrayChoices.group(bundle: bundle) { return group }
-        return items.first(where: { $0.id == id })?.group ?? rules.rule(for: id)?.visibility ?? .visible
+        return itemsByID[id]?.group ?? rules.rule(for: id)?.visibility ?? .visible
     }
     func removeNativeEvidence(target: NativeVisibilityTarget) {
         for (id, evidence) in nativeVisibilityEvidence where evidence.target == target {
@@ -4492,7 +4649,7 @@ private extension MenuTidyModel {
                     // Keeping an already unmanaged item visible needs no
                     // preference lookup, ownership, parent-bundle inference or
                     // authorization for a backend that will not be written.
-                    guard items.first(where: { $0.id == rule.id })?.group == rule.visibility else { continue }
+                    guard itemsByID[rule.id]?.group == rule.visibility else { continue }
                     guard await inspectUnmanagedNativeVisibility(source) == true,
                           Self.observedOwnerIsCurrent(identity) else {
                         throw MenuTidyManagementError.positionApplication("尚未确认此图标当前可见，未改变系统设置。")

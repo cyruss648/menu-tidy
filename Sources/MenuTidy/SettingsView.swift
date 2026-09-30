@@ -1,30 +1,37 @@
 import MenuTidyCore
 import SwiftUI
 
+/// Keep small presentation choices when the closed hosting tree is released.
+@MainActor
+final class SettingsViewState: ObservableObject {
+    enum Page: String, CaseIterable, Identifiable {
+        case items = "托盘图标"
+        case settings = "权限与设置"
+        var id: String { rawValue }
+    }
+    @Published var page: Page = .items
+    @Published var traySearchText = ""
+    @Published var trayFilter = "all"
+    @Published var savedRecordsExpanded = false
+    @Published var permissionHelpExpanded = false
+    @Published var imageWarningDetailsExpanded = false
+    @Published var managementErrorDetailsExpanded = false
+    @Published var recoveryDetailsExpanded = false
+    @Published var offlineDraftsExpanded = false
+}
+
 /// One management surface for immediate choices, explicit retries and recovery.
 struct SettingsView: View {
     @ObservedObject var model: MenuTidyModel
     @ObservedObject var updates: UpdateController
-    @State private var page: Page = .items
-    @State private var traySearchText = ""
-    @State private var trayFilter = "all"
-    @State private var savedRecordsExpanded = false
-    @State private var permissionHelpExpanded = false
-    @State private var imageWarningDetailsExpanded = false
-    @State private var managementErrorDetailsExpanded = false
-    @State private var recoveryDetailsExpanded = false
-    @State private var offlineDraftsExpanded = false
+    @ObservedObject var presentation: SettingsViewState
     @State private var itemToForget: ManagedItemRow?
     @State private var draftToAssociate: PendingDraftRecord?
     @State private var associationTargetID = ""
     @State private var associationIssue: String?
 
     private let accent = Color(red: 0.14, green: 0.55, blue: 0.50)
-    private enum Page: String, CaseIterable, Identifiable {
-        case items = "托盘图标"
-        case settings = "权限与设置"
-        var id: String { rawValue }
-    }
+    private typealias Page = SettingsViewState.Page
     private var isBusy: Bool { model.isRefreshing || model.isApplying || model.isActivatingPanelItem || model.isRecoveringPositions }
     private var groupingControlsDisabled: Bool { isBusy || model.isArranging }
     private var trayControlsDisabled: Bool {
@@ -60,12 +67,12 @@ struct SettingsView: View {
         currentTrayItems.filter { $0.canMove && ($0.isPending || model.trayPlacementFailure(id: $0.id) != nil) }.count
     }
     private var filteredTrayItems: [ManagedItemRow] {
-        let query = traySearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = presentation.traySearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return currentTrayItems.filter { item in
             let group = model.trayPlacementGroup(id: item.id)
             let needsAttention = item.canMove && (item.isPending || model.trayPlacementFailure(id: item.id) != nil)
-            let matchesFilter = trayFilter == "all" || trayFilter == group.id ||
-                (trayFilter == "attention" && needsAttention)
+            let matchesFilter = presentation.trayFilter == "all" || presentation.trayFilter == group.id ||
+                (presentation.trayFilter == "attention" && needsAttention)
             return matchesFilter && (query.isEmpty || [item.name, item.ownerName, item.bundleIdentifier ?? ""]
                 .contains { $0.localizedCaseInsensitiveContains(query) })
         }
@@ -75,7 +82,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             header
             HStack {
-                Picker("页面", selection: $page) {
+                Picker("页面", selection: $presentation.page) {
                     ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
@@ -92,7 +99,7 @@ struct SettingsView: View {
             .padding(.bottom, 16)
             Divider()
             if isBusy { operationStatus }
-            if page == .items { managementPage } else { settingsPage }
+            if presentation.page == .items { managementPage } else { settingsPage }
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .tint(accent)
@@ -110,8 +117,8 @@ struct SettingsView: View {
         } message: {
             Text("将删除“\(itemToForget?.name ?? "此应用")”全部离线显示规则和待应用草稿。应用下次启动时，不再沿用这些选择；其他应用的记录保留。")
         }
-        .onChange(of: model.managementError) { _ in managementErrorDetailsExpanded = false }
-        .onChange(of: model.positionRecoveryMessage) { _ in recoveryDetailsExpanded = false }
+        .onChange(of: model.managementError) { _ in presentation.managementErrorDetailsExpanded = false }
+        .onChange(of: model.positionRecoveryMessage) { _ in presentation.recoveryDetailsExpanded = false }
     }
 
     private var header: some View {
@@ -241,7 +248,7 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 4)
                         if !model.screenCaptureGranted {
-                            Button("增强图标外观") { page = .settings }.buttonStyle(.link)
+                            Button("增强图标外观") { presentation.page = .settings }.buttonStyle(.link)
                         }
                     }
                     .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -295,10 +302,10 @@ struct SettingsView: View {
         HStack(spacing: 10) {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
-                TextField("搜索应用或图标", text: $traySearchText)
+                TextField("搜索应用或图标", text: $presentation.traySearchText)
                     .textFieldStyle(.plain).accessibilityLabel("搜索应用或图标")
-                if !traySearchText.isEmpty {
-                    Button { traySearchText = "" } label: {
+                if !presentation.traySearchText.isEmpty {
+                    Button { presentation.traySearchText = "" } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain).accessibilityLabel("清除搜索")
@@ -306,7 +313,7 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-            Picker("筛选图标", selection: $trayFilter) {
+            Picker("筛选图标", selection: $presentation.trayFilter) {
                 Text("全部图标").tag("all")
                 ForEach(ItemVisibility.allCases) { Text($0.title).tag($0.id) }
                 Text("需要处理 · \(attentionCount)").tag("attention")
@@ -325,7 +332,7 @@ struct SettingsView: View {
                     .disabled(groupingControlsDisabled || !groupingPermissionsGranted || !model.screenCaptureGranted
                               || model.positionRecoveryMessage != nil)
                 Divider()
-                Button("权限与设置…") { page = .settings }
+                Button("权限与设置…") { presentation.page = .settings }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
@@ -346,11 +353,11 @@ struct SettingsView: View {
             Divider()
             if filteredTrayItems.isEmpty {
                 VStack(spacing: 8) {
-                    Image(systemName: trayFilter == "attention" ? "checkmark.circle" : "tray")
+                    Image(systemName: presentation.trayFilter == "attention" ? "checkmark.circle" : "tray")
                         .font(.system(size: 25)).foregroundStyle(.secondary)
                     Text(trayEmptyTitle).font(.system(size: 13, weight: .medium))
-                    if !traySearchText.isEmpty || trayFilter != "all" {
-                        Button("显示全部图标") { traySearchText = ""; trayFilter = "all" }.buttonStyle(.link)
+                    if !presentation.traySearchText.isEmpty || presentation.trayFilter != "all" {
+                        Button("显示全部图标") { presentation.traySearchText = ""; presentation.trayFilter = "all" }.buttonStyle(.link)
                     } else {
                         Text(model.accessibilityGranted ? "确认对应应用已运行，再点击上方“刷新”。" : "完成上方授权后即可读取和管理图标。")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -372,7 +379,7 @@ struct SettingsView: View {
     private var trayEmptyTitle: String {
         if !model.accessibilityGranted { return "授权后开始整理" }
         if model.isRefreshing && currentTrayItems.isEmpty { return "正在读取菜单栏图标…" }
-        if trayFilter == "attention" && traySearchText.isEmpty { return "当前没有需要处理的图标" }
+        if presentation.trayFilter == "attention" && presentation.traySearchText.isEmpty { return "当前没有需要处理的图标" }
         return currentTrayItems.isEmpty ? "暂未发现菜单栏图标" : "没有匹配的图标"
     }
 
@@ -436,7 +443,7 @@ struct SettingsView: View {
     private var savedRecords: some View {
         Group {
             if !unavailableItems.isEmpty || !model.offlineDrafts.isEmpty || !model.discardedOfflineDrafts.isEmpty {
-                DisclosureGroup("离线与保留记录 · \(unavailableItems.count + model.offlineDrafts.count)", isExpanded: $savedRecordsExpanded) {
+                DisclosureGroup("离线与保留记录 · \(unavailableItems.count + model.offlineDrafts.count)", isExpanded: $presentation.savedRecordsExpanded) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("应用未运行或图标身份尚未确认的记录保留在这里，不参加批量操作。")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -473,7 +480,7 @@ struct SettingsView: View {
                             }
                         }
                         if !model.offlineDrafts.isEmpty {
-                            DisclosureGroup(isExpanded: $offlineDraftsExpanded) {
+                            DisclosureGroup(isExpanded: $presentation.offlineDraftsExpanded) {
                                 offlineDraftList.padding(.top, 8)
                             } label: {
                                 HStack {
@@ -585,7 +592,7 @@ struct SettingsView: View {
         let pendingCount = currentTrayItems.filter { model.trayPlacementGroup(id: $0.id) == group &&
             ($0.isPending || model.trayPlacementIsPending(id: $0.id) || model.trayPlacementFailure(id: $0.id) != nil) }.count
         return Button {
-            trayFilter = trayFilter == group.id ? "all" : group.id
+            presentation.trayFilter = presentation.trayFilter == group.id ? "all" : group.id
         } label: {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 7) {
@@ -609,17 +616,17 @@ struct SettingsView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-            .background(trayFilter == group.id ? accent.opacity(0.08) : Color(nsColor: .controlBackgroundColor),
+            .background(presentation.trayFilter == group.id ? accent.opacity(0.08) : Color(nsColor: .controlBackgroundColor),
                         in: RoundedRectangle(cornerRadius: 11))
             .overlay {
                 RoundedRectangle(cornerRadius: 11)
-                    .strokeBorder(trayFilter == group.id ? accent.opacity(0.6) : Color.primary.opacity(0.06), lineWidth: 1)
+                    .strokeBorder(presentation.trayFilter == group.id ? accent.opacity(0.6) : Color.primary.opacity(0.06), lineWidth: 1)
             }
         }
         .buttonStyle(.plain)
         .help("按当前选择筛选\(group.title)的图标，数量包含尚未应用的草稿；再次点击显示全部。")
         .accessibilityLabel("\(group.title)，当前选择 \(count) 个图标" + (pendingCount > 0 ? "，其中 \(pendingCount) 项尚待确认" : "，无待处理选择"))
-        .accessibilityValue(trayFilter == group.id ? "已筛选" : "未筛选")
+        .accessibilityValue(presentation.trayFilter == group.id ? "已筛选" : "未筛选")
     }
 
     private func groupSymbol(_ group: ItemVisibility) -> String {
@@ -787,7 +794,7 @@ struct SettingsView: View {
             if let recovery = model.positionRecoveryMessage {
                 VStack(alignment: .leading, spacing: 8) {
                     detailedIssueNotice(recovery, symbol: "arrow.uturn.backward.circle",
-                                        title: "查看图标恢复详情", isExpanded: $recoveryDetailsExpanded)
+                                        title: "查看图标恢复详情", isExpanded: $presentation.recoveryDetailsExpanded)
                     HStack {
                         Button(model.usesNativeVisibility ? "重试恢复图标" : "重试恢复原排序") { model.retryPositionRecovery() }
                         Button("恢复隐藏项并保留外部改动") { model.keepCurrentPositionLayout() }
@@ -806,13 +813,13 @@ struct SettingsView: View {
             }
             if let error = model.managementError {
                 detailedIssueNotice(error, symbol: "exclamationmark.triangle.fill",
-                                    title: "查看完整原因", isExpanded: $managementErrorDetailsExpanded)
+                                    title: "查看完整原因", isExpanded: $presentation.managementErrorDetailsExpanded)
             }
             if let warning = model.iconImageWarning {
                 VStack(alignment: .leading, spacing: 5) {
                     issueNotice(warning, symbol: "photo")
                     if let details = model.iconImageWarningDetails {
-                        DisclosureGroup("查看图像获取详情", isExpanded: $imageWarningDetailsExpanded) {
+                        DisclosureGroup("查看图像获取详情", isExpanded: $presentation.imageWarningDetailsExpanded) {
                             Text(details)
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
@@ -939,7 +946,7 @@ struct SettingsView: View {
                 Button("重新检测") { model.recheckPermissions() }
                 Spacer(minLength: 0)
                 if compact {
-                    Button("权限说明与设置") { page = .settings }.buttonStyle(.link)
+                    Button("权限说明与设置") { presentation.page = .settings }.buttonStyle(.link)
                 }
             }
 
@@ -968,7 +975,7 @@ struct SettingsView: View {
             .padding(10)
             .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
 
-            DisclosureGroup("已开启仍未识别？", isExpanded: $permissionHelpExpanded) {
+            DisclosureGroup("已开启仍未识别？", isExpanded: $presentation.permissionHelpExpanded) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("应用更新或重新签名后，系统中旧的授权记录可能失效，即使开关仍显示为开启。")
                     Text("请在系统设置中移除旧的 Menu Tidy 记录，重新添加上方显示的当前应用并开启权限，然后返回点击「重新检测」。")
@@ -1011,7 +1018,7 @@ struct SettingsView: View {
                 }
                 Button("重新检测文件访问") { model.recheckNativeVisibilityAccess() }
                 Spacer(minLength: 0)
-                if compact { Button("权限说明") { page = .settings }.buttonStyle(.link) }
+                if compact { Button("权限说明") { presentation.page = .settings }.buttonStyle(.link) }
             }
             .disabled(groupingControlsDisabled)
             if let message = model.nativeVisibilityAccessMessage {
@@ -1078,7 +1085,7 @@ struct SettingsView: View {
                 Button("重新检测目录访问") { model.recheckMenuBarPositionAccess() }
                 Spacer(minLength: 0)
                 if compact {
-                    Button("权限说明") { page = .settings }.buttonStyle(.link)
+                    Button("权限说明") { presentation.page = .settings }.buttonStyle(.link)
                 }
             }
             .disabled(groupingControlsDisabled)

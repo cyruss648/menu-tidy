@@ -52,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var settingsWindow: NSWindow?
     // A minimized or hidden window is still open and must keep its Dock entry.
     private var settingsWindowIsOpen = false
+    private let settingsPresentation = SettingsViewState()
+    private var settingsReleaseTask: Task<Void, Never>?
     private var terminationTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -70,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         updates = UpdateController(model: model, enabled: !CommandLine.arguments.contains("--demo-items") && !model.isUIPreview)
         configureMainMenu()
         model.onShowSettings = { [weak self] in self?.showSettings() }
+        model.onMemoryPressure = { [weak self] in self?.releaseClosedSettingsContent() }
         model.start()
         if !model.hasCompletedSetup || !model.accessibilityGranted || CommandLine.arguments.contains("--settings") || CommandLine.arguments.contains("--demo-items") || model.isUIPreview {
             showSettings()
@@ -78,6 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func showSettings(refreshItems: Bool = true) {
         guard model != nil, let updates else { return }
+        settingsReleaseTask?.cancel()
+        settingsReleaseTask = nil
         logLifecycle("showSettingsRequested")
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 740),
@@ -86,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             window.title = model.isUIPreview ? "Menu Tidy · 独立交互预览（模拟数据）" : "Menu Tidy · 菜单栏整理"
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SettingsView(model: model, updates: updates))
+            window.contentView = NSHostingView(rootView: SettingsView(model: model, updates: updates, presentation: settingsPresentation))
             window.delegate = self
             window.center()
             window.setFrameAutosaveName("MenuTidySettingsV2")
@@ -113,6 +118,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let accepted = NSApp.setActivationPolicy(.accessory)
         lifecycleLogger.info("action=setAccessoryPolicy accepted=\(accepted, privacy: .public)")
         logLifecycle("windowWillClose")
+        settingsReleaseTask?.cancel()
+        settingsReleaseTask = Task { [weak self, weak window] in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled, let self, let window, self.settingsWindow === window else { return }
+            self.releaseClosedSettingsContent()
+        }
+    }
+
+    private func releaseClosedSettingsContent() {
+        guard !settingsWindowIsOpen, let window = settingsWindow,
+              !window.isVisible, !window.isMiniaturized else { return }
+        settingsReleaseTask?.cancel()
+        settingsReleaseTask = nil
+        window.contentView = nil
+        window.delegate = nil
+        settingsWindow = nil
+        logLifecycle("releasedClosedSettingsContent")
     }
     func windowDidMiniaturize(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
@@ -166,6 +188,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     func applicationWillTerminate(_ notification: Notification) {
         logLifecycle("applicationWillTerminate")
+        settingsReleaseTask?.cancel()
+        settingsReleaseTask = nil
         model?.stop()
     }
 
