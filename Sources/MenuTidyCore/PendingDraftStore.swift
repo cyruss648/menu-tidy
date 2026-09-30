@@ -126,6 +126,27 @@ public struct PendingDraftStore: Codable, Sendable {
         sessionBindings.removeValue(forKey: id)
     }
 
+    /// Delete only the selected pending records. Preserve live verified
+    /// baselines and choices outside the caller's offline snapshot.
+    public mutating func remove(ids: Set<UUID>) {
+        for id in ids where records.contains(where: { $0.id == id }) {
+            remove(id: id)
+        }
+    }
+
+    /// Undo an explicit offline deletion without rebinding session identities
+    /// or overwriting a choice created since deletion. Validate before mutation.
+    public mutating func restoreUnassociated(_ removed: [PendingDraftRecord]) throws {
+        guard Set(removed.map(\.id)).count == removed.count,
+              Set(removed.map(\.rule.id)).count == removed.count,
+              removed.allSatisfy({ Self.isSupportedID($0.rule.id) }) else { throw StoreError.invalidIdentity }
+        let saved = savedRecords
+        guard !removed.contains(where: { candidate in
+            saved.contains { $0.id == candidate.id || $0.rule.id == candidate.rule.id }
+        }) else { throw StoreError.targetHasDraft }
+        records.append(contentsOf: removed)
+    }
+
     /// Explicitly forget all saved choices of one exact application, including
     /// unassociated drafts and verified session baselines. Callers must first
     /// exclude every live sibling and explain this application-wide scope.
@@ -139,12 +160,23 @@ public struct PendingDraftStore: Codable, Sendable {
     }
 
     /// A successful subset must not discard the remaining choices. Unknown or
-    /// mismatching results never satisfy an edit.
+    /// mismatching results never satisfy an edit. A matching durable native
+    /// application choice replaces the session backup; it is intent, not proof
+    /// of identity, so the live record and verified category are still required.
     public mutating func removeVerified(_ rule: ItemRule,
-                                       sessionIdentity: ObservedItemGroupHistory.Identity?) {
-        guard let record = record(for: rule.id, sessionIdentity: sessionIdentity),
-              record.rule.visibility == rule.visibility else { return }
-        if record.requiresReassociationAfterRestart {
+                                       sessionIdentity: ObservedItemGroupHistory.Identity?,
+                                       nativeChoices: NativeTrayChoices? = nil) {
+        let candidate = record(for: rule.id, sessionIdentity: sessionIdentity) ??
+            verifiedSessionChoices.values.first {
+                $0.rule.id == rule.id && sessionIdentity != nil && sessionBindings[$0.id] == sessionIdentity
+            }
+        guard let record = candidate, record.rule.visibility == rule.visibility else { return }
+        if let bundle = rule.bundleIdentifier, record.rule.bundleIdentifier == bundle,
+           nativeChoices?.group(bundle: bundle) == rule.visibility {
+            records.removeAll { $0.id == record.id }
+            verifiedSessionChoices.removeValue(forKey: record.id)
+            sessionBindings.removeValue(forKey: record.id)
+        } else if record.requiresReassociationAfterRestart {
             verifiedSessionChoices[record.id] = record
             records.removeAll { $0.id == record.id }
         } else {

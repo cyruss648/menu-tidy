@@ -138,6 +138,25 @@ final class NativeTrayChoicesTests: XCTestCase {
         }
     }
 
+    func testObservedSnowShotIdentifierWithUnderscorePersistsWithoutNormalization() throws {
+        let bundle = "com.snowshot.snow_shot"
+        var choices = NativeTrayChoices()
+        XCTAssertTrue(choices.set(bundle: bundle, group: .collapsible))
+        let reloaded = try JSONDecoder().decode(NativeTrayChoices.self, from: JSONEncoder().encode(choices))
+        XCTAssertEqual(reloaded.group(bundle: bundle), .collapsible)
+        XCTAssertNil(reloaded.group(bundle: "com.snowshot.snow-shot"))
+        var migrated = NativeTrayChoices()
+        XCTAssertEqual(migrated.migrate(saved: book([("session:snow-shot", bundle, .collapsible)])), [bundle])
+        let identity = ObservedItemGroupHistory.Identity(id: "session:snow-shot", pid: 42,
+            bundleIdentifier: bundle, launchTime: 100)
+        let rule = ItemRule(id: identity.id, name: "Snow Shot", bundleIdentifier: bundle, visibility: .collapsible)
+        var drafts = PendingDraftStore()
+        try drafts.set(rule, sessionIdentity: identity)
+        drafts.removeVerified(rule, sessionIdentity: identity, nativeChoices: reloaded)
+        let restored = try JSONDecoder().decode(PendingDraftStore.self, from: JSONEncoder().encode(drafts))
+        XCTAssertTrue(restored.records.isEmpty)
+    }
+
     func testMigrationIsIdempotentAndPreservesUnmentionedChoices() {
         var choices = NativeTrayChoices(existing: ["org.example.Offline": .alwaysHidden])
         let saved = book([("one", "org.example.App", .visible)])

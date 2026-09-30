@@ -435,7 +435,7 @@ struct SettingsView: View {
 
     private var savedRecords: some View {
         Group {
-            if !unavailableItems.isEmpty || !model.offlineDrafts.isEmpty {
+            if !unavailableItems.isEmpty || !model.offlineDrafts.isEmpty || !model.discardedOfflineDrafts.isEmpty {
                 DisclosureGroup("离线与保留记录 · \(unavailableItems.count + model.offlineDrafts.count)", isExpanded: $savedRecordsExpanded) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("应用未运行或图标身份尚未确认的记录保留在这里，不参加批量操作。")
@@ -461,9 +461,30 @@ struct SettingsView: View {
                                     : "忘记此图标的已保存规则，保留其他图标与离线草稿。")
                             }
                         }
+                        if !model.discardedOfflineDrafts.isEmpty {
+                            HStack {
+                                Text("已删除 \(model.discardedOfflineDrafts.count) 条待关联草稿")
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("撤销删除", action: model.undoOfflineDraftDeletion)
+                                    .controlSize(.small)
+                                    .disabled(!model.canUndoOfflineDraftDeletion)
+                                    .help("恢复本次打开应用期间最后一批删除的草稿；不覆盖新的选择")
+                            }
+                        }
                         if !model.offlineDrafts.isEmpty {
-                            DisclosureGroup("待关联草稿 · \(model.offlineDrafts.count)", isExpanded: $offlineDraftsExpanded) {
+                            DisclosureGroup(isExpanded: $offlineDraftsExpanded) {
                                 offlineDraftList.padding(.top, 8)
+                            } label: {
+                                HStack {
+                                    Text("待关联草稿 · \(model.offlineDrafts.count)")
+                                    Spacer()
+                                    Button("一键删除草稿", action: model.discardOfflineDrafts)
+                                        .controlSize(.small)
+                                        .disabled(!model.canDiscardOfflineDrafts)
+                                        .accessibilityLabel("删除全部待关联草稿")
+                                        .help("删除当前全部待关联草稿；已保存的分类与当前图标显示不变")
+                                }
                             }
                         }
                     }
@@ -643,7 +664,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("保留的离线草稿 · \(model.offlineDrafts.count)")
                     .font(.system(size: 12, weight: .medium))
-                Text("这些选择尚未应用，不参与本次调整。删除草稿不会删除已应用规则。")
+                Text("这些旧选择暂时无法关联当前图标，不参与自动处理。删除草稿不会改变已保存的分类或当前图标显示。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
             .padding(14)

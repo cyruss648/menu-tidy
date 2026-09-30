@@ -103,6 +103,7 @@ final class MenuTidyModel: ObservableObject {
     @Published private(set) var hasPendingChanges = false
     @Published private(set) var actionablePendingCount = 0
     @Published private(set) var offlineDrafts: [PendingDraftRecord] = []
+    @Published private(set) var discardedOfflineDrafts: [PendingDraftRecord] = []
     @Published private(set) var draftPersistenceIssue: String?
     var settingsVisible = false { didSet { resetIdleTime() } }
     var contextMenuVisible = false { didSet { resetIdleTime(); if contextMenuVisible { cancelPassiveIconCapture() } } }
@@ -424,7 +425,8 @@ final class MenuTidyModel: ObservableObject {
                     for confirmedRow in self.items where requestedIDs.contains(confirmedRow.id) {
                         self.pendingDrafts.removeVerified(ItemRule(id: confirmedRow.id, name: confirmedRow.name,
                             bundleIdentifier: confirmedRow.bundleIdentifier, visibility: request.group),
-                            sessionIdentity: self.draftSessionIdentity(for: confirmedRow.id))
+                            sessionIdentity: self.draftSessionIdentity(for: confirmedRow.id),
+                            nativeChoices: self.usesNativeVisibility ? self.nativeTrayChoices : nil)
                         self.trayPlacementErrors.removeValue(forKey: confirmedRow.id)
                         self.itemApplicationIssues.removeValue(forKey: confirmedRow.id)
                     }
@@ -1242,6 +1244,53 @@ final class MenuTidyModel: ObservableObject {
         pendingDrafts.remove(id: id)
         persistDrafts()
         rebuildRows()
+    }
+
+    private var canEditOfflineDrafts: Bool {
+        !stopping && !preparingToTerminate && !isRecoveringPositions && !isActivatingPanelItem &&
+            !isApplying && !isRefreshing && !isArranging && trayPlacementTask == nil
+    }
+
+    var canDiscardOfflineDrafts: Bool { !offlineDrafts.isEmpty && canEditOfflineDrafts }
+    var canUndoOfflineDraftDeletion: Bool { !discardedOfflineDrafts.isEmpty && canEditOfflineDrafts }
+
+    func discardOfflineDrafts() {
+        if isUIPreview { discardedOfflineDrafts = offlineDrafts; offlineDrafts.removeAll(); return }
+        guard canDiscardOfflineDrafts else { return }
+        cancelPassiveIconCapture()
+        // Recompute bindings before deciding which records are still offline.
+        rebuildRows()
+        let removed = offlineDrafts
+        let ids = Set(removed.map(\.id))
+        guard !ids.isEmpty else { return }
+        var updated = pendingDrafts
+        updated.remove(ids: ids)
+        do {
+            try saveTrayIntent(drafts: updated, nativeChoices: nil)
+            discardedOfflineDrafts = removed
+            rebuildRows()
+            managementMessage = "已删除 \(ids.count) 条待关联草稿，已保存的分类与当前图标显示不变。"
+        } catch {
+            managementError = "待关联草稿暂时无法删除，请重试。原草稿已保留。"
+        }
+    }
+
+    func undoOfflineDraftDeletion() {
+        if isUIPreview { offlineDrafts += discardedOfflineDrafts; discardedOfflineDrafts.removeAll(); return }
+        guard canUndoOfflineDraftDeletion else { return }
+        cancelPassiveIconCapture()
+        var updated = pendingDrafts
+        do {
+            try updated.restoreUnassociated(discardedOfflineDrafts)
+            try saveTrayIntent(drafts: updated, nativeChoices: nil)
+            discardedOfflineDrafts.removeAll()
+            rebuildRows()
+            managementMessage = "已恢复上次删除的待关联草稿。"
+        } catch PendingDraftStore.StoreError.targetHasDraft {
+            managementError = "已有新的图标选择，未覆盖任何草稿；无法撤销上次删除。"
+        } catch {
+            managementError = "待关联草稿暂时无法恢复，请重试。"
+        }
     }
 
     @discardableResult
@@ -4555,7 +4604,16 @@ private extension MenuTidyModel {
         actualGroups[rule.id] = rule.visibility
         rules.set(rule)
         persistRules()
-        pendingDrafts.removeVerified(rule, sessionIdentity: identity)
+        // A verified legacy/session choice may not yet have durable native
+        // intent. Import only this confirmed rule, preserving newer choices.
+        var updatedChoices = nativeTrayChoices
+        let imported = updatedChoices.migrate(saved: ItemRuleBook(rules: [rule.id: rule]),
+            excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
+        if !imported.isEmpty, let encoded = try? JSONEncoder().encode(updatedChoices) {
+            defaults.set(encoded, forKey: "nativeTrayChoices.v1")
+            nativeTrayChoices = updatedChoices
+        }
+        pendingDrafts.removeVerified(rule, sessionIdentity: identity, nativeChoices: nativeTrayChoices)
         persistDrafts()
         if trayPlacementGroup(id: rule.id) == rule.visibility {
             itemApplicationIssues.removeValue(forKey: rule.id)

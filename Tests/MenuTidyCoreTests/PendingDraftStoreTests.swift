@@ -20,6 +20,127 @@ final class PendingDraftStoreTests: XCTestCase {
             "A forgotten verified session baseline must not resurrect at restart.")
     }
 
+    func testVerifiedNativeChoiceDoesNotReturnAsOfflineDraftAfterRestartOrOwnerExit() throws {
+        var store = PendingDraftStore()
+        let applied = rule("session:native", .alwaysHidden)
+        let owner = identity(applied.id)
+        var choices = NativeTrayChoices()
+        XCTAssertTrue(choices.set(bundle: "example.app", group: .alwaysHidden))
+        try store.set(applied, sessionIdentity: owner)
+        store.removeVerified(applied, sessionIdentity: owner, nativeChoices: choices)
+        store.retainSessionBindings { _ in false }
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertTrue(try roundTrip(store).records.isEmpty)
+        XCTAssertEqual(choices.group(bundle: "example.app"), .alwaysHidden)
+    }
+
+    func testNativeChoiceCleanupRequiresMatchingCategoryAndLiveIdentity() throws {
+        var store = PendingDraftStore()
+        let applied = rule("session:native", .alwaysHidden)
+        let owner = identity(applied.id)
+        var choices = NativeTrayChoices(existing: ["example.app": .collapsible])
+        try store.set(applied, sessionIdentity: owner)
+        store.removeVerified(applied, sessionIdentity: owner, nativeChoices: choices)
+        XCTAssertEqual(try roundTrip(store).records.map(\.rule), [applied],
+                       "A different durable choice must not discard the session backup.")
+        try store.set(rule(applied.id, .visible), sessionIdentity: owner)
+        choices.set(bundle: "example.app", group: .visible)
+        store.removeVerified(rule(applied.id, .visible), sessionIdentity: identity(applied.id, pid: 99),
+                             nativeChoices: choices)
+        XCTAssertEqual(store.records.first?.rule.visibility, .visible)
+        store.removeVerified(applied, sessionIdentity: owner, nativeChoices: choices)
+        XCTAssertEqual(store.records.first?.rule.visibility, .visible,
+                       "A stale completion must not consume the latest pending edit.")
+    }
+
+    func testNativeCleanupRemovesOldBaselineAfterLatestEditIsVerified() throws {
+        var store = PendingDraftStore()
+        let applied = rule("session:native")
+        let owner = identity(applied.id)
+        try store.set(applied, sessionIdentity: owner)
+        store.removeVerified(applied, sessionIdentity: owner)
+        let edited = rule(applied.id, .alwaysHidden)
+        try store.set(edited, sessionIdentity: owner)
+        store.removeVerified(edited, sessionIdentity: owner,
+            nativeChoices: NativeTrayChoices(existing: ["example.app": .alwaysHidden]))
+        store.retainSessionBindings { _ in false }
+        XCTAssertTrue(try roundTrip(store).records.isEmpty,
+                      "The previous applied session baseline must not resurrect.")
+    }
+
+    func testNativeChoiceCannotAutomaticallyConsumeUnassociatedDraft() throws {
+        let offline = rule("session:offline")
+        var store = try PendingDraftStore(unassociatedRules: [offline])
+        store.removeVerified(offline, sessionIdentity: identity(offline.id),
+            nativeChoices: NativeTrayChoices(existing: ["example.app": .collapsible]))
+        XCTAssertEqual(try roundTrip(store).records.map(\.rule), [offline])
+    }
+
+    func testBulkDiscardPreservesLiveEditAndVerifiedSessionBaseline() throws {
+        var store = try PendingDraftStore(unassociatedRules: [rule("session:offline"), rule("item:offline")])
+        let offlineIDs = Set(store.records.map(\.id))
+        let applied = rule("session:live")
+        let owner = identity(applied.id)
+        let verifiedID = try store.set(applied, sessionIdentity: owner)
+        store.removeVerified(applied, sessionIdentity: owner)
+        let pending = rule("item:live", .visible)
+        try store.set(pending, sessionIdentity: nil)
+        store.remove(ids: offlineIDs.union([verifiedID, UUID()]))
+        XCTAssertEqual(store.records.map(\.rule), [pending])
+        XCTAssertEqual(Set(try roundTrip(store).records.map(\.rule.id)), [applied.id, pending.id])
+        store.retainSessionBindings { _ in false }
+        XCTAssertEqual(Set(store.records.map(\.rule.id)), [applied.id, pending.id])
+    }
+
+    func testBulkDeletionUndoRestoresRecordsWithoutGuessingSessionBinding() throws {
+        var store = try PendingDraftStore(unassociatedRules: [rule("session:offline"), rule("item:offline")])
+        let removed = store.records
+        store.remove(ids: Set(removed.map(\.id)))
+        XCTAssertTrue(try roundTrip(store).records.isEmpty)
+        try store.restoreUnassociated(removed)
+        XCTAssertEqual(try roundTrip(store).records, removed)
+        XCTAssertNil(store.record(for: "session:offline", sessionIdentity: identity("session:offline")))
+        XCTAssertNotNil(store.record(for: "item:offline", sessionIdentity: nil))
+    }
+
+    func testDeletionUndoRejectsNewTargetChoiceAtomically() throws {
+        var store = try PendingDraftStore(unassociatedRules: [rule("item:one"), rule("item:two")])
+        let removed = store.records
+        store.remove(ids: Set(removed.map(\.id)))
+        try store.set(rule("item:two", .alwaysHidden), sessionIdentity: nil)
+        let before = store.records
+        XCTAssertThrowsError(try store.restoreUnassociated(removed)) {
+            XCTAssertEqual($0 as? PendingDraftStore.StoreError, .targetHasDraft)
+        }
+        XCTAssertEqual(store.records, before, "Undo must not partially restore or overwrite the new choice.")
+    }
+
+    func testVerifiedLegacySessionChoiceMigratesBeforeRemovingItsDraft() throws {
+        var store = PendingDraftStore()
+        let applied = rule("session:legacy")
+        let owner = identity(applied.id)
+        try store.set(applied, sessionIdentity: owner)
+        var choices = NativeTrayChoices()
+        XCTAssertEqual(choices.migrate(saved: ItemRuleBook(rules: [applied.id: applied])), ["example.app"])
+        store.removeVerified(applied, sessionIdentity: owner, nativeChoices: choices)
+        XCTAssertTrue(try roundTrip(store).records.isEmpty)
+        XCTAssertEqual(choices.group(bundle: "example.app"), applied.visibility)
+    }
+
+    func testDurableNativeChoiceCanReplaceAnAlreadyVerifiedLegacyBaseline() throws {
+        var store = PendingDraftStore()
+        let applied = rule("session:legacy-verified")
+        let owner = identity(applied.id)
+        try store.set(applied, sessionIdentity: owner)
+        store.removeVerified(applied, sessionIdentity: owner)
+        XCTAssertFalse(try roundTrip(store).records.isEmpty)
+        var choices = NativeTrayChoices()
+        choices.migrate(saved: ItemRuleBook(rules: [applied.id: applied]))
+        store.removeVerified(applied, sessionIdentity: owner, nativeChoices: choices)
+        store.retainSessionBindings { _ in false }
+        XCTAssertTrue(try roundTrip(store).records.isEmpty)
+    }
+
     private func rule(_ id: String, _ visibility: ItemVisibility = .collapsible) -> ItemRule {
         ItemRule(id: id, name: "Same display name", bundleIdentifier: "example.app", visibility: visibility)
     }
