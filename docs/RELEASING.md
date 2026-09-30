@@ -1,6 +1,6 @@
 # 构建与发布
 
-Menu Tidy 当前版本为 **0.6.0（build 53）**。本轮独立托盘与原生隐藏的本地验收见[当前托盘记录](TRAY-EXPERIENCE.md)；历史隔离更新器的签名安装、重启与偏好保留证据仍分别记录。`SPARKLE_PRIVATE_KEY` 已获用户明确授权并上传。下面的流程只在对应 Actions 与 Release 实际完成后构成公开发布，不把本地打包视为 GitHub 发布物安装验收。
+Menu Tidy 当前版本为 **0.6.3（build 59）**。本轮独立托盘与原生隐藏的本地验收见[当前托盘记录](TRAY-EXPERIENCE.md)；历史隔离更新器的签名安装、重启与偏好保留证据仍分别记录。`SPARKLE_PRIVATE_KEY` 已获用户明确授权并上传。下面的流程只在对应 Actions 与 Release 实际完成后构成公开发布，不把本地打包视为 GitHub 发布物安装验收。
 
 普通提交和 Pull Request 会生成供检查的构建产物；只有推送与应用版本一致的 `v*` 标签，才会尝试创建 GitHub Release。**版本带预发布后缀时进入 preview，并标为 Prerelease；没有后缀时进入 stable。** 例如 `v0.6.0-beta.1` 不改变稳定版 Latest，`v0.6.0` 则作为稳定版发布并更新 Latest。不要用文案中的“预览版”代替实际版本后缀。
 
