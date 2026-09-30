@@ -144,6 +144,91 @@ final class NativeMenuBarVisibilityCodecTests: XCTestCase {
         catch Codec.Failure.unsafeTarget { }
     }
 
+    private func helperRecord(owner: String, helper: String) -> [String: Any] {
+        var item = record(owner)
+        item["menuItemLocations"] = [key(helper)]
+        return item
+    }
+
+    func testWPSHelperUsesExplicitContainingApplicationRecord() throws {
+        let owner = "com.kingsoft.wpsoffice.mac"
+        let helper = "cn.wps.wpscloudsvr"
+        let input: [Any] = [key(owner), helperRecord(owner: owner, helper: helper), key(other), record(other)]
+        let snapshot = try Codec.decode(bytes(input))
+        XCTAssertTrue(try snapshot.isAllowed(bundleIdentifier: helper))
+        let change = try XCTUnwrap(snapshot.settingAllowed(false, bundleIdentifier: helper))
+        let output = try values(change.data)
+        var expected = helperRecord(owner: owner, helper: helper)
+        expected["isAllowed"] = false
+        XCTAssertTrue(NSDictionary(dictionary: output[1] as! [String: Any]).isEqual(to: expected))
+        XCTAssertTrue(NSDictionary(dictionary: output[3] as! [String: Any]).isEqual(to: record(other)))
+        guard case .restored(let restored) = try Codec.decode(change.data).restoring(change.undo) else {
+            return XCTFail("Helper restore failed")
+        }
+        XCTAssertTrue(NSArray(array: try values(restored)).isEqual(to: input))
+    }
+
+    func testHelperJournalSurvivesHideRevealRehideAndRestore() throws {
+        typealias Ledger = NativeMenuBarVisibilityLedger
+        let input: [Any] = [key(other), helperRecord(owner: other, helper: target)]
+        let snapshot = try Codec.decode(bytes(input))
+        let entry = Ledger.Entry(bundleIdentifier: target, originalRecord: try snapshot.record(bundleIdentifier: target),
+                                 mode: .original, pending: .hide)
+        let loaded = try XCTUnwrap(Ledger.decode(Ledger.encode([entry])).first)
+        let hidden = try Codec.decode(loaded.hiddenRecord())
+        let completed = try XCTUnwrap(loaded.completingPending())
+        XCTAssertEqual(try Ledger.recovery(for: loaded, current: hidden), .completed(completed))
+        let revealed = try XCTUnwrap(completed.preparing(.reveal).completingPending())
+        XCTAssertEqual(try Ledger.recovery(for: completed.preparing(.reveal), current: snapshot), .completed(revealed))
+        XCTAssertEqual(try Ledger.recovery(for: revealed.preparing(.rehide), current: hidden), .completed(completed))
+        let restored = try XCTUnwrap(hidden.replacingRecord(bundleIdentifier: target,
+            expected: completed.expectedRecord(), replacement: completed.originalRecord))
+        XCTAssertEqual(try Ledger.recovery(for: completed.preparing(.restore), current: Codec.decode(restored)), .completed(nil))
+    }
+
+    func testHelperWithAnotherMenuItemOwnerRefused() throws {
+        var item = helperRecord(owner: other, helper: target)
+        item["menuItemLocations"] = [key(target), key(other)]
+        XCTAssertThrowsError(try Codec.decode(bytes([key(other), item])).isAllowed(bundleIdentifier: target)) {
+            XCTAssertEqual($0 as? Codec.Failure, .unsafeTarget)
+        }
+    }
+
+    func testHelperInTwoApplicationRecordsRefused() throws {
+        let input: [Any] = [key(other), helperRecord(owner: other, helper: target),
+                            key("dev.fixture.Second"), helperRecord(owner: "dev.fixture.Second", helper: target)]
+        XCTAssertThrowsError(try Codec.decode(bytes(input)).settingAllowed(false, bundleIdentifier: target)) {
+            XCTAssertEqual($0 as? Codec.Failure, .unsafeTarget)
+        }
+    }
+
+    func testExactRecordCannotMaskAnotherHelperReference() throws {
+        let input = baseline + [key("dev.fixture.Parent"), helperRecord(owner: "dev.fixture.Parent", helper: target)]
+        XCTAssertThrowsError(try Codec.decode(bytes(input)).isAllowed(bundleIdentifier: target)) {
+            XCTAssertEqual($0 as? Codec.Failure, .unsafeTarget)
+        }
+    }
+
+    func testHelperUnderNonBundleRecordRefused() throws {
+        let location: [String: Any] = ["path": ["_0": "/fixture/Parent"]]
+        var item = helperRecord(owner: other, helper: target)
+        item["location"] = location
+        XCTAssertThrowsError(try Codec.decode(bytes([location, item])).isAllowed(bundleIdentifier: target)) {
+            XCTAssertEqual($0 as? Codec.Failure, .unsafeTarget)
+        }
+    }
+
+    func testHelperReparentingDoesNotTransferReceiptOwnership() throws {
+        let snapshot = try Codec.decode(bytes([key(other), helperRecord(owner: other, helper: target)]))
+        let original = try snapshot.record(bundleIdentifier: target)
+        let hidden = try XCTUnwrap(snapshot.settingAllowed(false, bundleIdentifier: target))
+        var moved = helperRecord(owner: "dev.fixture.NewParent", helper: target)
+        moved["isAllowed"] = false
+        let fresh = try Codec.decode(bytes([key("dev.fixture.NewParent"), moved]))
+        XCTAssertFalse(try fresh.matches(record: hidden.data, bundleIdentifier: target))
+        XCTAssertNil(try fresh.replacingRecord(bundleIdentifier: target, expected: hidden.data, replacement: original))
+    }
+
     func testInteger1IsNotACFBoolean() throws { try rejected([key(target), record(target, 1)], as: .malformed)
     }
 

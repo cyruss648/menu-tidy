@@ -110,12 +110,18 @@ public enum NativeMenuBarVisibilityCodec {
                 throw Failure.unsafeTarget
             }
             let location: [String: Any] = ["bundle": ["_0": bundleIdentifier]]
-            guard let index = pairs.firstIndex(where: { equal($0.location, location) }) else {
-                throw Failure.missingTarget
+            // macOS can store a helper's switch under its containing app's
+            // bundle. Bind to the explicit menu-item owner, never a guessed
+            // parent bundle, display name, path prefix or hard-coded app alias.
+            let candidates = pairs.indices.filter { index in
+                if equal(pairs[index].location, location) { return true }
+                let locations = pairs[index].record["menuItemLocations"] as! [Any]
+                return locations.contains { equal($0, location) }
             }
-            // Additional menu-item owners cannot be safely attributed to this
-            // exact bundle. Refuse instead of hiding a broader application.
-            guard let locations = pairs[index].record["menuItemLocations"] as? [Any],
+            guard !candidates.isEmpty else { throw Failure.missingTarget }
+            guard candidates.count == 1, let index = candidates.first,
+                  pairs[index].location["bundle"] != nil,
+                  let locations = pairs[index].record["menuItemLocations"] as? [Any],
                   !locations.isEmpty,
                   locations.allSatisfy({ equal($0, location) }) else {
                 throw Failure.unsafeTarget
@@ -158,7 +164,7 @@ public enum NativeMenuBarVisibilityCodec {
     /// Codable enum location shape. Unknown cases remain opaque: for example,
     /// adhocBinary carries a Codable URL dictionary under _0, not a String.
     /// The enclosing bounded plist validation already checked its contents.
-    /// Only the exact bundle case can ever match a managed target.
+    /// Only explicit bundle locations can ever match a managed target.
     private static func validLocation(_ location: [String: Any]) -> Bool {
         guard location.count == 1, let entry = location.first, !entry.key.isEmpty,
               let payload = entry.value as? [String: Any] else { return false }
