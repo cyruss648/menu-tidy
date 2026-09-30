@@ -6,24 +6,26 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.6.0</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.0</link>
-      <pubDate>Tue, 29 Sep 2026 08:44:39 +0000</pubDate>
-      <sparkle:version>53</sparkle:version>
-      <sparkle:shortVersionString>0.6.0</sparkle:shortVersionString>
+      <title>Menu Tidy 0.6.1</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.1</link>
+      <pubDate>Wed, 30 Sep 2026 05:30:29 +0000</pubDate>
+      <sparkle:version>57</sparkle:version>
+      <sparkle:shortVersionString>0.6.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="plain-text">## [0.6.0] - 2026-09-29
+      <description sparkle:format="plain-text">## [0.6.1] - 2026-09-30
 
-本版统一图标管理与失败重试，构建号为 53。0.5.0 用户可通过应用内「检查更新」升级，保留现有分类与更新偏好。
+正式版构建号为 57，可从 0.6.0 或构建 56 候选版通过应用内更新升级。功能代码已在本机 macOS 27 双屏环境验证隔空投送与输入法切换的托盘隐藏、原生菜单打开及关闭后收回。完整证据边界见 [系统托盘验证](docs/SYSTEM-TRAY-VALIDATION.md)。
 
-- 合并图标主列表与高级兼容维护：三项显示选择即时处理，顶部固定提供统一应用与统一重试；刷新、筛选、离线记录和恢复入口各有明确位置。
-- 重试与队列保留完整三态；始终隐藏不再出现在普通托盘。同应用多个图标同步最新选择和草稿，确认成功后清理过期错误，共享开关失败后不借兄弟图标反复重试。
-- 排除菜单栏宿主引用的普通应用主菜单，避免“编辑 / 窗口 / 帮助”被误当成可整理图标；继续保留真实隐藏项的身份与恢复验证。
-- 修复离线原生分类忘记后复活、明确关联草稿被已有应用选择覆盖的问题。
-- 新增独立模拟预览包用于界面验收；不读取实际恢复账本、不操作真实菜单栏，也不替换已安装应用。验证范围见 [统一管理页评审](docs/UNIFIED-MANAGEMENT.md)。
+- 修复只扫描第一块显示器导致其他屏幕图标被判为离线；隔空投送以唯一系统原始项作为托盘入口，逐屏核验投影并拒绝同屏重复。
 
-本地完整检查通过 458 项 Swift 与 80 项 Python 测试，并完成隔离模拟界面验证。GitHub 双架构构建、正式安装与实机交互分别验证；模拟预览不代表第三方图标全场景验收。
+- 隔空投送完整识别忽略外部进程的菜单按钮叶节点；输入法切换图标采用系统宿主精确路径、进程生命周期与唯一原生图标枚举建立独立身份。接入隐藏、托盘临时显示、重新绑定与恢复流程，并保留双项独立恢复记录及旧版记录读取。
+
+- Clash Verge 托盘默认通过系统应用打开接口显示主窗口，不依赖模拟鼠标或临时显露图标；只有确认目标应用窗口实际可见才视为成功。托盘右键菜单分别提供应用打开与原生图标操作入口，失败重试保持所选操作类型。
+
+- 区分菜单栏图标的系统归属冲突与普通失败：显示「归属待修复」及完整处理说明，单项入口改为「重新检查」，从批量应用和重试中排除，保留原有选择与未完成计数。归属检查保持严格，不按应用名称猜测或自动覆盖系统记录。
+
+验证：464 项 Swift 测试、80 项 Python 测试，签名候选双架构构建通过。已知限制：Atoll 在一次退出恢复中需要手动重试；重试后恢复成功。未宣称所有第三方图标、旧版系统或显示器布局均兼容。
 
 ### 软件内更新与首次安装
 
@@ -35,8 +37,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.6.0-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.6.0-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.6.1-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.6.1-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -46,25 +48,25 @@ macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系�
 
 本版本发布到正式更新渠道。预览版本使用独立的预览更新渠道。
 使用项目专用自签名证书，未经过 Apple 公证；更新归档和更新列表均使用 EdDSA 签名并验证。
-主页面提供「常驻菜单栏 / 收进托盘」两种去向，选择后自动执行单项设置；失败在对应行保留原因与重试入口。
+主页面提供「常驻显示 / 收起后隐藏 / 始终隐藏」三种选择，选择后自动执行单项设置；失败在对应行保留原因与重试入口。
 点击菜单栏箭头立即打开独立网格托盘，不等待全量扫描或重新截图。原始图标快照在隐藏期间不会实时更新。
 macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同一应用的多个菜单栏图标共用显示设置。
 系统模块按已验证的接口逐项支持。日常模式移除宽占位，只保留托盘按钮；常驻项目超出屏幕容量时，系统仍可能显示溢出入口。
 采集原图或打开目标时会临时显示相应应用或模块，
-不移动用户鼠标，不发送全局模拟键鼠事件。点击只向原始辅助功能对象请求一次受支持的动作，
-确认原生菜单或窗口打开后等待其关闭，再恢复隐藏，不补发模拟点击。结束隐藏管理或正常退出时条件恢复原设置，
+不移动用户鼠标，不发送全局模拟键鼠事件。原生菜单路径只向原始辅助功能对象请求一次受支持的动作；Clash Verge 默认通过系统应用接口打开主窗口。
+原生菜单路径确认界面打开后等待其关闭，再恢复隐藏，不补发模拟点击。结束隐藏管理或正常退出时条件恢复原设置，
 外部改动不会被强行覆盖；未完成的恢复保留记录。不支持或未确认成功的选择保留原因和重试入口，不标为已完成。
 原生 ⌘ 拖拽分组仅保留在旧系统兼容模式；macOS 27 使用上述单项设置流程。
 显示设置读回或动作返回成功不等于图标已经隐藏或菜单已经出现，实际兼容性以验证记录为准。
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.0/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.0/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.0/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.1/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.1/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.1/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.0/Menu-Tidy-0.6.0-macos-arm64.zip" length="3591252" type="application/octet-stream" sparkle:edSignature="rDJ9uGvx7q+xyWO6d/2g/rEhOmPWCOseJ0/QR2BLnPdE9yCnLcDxxl0DcClKh/tMS++DFp7vwLKDp5adxJrODQ=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.1/Menu-Tidy-0.6.1-macos-arm64.zip" length="3606696" type="application/octet-stream" sparkle:edSignature="PB2FXkvdQSufBD8Rxc27HWizUAJCQE7tUKEF+ak6S5TsCpm/XCvCiyF6Yw3nygOb9br1WHqYHC8WznQEEAl0AA=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: DahloL29WMVjmm/nEZYfNt2EfylipJXXML/45aI4H/Wl/OIce0FZ5JZQUJy5DLLZpWblqcxG3ZaSRhwdDEkNDA==
-length: 6154
+edSignature: Y5dDTX+CQm4u0aTqG3sreL27Kc2fW82fbiJoKg48NnrUzHAmmh4j+wzanJsqjNK1SzyRUWYTkSBl69E5HGD4CA==
+length: 6623
 -->
