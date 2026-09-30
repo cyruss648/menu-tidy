@@ -3,6 +3,7 @@ import SwiftUI
 /// Content only: the parent settings page owns the single vertical scroll view.
 struct UpdateSettingsView: View {
     @ObservedObject var updates: UpdateController
+    @State private var showsHistory = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -65,6 +66,20 @@ struct UpdateSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.bottom, 13)
                 }
+                Divider()
+                HStack(spacing: 16) {
+                    Button { showsHistory = true } label: {
+                        Label("更新记录", systemImage: "clock.arrow.circlepath")
+                    }
+                    .help("在应用内查看随当前版本附带的历史更新记录，离线也可阅读。")
+                    Spacer(minLength: 8)
+                    Link("GitHub 发布 ↗", destination: ProjectLinks.releases)
+                        .help("在浏览器打开 GitHub，查看最新发布及安装包。")
+                    Link("反馈问题 ↗", destination: ProjectLinks.issues)
+                        .help("在浏览器打开 GitHub 问题反馈页面。")
+                }
+                .font(.system(size: 11))
+                .padding(.vertical, 13)
             }
             .padding(.horizontal, 16)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
@@ -75,6 +90,9 @@ struct UpdateSettingsView: View {
             Text("更新会保留你的分类与偏好设置。检查和下载来自 GitHub 发布服务，不上传菜单栏图标或分类。")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+        .sheet(isPresented: $showsHistory) {
+            ReleaseHistoryView(currentVersion: updates.currentVersion)
         }
     }
 
