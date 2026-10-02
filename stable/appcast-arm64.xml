@@ -6,23 +6,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.6.4</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.4</link>
-      <pubDate>Wed, 30 Sep 2026 20:50:32 +0000</pubDate>
-      <sparkle:version>60</sparkle:version>
-      <sparkle:shortVersionString>0.6.4</sparkle:shortVersionString>
+      <title>Menu Tidy 0.6.5</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.5</link>
+      <pubDate>Fri, 02 Oct 2026 16:05:23 +0000</pubDate>
+      <sparkle:version>61</sparkle:version>
+      <sparkle:shortVersionString>0.6.5</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="plain-text">## [0.6.4] - 2026-10-01
+      <description sparkle:format="plain-text">## [0.6.5] - 2026-10-02
 
-正式版构建号为 60，可通过应用内更新升级，保留现有分类与偏好。
+正式版构建号为 61，保留现有分类与偏好。
 
-- 缺失图像的后台采集采用 2 / 5 / 15 / 30 秒递增重试；读取无进展时降频，刷新、应用生命周期、唤醒和显示器变化重新触发检查。继续核验权限、进程生命周期、命中位置和采集后的几何证据。
-- 后台维护改为按实际工作安排单次计时器，并允许系统合并唤醒；托盘自动收起和设置页权限检测保持原有响应间隔。
-- 仅在权限、托盘缓存图像、提示、列表内容和待处理计数发生变化时发布界面状态；常用行查询改为按标识索引，减少缓存托盘的重复布局。
-- 设置窗口关闭 30 秒后释放视图，重新打开保留页面、搜索、筛选和展开状态；最小化与隐藏窗口仍保留。应用身份图标缓存使用 32 点的 2x 位图，限制 64 项 / 1 MiB 位图成本，内存压力时清理可重建缓存与已关闭视图。
+- 修复旧分类自动连接时，同应用单个图标的确认可能覆盖其他图标原有选择的问题。混合旧类别保留为待处理，不再由先处理的图标决定整个应用的分类；用户明确选择的新类别继续优先。
+- 修复仅有会话身份的图标成功分类后，应用离线并重启 Menu Tidy 就无法查看或忘记其持久分类的问题。离线列表补充应用级选择，忘记操作保留其他应用记录和恢复账本。
+- 修复托盘耗时操作结束后立即自动收起的问题。操作期间暂停计时，恢复后重新给予完整等待时间，便于查看错误和重试。
+- 本地安装脚本先在全新目录复制、验证签名，再备份并整体替换应用；失败时恢复原安装，避免合并新旧目录残留资源导致签名失效。
+- 增加直接运行真实应用模型的集成测试，覆盖旧数据加载、自动连接、确认、重建离线列表及忙碌结束后的自动收起；更新开发文档，区分历史验收与当前源码状态。
 
-验证：本地完整检查通过 489 项 Swift 测试与 80 项 Python 测试；macOS 27 Apple Silicon 实测缓存托盘平均 CPU 从约 9.81% 降到 0.17%，关闭窗口后平均 CPU 从约 0.39% 降到 0.04%，并确认视图释放、重新打开状态保留及分类偏好保留。测量条件与未验证范围见[资源占用验证](docs/RESOURCE-USAGE.md)。
+验证范围与限制见[0.6.5 回归验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.5/docs/ACCEPTANCE-0.6.5.md)。应用层测试使用隔离偏好、时钟和系统接口，不代表真实第三方菜单栏、权限撤销、睡眠唤醒、多显示器或 Intel 桌面交互均已实测。
 
 ### 软件内更新与首次安装
 
@@ -34,8 +35,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.6.4-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.6.4-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.6.5-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.6.5-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -58,12 +59,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.4/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.4/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.4/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.5/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.5/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.5/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.4/Menu-Tidy-0.6.4-macos-arm64.zip" length="3677504" type="application/octet-stream" sparkle:edSignature="R9iaJBEmf2wG9l9F2yX6xEZc4h1mE/ygc7BsGM9cZGD70pHs5bJu+Dg3I9K0F3o6Fk8i9Vt/93LcpWtxW9LqBg=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.5/Menu-Tidy-0.6.5-macos-arm64.zip" length="3722297" type="application/octet-stream" sparkle:edSignature="WnQ+o72uoERZ/kmLu1QhkO1kOvTxCOlZqySEXlrMK7HfzTD3/Dgnx5GnoUJsU/B4PPzlknSMvvAC58PG3M3/Aw=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: q7wlG4DXZLBxg14k2BD43GqqH0Mo3NF3D//ditKR3giEPnhBhzSlpxkuozd2tL+vpbDYPaknkQAEYcB9zBW7AA==
-length: 6315
+edSignature: ODho03R0vkTmLoC8fyA/iO/cGqJZqkPty1uyAI6Zn6xzkwwFV6+jAjJ8uvCL53nmjDkbdRCX4XznIWq5qrH0AA==
+length: 6366
 -->
