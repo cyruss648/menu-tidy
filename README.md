@@ -4,7 +4,7 @@
 
 [下载发布版本](https://github.com/cyruss648/menu-tidy/releases) · [使用与开发文档](docs/README.md) · [反馈问题](https://github.com/cyruss648/menu-tidy/issues)
 
-> **当前源码版本：0.6.4（构建 60），优化后台图像重试、界面刷新和关闭窗口后的内存占用；公开发布状态以 GitHub Release 为准。** 本文描述当前源码中的独立托盘实现，公开下载版本以 Release 为准。正常功能不移动用户鼠标，也不发送全局模拟键鼠事件；点击隐藏项时，可能先临时显示该单项，再请求原生后台动作。当前设计、实机证据与未验证边界见[独立托盘体验](docs/TRAY-EXPERIENCE.md)和[资源占用验证](docs/RESOURCE-USAGE.md)。
+> **当前源码版本：0.6.5（构建 61），修复旧分类迁移、离线记录管理、操作后的自动收起计时及本地安装替换；公开发布状态以 GitHub Release 为准。** 本文描述当前源码中的独立托盘实现，公开下载版本以 Release 为准。正常功能不移动用户鼠标，也不发送全局模拟键鼠事件；点击隐藏项时，可能先临时显示该单项，再请求原生后台动作。当前设计、实机证据与未验证边界见[独立托盘体验](docs/TRAY-EXPERIENCE.md)、[资源占用验证](docs/RESOURCE-USAGE.md)和[本轮回归验证](docs/ACCEPTANCE-0.6.5.md)。
 
 ## 主要功能
 
