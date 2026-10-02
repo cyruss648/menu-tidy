@@ -24,19 +24,4 @@ if [ -e "$install_target" ] && [ ! -w "$install_target" ]; then
   exit 1
 fi
 ./scripts/build.sh release
-if [ -e "$install_target" ]; then
-  existing_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$install_target/Contents/Info.plist")"
-  if [ "$existing_identifier" != 'dev.hdh.MenuTidy' ]; then
-    echo '同名应用的身份不同，已停止安装。' >&2
-    exit 1
-  fi
-  backup_parent="$HOME/Library/Application Support/Menu Tidy/Backups"
-  mkdir -p "$backup_parent"
-  ditto "$install_target" "$backup_parent/Menu Tidy-$(date +%Y%m%d-%H%M%S).app"
-fi
-if ! ditto 'dist/Menu Tidy.app' "$install_target"; then
-  printf '安装到 %s 失败，请检查目标目录及现有应用的写入权限；脚本未改装到其他目录。\n' "$install_target" >&2
-  exit 1
-fi
-codesign --verify --strict "$install_target"
-printf 'Installed: %s\n请从此路径打开应用并申请辅助功能权限。\n' "$install_target"
+exec python3 scripts/install-bundle.py 'dist/Menu Tidy.app' "$install_parent"
