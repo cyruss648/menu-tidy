@@ -6,7 +6,7 @@ usage() {
   printf '%s\n' 'Usage: scripts/check.sh [--static [-- FILE...]] | --swift | --full' \
     'Default: static checks of tracked and non-ignored untracked source files.' \
     '--static checks supplied files only when FILE arguments are present.' \
-    '--swift runs the complete macOS Swift build and core test suite.' \
+    '--swift runs the complete macOS Swift build, core tests and app integration tests.' \
     '--full runs both; no source files are modified.'
 }
 

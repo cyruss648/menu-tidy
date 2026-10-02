@@ -15,7 +15,7 @@ repos:
         types: [file]
         stages: [pre-commit]
       - id: swift-build-and-test
-        name: Swift warnings-as-errors build and core tests
+        name: Swift warnings-as-errors build and integration tests
         entry: scripts/check.sh --swift
         language: system
         pass_filenames: false
