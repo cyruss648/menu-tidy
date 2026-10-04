@@ -216,6 +216,20 @@ final class MenuTidyModel: ObservableObject {
     private var applicationIcons = BoundedValueCache<String, NSImage>(countLimit: 64, costLimit: 1_048_576)
     private var itemsByID: [String: ManagedItemRow] = [:]
     private var snapshots: [MenuBarItemSnapshot] = []
+    private struct ScanOwnerKey: Hashable, Sendable {
+        let pid: pid_t
+        let bundleIdentifier: String?
+        let launchTime: TimeInterval
+
+        init(_ owner: MenuBarOwner) {
+            pid = owner.pid
+            bundleIdentifier = owner.bundleIdentifier
+            launchTime = owner.launchTime
+        }
+    }
+    private var successfulScanOwnerKeys: Set<ScanOwnerKey> = []
+    private var snapshotOwnerKeys: [pid_t: ScanOwnerKey] = [:]
+    private var scanSchedule = MenuBarScanSchedule<ScanOwnerKey>()
     private var actualGroups: [String: ItemVisibility] = [:]
     private var lastKnownObservedGroups = ObservedItemGroupHistory()
     private var workTask: Task<Void, Never>?
@@ -1061,7 +1075,8 @@ final class MenuTidyModel: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
-    func refreshMenuItems(collapseWhenFinished: Bool = false, prepareOverflow: Bool = false) {
+    func refreshMenuItems(collapseWhenFinished: Bool = false, prepareOverflow: Bool = false,
+                          discover: Bool = true) {
         if isUIPreview { managementMessage = "预览：图标列表已更新，当前选择已保留。"; return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         guard accessibilityGranted else { managementError = "先在权限页开启辅助功能权限，再读取菜单栏图标。"; return }
@@ -1079,6 +1094,7 @@ final class MenuTidyModel: ObservableObject {
         workTask = Task { [weak self] in
             guard let self else { return }
             var scanSucceeded = false
+            var completedScans = 0
             var inventoryIssues: [String] = []
             defer {
                 self.isRefreshing = false
@@ -1105,7 +1121,8 @@ final class MenuTidyModel: ObservableObject {
                     }
                 }
                 try self.checkImageRefreshCancellation()
-                try await self.scanNow(allowNativeOwnerRecovery: true)
+                try await self.scanNow(allowNativeOwnerRecovery: true, discover: discover)
+                completedScans += 1
                 try self.checkOperationDeadline()
                 // Discovery can first restore our ownership for a departed
                 // process. ScreenCaptureKit and temporary
@@ -1118,6 +1135,7 @@ final class MenuTidyModel: ObservableObject {
                         // evidence checks before the remaining passive capture.
                         try self.checkImageRefreshCancellation()
                         try await self.scanNow()
+                        completedScans += 1
                     }
                     do { try await self.prepareIconImages() }
                     catch {
@@ -1152,6 +1170,20 @@ final class MenuTidyModel: ObservableObject {
                 do {
                     try self.checkImageRefreshCancellation(error)
                     self.managementError = error.localizedDescription
+                    if case MenuBarAccessError.scanTimedOut = error {
+                        self.managementMessage = self.snapshots.isEmpty
+                            ? "本轮菜单栏扫描未完成，当前没有可用列表。"
+                            : "本轮菜单栏扫描未完成，当前显示上一轮结果。"
+                    }
+                    let scanTimedOut: Bool
+                    if case MenuBarAccessError.scanTimedOut = error {
+                        scanTimedOut = true
+                    } else {
+                        scanTimedOut = false
+                    }
+                    if preparesIconInventory && (completedScans == 0 || scanTimedOut) {
+                        self.markIconImageCheckSkippedAfterScanFailure()
+                    }
                 } catch {
                     // Cancellation is handled once here, not converted into an
                     // unsupported capability or a failed classification.
@@ -1349,6 +1381,14 @@ final class MenuTidyModel: ObservableObject {
         let warningDetails = details.joined(separator: "\n")
         if iconImageWarning != warning { iconImageWarning = warning }
         if iconImageWarningDetails != warningDetails { iconImageWarningDetails = warningDetails }
+    }
+
+    /// A failed owner census cannot establish image coverage. Keep the last
+    /// successful snapshots and make the skipped check explicit instead of
+    /// reporting the cached state as a new image-missing result.
+    private func markIconImageCheckSkippedAfterScanFailure() {
+        iconImageWarning = "因菜单栏扫描未完成，本轮未执行图像核验"
+        iconImageWarningDetails = "本轮未完成菜单栏身份读取，未重新判断隐藏图标图像；上一轮已缓存的图像和分类选择仍保留。扫描成功后再刷新图像。"
     }
 
     /// Derive coverage after the capture checkpoint has accepted or restored
@@ -3021,14 +3061,16 @@ final class MenuTidyModel: ObservableObject {
 
     private func menuBarScanInputs() -> (owners: [MenuBarOwner], bands: [CGRect]) {
         if let testingEnvironment {
-            return (testingEnvironment.identities.values.map {
+            let owners = testingEnvironment.identities.values.map {
                 MenuBarOwner(pid: $0.pid, bundleIdentifier: $0.bundleIdentifier, name: "Fixture", launchTime: $0.launchTime)
-            }, [])
+            }
+            return (owners, [])
         }
-        let owners = NSWorkspace.shared.runningApplications.map {
+        let allOwners = NSWorkspace.shared.runningApplications.map {
             MenuBarOwner(pid: $0.processIdentifier, bundleIdentifier: $0.bundleIdentifier,
                          name: $0.localizedName ?? "应用 \($0.processIdentifier)", launchTime: MenuBarProcessIdentity.launchTime(for: $0) ?? 0)
         }
+        let owners = allOwners
         let bands = NSScreen.screens.compactMap { screen -> CGRect? in
             guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
             let bounds = CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
@@ -3037,7 +3079,31 @@ final class MenuTidyModel: ObservableObject {
         return (owners, bands)
     }
 
-    private func scanNow(allowNativeOwnerRecovery: Bool = false) async throws {
+    /// Keep the complete identity table for remote host references; only the
+    /// selected owners receive a root AX inventory query this round.
+    private func incrementalScanOwners(from allOwners: [MenuBarOwner], discover: Bool) -> [MenuBarOwner] {
+        let savedBundles = Set(rules.rules.values.compactMap(\.bundleIdentifier))
+            .union(nativeTrayChoices.choices.keys)
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        func rank(_ owner: MenuBarOwner) -> Int {
+            if owner.pid == ownPID { return 0 }
+            if owner.bundleIdentifier == "com.apple.MenuBarAgent" || owner.name == "MenuBarAgent" { return 1 }
+            if successfulScanOwnerKeys.contains(ScanOwnerKey(owner)) { return 2 }
+            if owner.bundleIdentifier.map(savedBundles.contains) == true { return 3 }
+            return 4
+        }
+        let sorted = allOwners.sorted {
+            if rank($0) != rank($1) { return rank($0) < rank($1) }
+            if $0.launchTime != $1.launchTime { return $0.launchTime > $1.launchTime }
+            return $0.pid < $1.pid
+        }
+        let selected = scanSchedule.plan(current: sorted.map(ScanOwnerKey.init),
+            priority: Set(sorted.filter { rank($0) < 4 }.map(ScanOwnerKey.init)), discover: discover)
+        let byKey = Dictionary(sorted.map { (ScanOwnerKey($0), $0) }, uniquingKeysWith: { first, _ in first })
+        return selected.compactMap { byKey[$0] }
+    }
+
+    private func scanNow(allowNativeOwnerRecovery: Bool = false, discover: Bool = false) async throws {
         registerDepartedNativeOwners()
         if allowNativeOwnerRecovery && isRefreshing && !isApplying && !isActivatingPanelItem &&
             !isRecoveringPositions && !isArranging && !preparingToTerminate && !stopping &&
@@ -3049,6 +3115,11 @@ final class MenuTidyModel: ObservableObject {
         anchorScanSequence += 1
         let scanID = anchorScanSequence
         let (owners, bands) = menuBarScanInputs()
+        let scanOwners = testingEnvironment == nil
+            ? incrementalScanOwners(from: owners, discover: discover)
+            : owners
+        let previousSnapshots = snapshots
+        let previousSnapshotOwnerKeys = snapshotOwnerKeys
         let newSnapshots: [MenuBarItemSnapshot]
         do {
             if let testingEnvironment {
@@ -3058,7 +3129,8 @@ final class MenuTidyModel: ObservableObject {
                 positions: usesNativeVisibility && !needsLegacyPositionRecovery ? [:] : ((try? positionStore.readPositions()) ?? [:]),
                 retainHiddenIDs: Set(nativeVisibilityEvidence.filter {
                     $0.value.group != .visible && self.ownerIsCurrent($0.value.identity)
-                }.keys))
+                }.keys),
+                enumerationOwners: scanOwners)
             }
         } catch {
             logOwnAnchors(nil, scanID: scanID)
@@ -3070,7 +3142,23 @@ final class MenuTidyModel: ObservableObject {
         // recovery intent before reconciliation discards the old evidence.
         registerDepartedNativeOwners()
         scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
-        snapshots = newSnapshots
+        scanSchedule.complete(scanned: scanOwners.map(ScanOwnerKey.init))
+        let currentOwnerKeys = Set(owners.map(ScanOwnerKey.init))
+        let scannedOwnerKeys = Set(scanOwners.map(ScanOwnerKey.init))
+        let retainedSnapshots = previousSnapshots.filter { snapshot in
+            guard let ownerKey = previousSnapshotOwnerKeys[snapshot.processIdentifier] else { return false }
+            return currentOwnerKeys.contains(ownerKey) && !scannedOwnerKeys.contains(ownerKey)
+        }
+        snapshots = retainedSnapshots + newSnapshots
+        snapshotOwnerKeys = Dictionary(snapshots.compactMap { snapshot in
+            owners.first(where: { $0.pid == snapshot.processIdentifier }).map {
+                (snapshot.processIdentifier, ScanOwnerKey($0))
+            }
+        }, uniquingKeysWith: { first, _ in first })
+        // Keep the previous round's successful owners as the next round's
+        // warm set. This bounds repeat work while the scheduler rotates
+        // through the remaining live processes.
+        successfulScanOwnerKeys = scannedOwnerKeys.intersection(currentOwnerKeys)
         actualGroups.removeAll()
         if usesNativeVisibility && !isArranging {
             await reconcileNativeVisibilityEvidence()
@@ -3096,7 +3184,7 @@ final class MenuTidyModel: ObservableObject {
             }
             actualGroups = verifiedPositionGroups
         }
-        rememberObservedGroups(scannedOwners: owners)
+        rememberObservedGroups(scannedOwners: scanOwners)
         rebuildRows()
     }
 
@@ -3515,12 +3603,15 @@ final class MenuTidyModel: ObservableObject {
             observedItemIdentity(item).map { (item.id, $0) }
         })
         let (owners, bands) = menuBarScanInputs()
+        let scanOwners = incrementalScanOwners(from: owners, discover: false)
         // Charge before awaiting, so a failed/cancelled scan cannot create an
         // unbounded retry loop while the same overflow presentation stays open.
         passiveOverflowRebindAttempts += 1
         lastPassiveOverflowRebind = ProcessInfo.processInfo.systemUptime
         passiveOverflowRebindNeedsRetry = true
-        let fresh = try await access.scan(owners: owners, menuBands: bands, positions: (try? positionStore.readPositions()) ?? [:])
+        let fresh = try await access.scan(owners: owners, menuBands: bands,
+            positions: (try? positionStore.readPositions()) ?? [:],
+            enumerationOwners: scanOwners)
         try checkPassiveIconCapture(taskID)
         let counts = Dictionary(grouping: fresh, by: \.id).mapValues(\.count)
         // Refresh the AX actor's bindings only. Never assign model snapshots,

@@ -121,7 +121,8 @@ enum MenuBarOverflowError: LocalizedError, Sendable {
 
 enum MenuBarAccessError: LocalizedError, Sendable {
     case permission, eventPermission, disappeared, invalidGeometry, differentScreen, rejected, cancelled
-    case dragEventTimedOut, inputStateChanged, scanTimedOut
+    case dragEventTimedOut, inputStateChanged
+    case scanTimedOut(scannedOwners: Int, totalOwners: Int, elapsed: TimeInterval)
     case actionUnavailable, actionRejected
     case geometryDetail(String)
     var errorDescription: String? {
@@ -136,7 +137,9 @@ enum MenuBarAccessError: LocalizedError, Sendable {
         case .actionUnavailable: return "该图标暂不支持后台打开菜单，需在原生菜单栏手动打开。没有模拟鼠标点击。"
         case .actionRejected: return "目标应用未接受本次菜单操作。没有补发点击；请稍后重试，或在原生菜单栏手动打开。"
         case .cancelled: return "操作已取消；未发送鼠标或键盘事件。"
-        case .scanTimedOut: return "菜单栏读取未及时完成，已停止本次扫描并保留原列表。请关闭正在展开的菜单后刷新列表。"
+        case .scanTimedOut(let scannedOwners, let totalOwners, let elapsed):
+            let seconds = String(format: "%.1f", elapsed)
+            return "菜单栏读取未及时完成，已停止本次扫描（已检查 \(scannedOwners)/\(totalOwners) 个 owner，用时 \(seconds) 秒）。本轮未更新列表，请稍后重试。"
         case .dragEventTimedOut: return "系统未及时处理拖动事件，已停止本次移动并释放鼠标。请稍后重试。"
         case .inputStateChanged: return "检测到输入状态发生变化，已停止本次操作；未接管鼠标。"
         }
@@ -384,7 +387,8 @@ actor MenuBarAccessibility {
 
     func scan(owners: [MenuBarOwner], menuBands: [CGRect],
               positions: [String: Double] = [:],
-              retainHiddenIDs: Set<String> = []) throws -> [MenuBarItemSnapshot] {
+              retainHiddenIDs: Set<String> = [],
+              enumerationOwners: [MenuBarOwner]? = nil) throws -> [MenuBarItemSnapshot] {
         guard AXIsProcessTrusted() else {
             systemModuleContinuity.removeAll()
             nativeSystemVisibilityIdentities.removeAll()
@@ -392,6 +396,7 @@ actor MenuBarAccessibility {
         }
         self.menuBands = menuBands
         scanReadBudget = AccessibilityScanBudget(startedAt: ProcessInfo.processInfo.systemUptime)
+        let scanStartedAt = ProcessInfo.processInfo.systemUptime
         scanApplicationMenuBarRoots.removeAll(keepingCapacity: true)
         scanApplicationMenuBarQueries.removeAll(keepingCapacity: true)
         let previousContinuity = systemModuleContinuity
@@ -407,12 +412,22 @@ actor MenuBarAccessibility {
         // require a launch timestamp so a reused PID cannot inherit old entries.
         let ownersByPID = Dictionary(owners.compactMap(resolvedOwner).map { ($0.pid, $0) },
                                      uniquingKeysWith: { first, _ in first })
+        let scannedOwnersInput = enumerationOwners ?? owners
         var candidates: [Candidate] = []
         var totalBudget = 2500
-        for owner in owners {
+        var scannedOwners = 0
+        func scanTimeout() -> MenuBarAccessError {
+            let elapsed = max(0, ProcessInfo.processInfo.systemUptime - scanStartedAt)
+            Self.logger.notice("scanTimedOut scannedOwners=\(scannedOwners) totalOwners=\(owners.count) elapsed=\(elapsed, privacy: .public)")
+            return .scanTimedOut(scannedOwners: scannedOwners,
+                                 totalOwners: owners.count,
+                                 elapsed: elapsed)
+        }
+        for owner in scannedOwnersInput {
             try Task.checkCancellation()
-            guard scanCanContinue else { throw MenuBarAccessError.scanTimedOut }
-            guard totalBudget > 0 else { break }
+            guard scanCanContinue else { throw scanTimeout() }
+            guard totalBudget > 0 else { throw scanTimeout() }
+            scannedOwners += 1
             var ownerBudget = min(160, totalBudget)
             let initialBudget = ownerBudget
             let application = AXUIElementCreateApplication(owner.pid)
@@ -697,7 +712,7 @@ actor MenuBarAccessibility {
             }
         }
         try Task.checkCancellation()
-        guard scanCanContinue else { throw MenuBarAccessError.scanTimedOut }
+        guard scanCanContinue else { throw scanTimeout() }
         entries = updated
         for (id, identity) in nativeSystemVisibilityIdentities {
             guard let entry = updated[id], sameNativeSystemOwner(identity.owner, entry.owner),
