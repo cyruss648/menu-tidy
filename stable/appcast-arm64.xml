@@ -6,24 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.6.5</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.5</link>
-      <pubDate>Fri, 02 Oct 2026 16:05:23 +0000</pubDate>
-      <sparkle:version>61</sparkle:version>
-      <sparkle:shortVersionString>0.6.5</sparkle:shortVersionString>
+      <title>Menu Tidy 0.6.6</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.6</link>
+      <pubDate>Sun, 04 Oct 2026 08:42:56 +0000</pubDate>
+      <sparkle:version>62</sparkle:version>
+      <sparkle:shortVersionString>0.6.6</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="plain-text">## [0.6.5] - 2026-10-02
+      <description sparkle:format="plain-text">## [0.6.6] - 2026-10-04
 
-正式版构建号为 61，保留现有分类与偏好。
+菜单栏扫描改为分层、增量读取，降低大量运行应用或单个 AX owner 响应缓慢时刷新失败的影响。
 
-- 修复旧分类自动连接时，同应用单个图标的确认可能覆盖其他图标原有选择的问题。混合旧类别保留为待处理，不再由先处理的图标决定整个应用的分类；用户明确选择的新类别继续优先。
-- 修复仅有会话身份的图标成功分类后，应用离线并重启 Menu Tidy 就无法查看或忘记其持久分类的问题。离线列表补充应用级选择，忘记操作保留其他应用记录和恢复账本。
-- 修复托盘耗时操作结束后立即自动收起的问题。操作期间暂停计时，恢复后重新给予完整等待时间，便于查看错误和重试。
-- 本地安装脚本先在全新目录复制、验证签名，再备份并整体替换应用；失败时恢复原安装，避免合并新旧目录残留资源导致签名失效。
-- 增加直接运行真实应用模型的集成测试，覆盖旧数据加载、自动连接、确认、重建离线列表及忙碌结束后的自动收起；更新开发文档，区分历史验收与当前源码状态。
+- 优先读取 Menu Tidy、MenuBarAgent、上一轮成功 owner 和有已保存规则的应用；新进程按批次增量发现，避免每次刷新从所有运行应用开始全量 AX 扫描。
+- 扫描超时或读取预算耗尽时保留上一轮成功列表，不发布不完整快照；错误信息显示已检查 owner 数量与耗时，并明确当前页面是否为上一轮结果。
+- 菜单栏扫描与隐藏图标图像核验分开报告。扫描未完成时显示“本轮未执行图像核验”，不再把未执行的检查误报为普通图像缺失。
+- 增加 owner 调度、进程启动时间和增量快照合并测试，覆盖新进程、退出进程、PID 重用和被动重绑定场景。
 
-验证范围与限制见[0.6.5 回归验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.5/docs/ACCEPTANCE-0.6.5.md)。应用层测试使用隔离偏好、时钟和系统接口，不代表真实第三方菜单栏、权限撤销、睡眠唤醒、多显示器或 Intel 桌面交互均已实测。
+验证：本地完整检查通过 492 项核心 Swift 测试、12 项应用集成测试和 96 项 Python 测试；warnings-as-errors 构建通过。真实第三方菜单栏、权限撤销、睡眠唤醒、多显示器和 Intel 桌面交互仍需在对应设备上独立验证。
 
 ### 软件内更新与首次安装
 
@@ -35,8 +34,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.6.5-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.6.5-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.6.6-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.6.6-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -59,12 +58,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.5/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.5/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.5/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.6/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.6/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.6/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.5/Menu-Tidy-0.6.5-macos-arm64.zip" length="3722297" type="application/octet-stream" sparkle:edSignature="WnQ+o72uoERZ/kmLu1QhkO1kOvTxCOlZqySEXlrMK7HfzTD3/Dgnx5GnoUJsU/B4PPzlknSMvvAC58PG3M3/Aw=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.6/Menu-Tidy-0.6.6-macos-arm64.zip" length="3753915" type="application/octet-stream" sparkle:edSignature="/lxjX5Em5U4i67uVEHfH/U4K23kWTqiHf0IaxgqZkXCbF+17za1vOVSoIsszc8cfm7/IqswEimXHtp3VsSoPBg=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: ODho03R0vkTmLoC8fyA/iO/cGqJZqkPty1uyAI6Zn6xzkwwFV6+jAjJ8uvCL53nmjDkbdRCX4XznIWq5qrH0AA==
-length: 6366
+edSignature: sGbX7O3Qaq+IadWySDHzSvVwHUEYwfw7aZWSfI5mrg6MnqWftr2VuybSleiBER/n/5I8BP47mNhSsi/9LgbtDQ==
+length: 6080
 -->
