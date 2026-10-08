@@ -12,6 +12,7 @@ final class MenuTidyTestEnvironment {
     var managedBundles: Set<String> = []
     var hiddenBundles: [String] = []
     var restoredBundles: [String] = []
+    var beforeScan: (() async throws -> Void)?
     var beforeVisibilityRead: (() async throws -> Void)?
     var uptime: TimeInterval = 0
     var pointerInMenuBar = false

@@ -60,6 +60,10 @@ final class ResourceSchedulingTests: XCTestCase {
             permissionDue: 13, passiveCaptureDue: 40, recoveryDue: 12), 1)
         XCTAssertEqual(BackgroundMaintenanceSchedule.nextDelay(at: 10, autoCollapseDue: nil,
             permissionDue: nil, passiveCaptureDue: 9, recoveryDue: nil), 0.05)
+        XCTAssertEqual(BackgroundMaintenanceSchedule.nextDelay(at: 10, autoCollapseDue: nil,
+            permissionDue: nil, passiveCaptureDue: nil, recoveryDue: nil, startupApplicationDue: 40), 30)
+        XCTAssertEqual(BackgroundMaintenanceSchedule.nextDelay(at: 10, autoCollapseDue: 11,
+            permissionDue: nil, passiveCaptureDue: nil, recoveryDue: nil, startupApplicationDue: 40), 1)
         XCTAssertEqual(BackgroundMaintenanceSchedule.tolerance(for: 30), 1)
         XCTAssertEqual(BackgroundMaintenanceSchedule.tolerance(for: 1), 0.1)
     }

@@ -1204,6 +1204,11 @@ struct SettingsView: View {
                 }
             }
             Divider()
+            preferenceRow(title: "启动后自动应用待处理", subtitle: "启动约 30 秒后刷新图标并应用一次；失败项保留供手动重试。") {
+                Toggle("启动后自动应用待处理", isOn: $model.startupApplyPendingEnabled)
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            Divider()
             preferenceRow(title: "登录时启动", subtitle: "登录 Mac 后自动开启 Menu Tidy。") {
                 Toggle("登录时启动", isOn: Binding(
                     get: { model.launchAtLoginEnabled }, set: { model.setLaunchAtLogin($0) }

@@ -32,6 +32,7 @@ macOS 没有一个面向第三方应用的公开菜单栏统一管理 API。Menu
 - **原生动作**：对支持的项目请求一次原生辅助功能动作；目标菜单或窗口未确认出现时不重复发送。
 - **可选原始图像**：在获得屏幕录制权限后采集已确认的小区域图像；采集失败时使用应用图标回退。
 - **自动收起与登录启动**：均可在设置中开启，默认关闭。
+- **启动后补偿应用**：默认在 Menu Tidy 启动约 30 秒后刷新图标，并自动执行一次“应用全部待处理”；忙碌时顺延，失败项保留供手动重试，可在设置中关闭。
 - **应用内更新**：使用 Sparkle 检查对应架构和更新通道；更新会等待当前整理或恢复操作结束。
 
 ### 三种显示方式
@@ -116,7 +117,7 @@ Menu Tidy 对系统和第三方实现保持保守判断，以下情况会显示�
 - [原生隐藏研究](docs/NATIVE-VISIBILITY-RESEARCH.md)：macOS 版本差异、系统接口和证据边界。
 - [应用内更新](docs/AUTO-UPDATE.md)：Sparkle 通道、签名 feed 和更新状态。
 - [资源占用验证](docs/RESOURCE-USAGE.md)：缓存托盘、窗口释放和测量条件。
-- [0.6.5 回归验证](docs/ACCEPTANCE-0.6.5.md)：当前版本的自动化检查和实机验证边界。
+- [0.6.5 回归验证](docs/ACCEPTANCE-0.6.5.md)：旧分类与托盘自动收起的历史验证；当前版本的启动补偿验证范围见 [更新记录](CHANGELOG.md)。
 - [开发指南](docs/DEVELOPMENT.md)：本地工具链、调试、测试和签名。
 - [发布指南](docs/RELEASING.md)：双架构打包、签名、feed 和发布流程。
 
@@ -151,6 +152,6 @@ cd menu-tidy
 
 ## 版本与许可证
 
-当前源码版本为 **0.6.6（构建 62）**。版本变更见 [CHANGELOG.md](CHANGELOG.md)，公开可安装版本以 [GitHub Releases](https://github.com/cyruss648/menu-tidy/releases) 为准。
+当前源码版本为 **0.6.7（构建 63）**。版本变更见 [CHANGELOG.md](CHANGELOG.md)，公开可安装版本以 [GitHub Releases](https://github.com/cyruss648/menu-tidy/releases) 为准。
 
 本仓库当前未包含 `LICENSE` 文件。使用、再分发或将代码集成到其他项目之前，请先确认仓库维护者公布的许可条款。

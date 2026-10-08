@@ -100,6 +100,7 @@ final class AutoCollapseIntegrationTests: XCTestCase {
         defaults.set(autoCollapse, forKey: "autoCollapse")
         defaults.set(3.0, forKey: "autoCollapseDelay")
         defaults.set(false, forKey: "shortcutEnabled")
+        defaults.set(false, forKey: "startupApplyPending")
         let environment = MenuTidyTestEnvironment()
         environment.uptime = 100
         return Fixture(model: MenuTidyModel(testing: environment, defaults: defaults),

@@ -63,13 +63,19 @@ final class MenuTidyModel: ObservableObject {
     @Published var autoCollapseEnabled: Bool { didSet { defaults.set(autoCollapseEnabled, forKey: "autoCollapse"); resetIdleTime(); rescheduleMaintenanceTimer() } }
     @Published var autoCollapseDelay: Double { didSet { defaults.set(autoCollapseDelay, forKey: "autoCollapseDelay"); resetIdleTime(); rescheduleMaintenanceTimer() } }
     @Published var startCollapsed: Bool { didSet { defaults.set(startCollapsed, forKey: "startCollapsed") } }
+    @Published var startupApplyPendingEnabled: Bool {
+        didSet {
+            defaults.set(startupApplyPendingEnabled, forKey: "startupApplyPending")
+            scheduleStartupPendingApplication()
+        }
+    }
     @Published var shortcutEnabled: Bool { didSet { defaults.set(shortcutEnabled, forKey: "shortcutEnabled"); configureShortcut() } }
     @Published private(set) var shortcutIssue: String?
     @Published var layoutIssue: String?
     @Published private(set) var environmentIssue: String?
     @Published private(set) var launchAtLoginEnabled = false
     @Published private(set) var loginIssue: String?
-    @Published private(set) var hasCompletedSetup: Bool { didSet { rescheduleMaintenanceTimer() } }
+    @Published private(set) var hasCompletedSetup: Bool { didSet { scheduleStartupPendingApplication() } }
     @Published private(set) var items: [ManagedItemRow] = [] {
         didSet { itemsByID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) }
     }
@@ -198,6 +204,9 @@ final class MenuTidyModel: ObservableObject {
     private let shortcut = GlobalShortcut()
     private var timer: Timer?
     private var started = false
+    private var startupPendingApplicationDue: TimeInterval?
+    private var startupPendingApplicationNeedsRefresh = true
+    private var startupPendingApplicationFinished = false
     private var maintenanceFireAt: TimeInterval?
     private var wasMonitoringAutoCollapse = false
     private var lastAutoCollapseCheck = ProcessInfo.processInfo.systemUptime
@@ -601,10 +610,12 @@ final class MenuTidyModel: ObservableObject {
         defaults = suppliedDefaults ?? (CommandLine.arguments.contains("--preview-ui")
             ? UserDefaults(suiteName: "dev.hdh.MenuTidy.preview.\(UUID().uuidString)")!
             : (CommandLine.arguments.contains("--demo-items") ? UserDefaults(suiteName: "dev.hdh.MenuTidy.demo")! : .standard))
-        defaults.register(defaults: ["autoCollapse": false, "autoCollapseDelay": 15.0, "startCollapsed": false, "shortcutEnabled": true])
+        defaults.register(defaults: ["autoCollapse": false, "autoCollapseDelay": 15.0, "startCollapsed": false,
+            "startupApplyPending": true, "shortcutEnabled": true])
         autoCollapseEnabled = defaults.bool(forKey: "autoCollapse")
         autoCollapseDelay = AutoCollapsePolicy(delay: defaults.double(forKey: "autoCollapseDelay")).delay
         startCollapsed = defaults.bool(forKey: "startCollapsed")
+        startupApplyPendingEnabled = defaults.bool(forKey: "startupApplyPending")
         shortcutEnabled = defaults.bool(forKey: "shortcutEnabled")
         hasCompletedSetup = defaults.bool(forKey: "hasCompletedSetup")
         if isUIPreview {
@@ -653,6 +664,7 @@ final class MenuTidyModel: ObservableObject {
             lastInteraction = testingEnvironment.uptime
             started = true
             rebuildRows()
+            scheduleStartupPendingApplication()
             return
         }
         accessibilityGranted = AXIsProcessTrusted()
@@ -671,7 +683,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func start() {
-        guard !isUIPreview, testingEnvironment == nil else { return }
+        guard !started, !isUIPreview, testingEnvironment == nil else { return }
         started = true
         controlRouter.start(model: self)
         statusBar = StatusBarController(model: self, demoMode: demoMode)
@@ -709,7 +721,7 @@ final class MenuTidyModel: ObservableObject {
         } else if accessibilityGranted {
             refreshMenuItems(collapseWhenFinished: startCollapsed && hasCompletedSetup && !demoMode)
         }
-        rescheduleMaintenanceTimer()
+        scheduleStartupPendingApplication()
         let pressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
         pressure.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
@@ -749,6 +761,69 @@ final class MenuTidyModel: ObservableObject {
             !temporarilyRevealingAll
     }
 
+    private func scheduleStartupPendingApplication() {
+        if started, !stopping, !preparingToTerminate, !isUIPreview, !demoMode,
+           hasCompletedSetup, startupApplyPendingEnabled, !startupPendingApplicationFinished {
+            if startupPendingApplicationDue == nil {
+                startupPendingApplicationDue = maintenanceUptime + 30
+            }
+        } else {
+            startupPendingApplicationDue = nil
+        }
+        rescheduleMaintenanceTimer()
+    }
+
+    private func finishStartupPendingApplication() {
+        startupPendingApplicationFinished = true
+        startupPendingApplicationDue = nil
+        rescheduleMaintenanceTimer()
+    }
+
+    private func runStartupPendingApplication(at now: TimeInterval) {
+        guard let due = startupPendingApplicationDue, now >= due else { return }
+        guard startupApplyPendingEnabled, hasCompletedSetup else {
+            finishStartupPendingApplication()
+            return
+        }
+        // Wait for current work and explicit tray interactions to finish. This
+        // postpones the one launch attempt; a failed batch never re-arms it.
+        if panelInteractionBusy || trayPlacementTask != nil || isPanelPresented ||
+            contextMenuVisible || temporarilyRevealingAll {
+            startupPendingApplicationDue = now + BackgroundMaintenanceSchedule.interactionInterval
+            return
+        }
+        refreshPermissions()
+        refreshEnvironment()
+        if panelInteractionBusy {
+            startupPendingApplicationDue = now + BackgroundMaintenanceSchedule.interactionInterval
+            return
+        }
+        guard trayPlacementSelectionAllowed else {
+            Self.diagnosticLogger.notice("startupPendingApplication skipped=true blocked=true")
+            finishStartupPendingApplication()
+            return
+        }
+        if startupPendingApplicationNeedsRefresh {
+            startupPendingApplicationDue = nil
+            refreshMenuItems(applyStartupPendingWhenFinished: true)
+        } else {
+            let count = trayPendingApplicationCount
+            finishStartupPendingApplication()
+            Self.diagnosticLogger.notice("startupPendingApplication started=true items=\(count)")
+            applyPendingTrayPlacements()
+        }
+    }
+
+    private func finishStartupPendingRefresh(succeeded: Bool) {
+        guard succeeded, started, !stopping, !preparingToTerminate, startupApplyPendingEnabled else {
+            finishStartupPendingApplication()
+            return
+        }
+        startupPendingApplicationNeedsRefresh = false
+        startupPendingApplicationDue = maintenanceUptime
+        rescheduleMaintenanceTimer()
+    }
+
     private func rescheduleMaintenanceTimer() {
         guard started, !stopping, !preparingToTerminate else {
             timer?.invalidate(); timer = nil; maintenanceFireAt = nil
@@ -773,7 +848,8 @@ final class MenuTidyModel: ObservableObject {
         guard let delay = BackgroundMaintenanceSchedule.nextDelay(at: now,
             autoCollapseDue: monitorsAutoCollapse ? lastAutoCollapseCheck + BackgroundMaintenanceSchedule.interactionInterval : nil,
             permissionDue: settingsVisible || isArranging ? lastPermissionCheck + BackgroundMaintenanceSchedule.permissionInterval : nil,
-            passiveCaptureDue: passiveDue, recoveryDue: recoveryDue) else {
+            passiveCaptureDue: passiveDue, recoveryDue: recoveryDue,
+            startupApplicationDue: startupPendingApplicationDue) else {
             timer?.invalidate(); timer = nil; maintenanceFireAt = nil
             testingEnvironment?.maintenanceTimer = nil
             return
@@ -811,6 +887,7 @@ final class MenuTidyModel: ObservableObject {
                 refreshMenuItems()
             }
         }
+        runStartupPendingApplication(at: now)
         schedulePassiveIconCapture()
         rescheduleMaintenanceTimer()
     }
@@ -1076,7 +1153,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func refreshMenuItems(collapseWhenFinished: Bool = false, prepareOverflow: Bool = false,
-                          discover: Bool = true) {
+                          discover: Bool = true, applyStartupPendingWhenFinished: Bool = false) {
         if isUIPreview { managementMessage = "预览：图标列表已更新，当前选择已保留。"; return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         guard accessibilityGranted else { managementError = "先在权限页开启辅助功能权限，再读取菜单栏图标。"; return }
@@ -1104,7 +1181,11 @@ final class MenuTidyModel: ObservableObject {
                    !self.settingsVisible, !self.contextMenuVisible, !self.isPanelPresented {
                     self.collapseIfSafe()
                 }
-                if scanSucceeded && !Task.isCancelled { self.reconnectDiscoveredTrayItems() }
+                if applyStartupPendingWhenFinished {
+                    self.finishStartupPendingRefresh(succeeded: scanSucceeded && !Task.isCancelled)
+                } else if scanSucceeded && !Task.isCancelled {
+                    self.reconnectDiscoveredTrayItems()
+                }
             }
             do {
                 await self.passiveIconCaptureTask?.value
@@ -3123,6 +3204,7 @@ final class MenuTidyModel: ObservableObject {
         let newSnapshots: [MenuBarItemSnapshot]
         do {
             if let testingEnvironment {
+                try await testingEnvironment.beforeScan?()
                 newSnapshots = testingEnvironment.snapshots
             } else {
                 newSnapshots = try await access.scan(owners: owners, menuBands: bands,
@@ -4570,6 +4652,8 @@ final class MenuTidyModel: ObservableObject {
         controlRouter.stop()
         stopping = true
         started = false
+        startupPendingApplicationDue = nil
+        startupPendingApplicationFinished = true
         cancelPassiveIconCapture()
         arrangementSequence += 1
         visibilityDiagnosticsStopped = true
@@ -4579,6 +4663,7 @@ final class MenuTidyModel: ObservableObject {
         trayPlacementQueue.cancelAllPending()
         timer?.invalidate()
         timer = nil
+        testingEnvironment?.maintenanceTimer = nil
         maintenanceFireAt = nil
         memoryPressureSource?.cancel()
         memoryPressureSource = nil
