@@ -154,4 +154,4 @@ cd menu-tidy
 
 当前源码版本为 **0.6.7（构建 63）**。版本变更见 [CHANGELOG.md](CHANGELOG.md)，公开可安装版本以 [GitHub Releases](https://github.com/cyruss648/menu-tidy/releases) 为准。
 
-本仓库当前未包含 `LICENSE` 文件。使用、再分发或将代码集成到其他项目之前，请先确认仓库维护者公布的许可条款。
+本项目采用 **MIT OR Apache-2.0** 双许可证，可自行选择其中一种许可证使用。许可声明见 [LICENSE](LICENSE)，完整条款见 [MIT License](LICENSE-MIT) 和 [Apache License 2.0](LICENSE-APACHE)。第三方组件保留各自的许可证与版权声明。
