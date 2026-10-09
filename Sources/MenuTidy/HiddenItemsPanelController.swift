@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// An independent tray whose contents are available before optional image capture.
@@ -8,6 +9,8 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
     private var panel: IconPanel?
     private var localMonitor: Any?
     private var presentationToken: UUID?
+    private var resizeTask: Task<Void, Never>?
+    private var modelObservation: AnyCancellable?
     private var isSuspendedForNativePresentation = false
     private var applicationObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -23,7 +26,8 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         presentationToken = token
         let width = min(TrayPanelLayout.width, screen.visibleFrame.width - 16)
         let maxGridHeight = min(TrayPanelLayout.maximumGridHeight, max(44, screen.visibleFrame.height - 160))
-        let height = TrayPanelLayout.gridHeight(itemCount: model.panelItems.count, limit: maxGridHeight) + 59
+        let height = TrayPanelLayout.gridHeight(itemCount: model.panelItems.count, limit: maxGridHeight)
+            + TrayPanelLayout.chromeHeight
         let panel = IconPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Menu Tidy · 托盘"
@@ -35,15 +39,29 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.delegate = self
-        panel.contentView = NSHostingView(rootView: HiddenItemsPanelView(model: model,
+        self.panel = panel
+        let hostingView = NSHostingView(rootView: HiddenItemsPanelView(model: model,
             width: width, maximumGridHeight: maxGridHeight) { [weak self] height in
-                self?.resize(height: height, token: token, screen: screen)
+                self?.scheduleResize(height: height, token: token, screen: screen)
             })
+        // The controller owns the window size. Keep ideal-size measurement,
+        // but prevent hosting's automatic min/max bounds from resizing it.
+        hostingView.sizingOptions = [.intrinsicContentSize]
+        panel.contentView = hostingView
+        // Finish the first SwiftUI layout before exposing the window. The
+        // estimate above cannot account for empty-state or operation messages.
+        hostingView.layoutSubtreeIfNeeded()
+        resize(height: hostingView.fittingSize.height, token: token, screen: screen)
         let midpoint = anchor?.midX ?? (screen.visibleFrame.maxX - width / 2)
         let x = max(screen.visibleFrame.minX + 8, min(midpoint - width / 2, screen.visibleFrame.maxX - width - 8))
         let menuHeight = max(28, screen.safeAreaInsets.top, NSStatusBar.system.thickness)
         panel.setFrameOrigin(NSPoint(x: x, y: screen.frame.maxY - menuHeight - 8 - panel.frame.height))
-        self.panel = panel
+        hostingView.layoutSubtreeIfNeeded()
+        // Ideal-size invalidation alone does not guarantee a window layout
+        // pass. Measure after published changes, once their new values exist.
+        modelObservation = model.objectWillChange.sink { [weak self] _ in
+            self?.scheduleResize(token: token, screen: screen)
+        }
         panel.makeKeyAndOrderFront(nil)
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             let consumed = MainActor.assumeIsolated {
@@ -89,14 +107,34 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         panel.makeKeyAndOrderFront(nil)
     }
 
+    private func scheduleResize(height: CGFloat, token: UUID, screen: NSScreen) {
+        guard presentationToken == token, height.isFinite, height > 0 else { return }
+        scheduleResize(token: token, screen: screen)
+    }
+
+    private func scheduleResize(token: UUID, screen: NSScreen) {
+        guard presentationToken == token else { return }
+        // Geometry preferences can emit zero while being installed, and
+        // resizing a window inside a SwiftUI layout can start another layout.
+        // Apply only the latest valid measurement on the next main-actor turn.
+        resizeTask?.cancel()
+        resizeTask = Task { [weak self] in
+            guard !Task.isCancelled, let self, self.presentationToken == token,
+                  let content = self.panel?.contentView else { return }
+            content.layoutSubtreeIfNeeded()
+            self.resize(height: content.fittingSize.height, token: token, screen: screen)
+        }
+    }
+
     private func resize(height: CGFloat, token: UUID, screen: NSScreen) {
-        guard presentationToken == token, let panel, height.isFinite else { return }
+        guard presentationToken == token, let panel, height.isFinite, height > 0 else { return }
         let height = min(max(height.rounded(.up), 90), screen.visibleFrame.height - 16)
         guard abs(panel.frame.height - height) > 0.5 else { return }
         var frame = panel.frame
         frame.origin.y = max(screen.visibleFrame.minY + 8, frame.maxY - height)
         frame.size.height = height
         panel.setFrame(frame, display: true)
+        panel.contentView?.layoutSubtreeIfNeeded()
     }
 
     private func dismissForFocusChange(token: UUID) {
@@ -120,6 +158,10 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         applicationObservers.removeAll()
         workspaceObservers.removeAll()
+        modelObservation?.cancel()
+        modelObservation = nil
+        resizeTask?.cancel()
+        resizeTask = nil
         presentationToken = nil
         isSuspendedForNativePresentation = false
         panel?.delegate = nil
@@ -132,6 +174,7 @@ private enum TrayPanelLayout {
     static let columns = 6
     static let cellSize: CGFloat = 44
     static let spacing: CGFloat = 6
+    static let chromeHeight: CGFloat = 61
     static let width = CGFloat(columns) * cellSize + CGFloat(columns - 1) * spacing + 24
     static let maximumGridHeight = cellSize * 4 + spacing * 3
 
