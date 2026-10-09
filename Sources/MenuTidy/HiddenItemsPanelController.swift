@@ -15,13 +15,14 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
     private var applicationObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
 
-    func show(model: MenuTidyModel, anchor: CGRect?) {
+    func show(model: MenuTidyModel, anchor: CGRect?, clickPoint: NSPoint? = nil) {
         close()
         self.model = model
-        let screen = anchor.flatMap { anchor in
-            NSScreen.screens.first { $0.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY)) }
-        } ?? NSScreen.main ?? NSScreen.screens.first
-        guard let screen else { return }
+        let screens = NSScreen.screens
+        let fallbackIndex = NSScreen.main.flatMap { screens.firstIndex(of: $0) } ?? 0
+        guard let placement = HiddenItemsPanelPlacement.resolve(screenFrames: screens.map(\.frame),
+            clickPoint: clickPoint, anchor: anchor, fallbackScreenIndex: fallbackIndex) else { return }
+        let screen = screens[placement.screenIndex]
         let token = UUID()
         presentationToken = token
         let width = min(TrayPanelLayout.width, screen.visibleFrame.width - 16)
@@ -52,7 +53,7 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         // estimate above cannot account for empty-state or operation messages.
         hostingView.layoutSubtreeIfNeeded()
         resize(height: hostingView.fittingSize.height, token: token, screen: screen)
-        let midpoint = anchor?.midX ?? (screen.visibleFrame.maxX - width / 2)
+        let midpoint = placement.anchorX ?? (screen.visibleFrame.maxX - width / 2)
         let x = max(screen.visibleFrame.minX + 8, min(midpoint - width / 2, screen.visibleFrame.maxX - width - 8))
         let menuHeight = max(28, screen.safeAreaInsets.top, NSStatusBar.system.thickness)
         panel.setFrameOrigin(NSPoint(x: x, y: screen.frame.maxY - menuHeight - 8 - panel.frame.height))

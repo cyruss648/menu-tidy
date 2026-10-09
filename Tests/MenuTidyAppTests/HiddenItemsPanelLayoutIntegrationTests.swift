@@ -11,6 +11,59 @@ final class HiddenItemsPanelLayoutIntegrationTests: XCTestCase {
     private let fourRowPanelHeight: CGFloat = 255
 
     @MainActor
+    func testClickOnEachDisplayOverridesAnAnchorOnTheOtherDisplay() async throws {
+        let screens = NSScreen.screens
+        guard screens.count >= 2 else { throw XCTSkip("Display selection requires two connected screens") }
+        let fixture = try await makeFixture(itemCount: 19)
+        defer { fixture.dispose() }
+
+        for (index, screen) in screens.enumerated() {
+            let otherScreen = screens[(index + 1) % screens.count]
+            let wrongAnchor = CGRect(x: otherScreen.frame.maxX - 44, y: otherScreen.frame.maxY - 22,
+                width: 22, height: 22)
+            let click = NSPoint(x: screen.frame.midX, y: screen.frame.maxY - 12)
+            fixture.controller.show(model: fixture.model, anchor: wrongAnchor, clickPoint: click)
+            let panel = try presentedPanel()
+            let firstFrame = panel.frame
+            XCTAssertTrue(screen.frame.contains(firstFrame), "The tray must open entirely on the clicked display")
+            XCTAssertEqual(panel.screen, screen)
+            XCTAssertEqual(firstFrame.midX, click.x, accuracy: 0.5)
+            XCTAssertEqual(firstFrame.maxY,
+                screen.frame.maxY - max(28, screen.safeAreaInsets.top, NSStatusBar.system.thickness) - 8,
+                accuracy: 0.5)
+            try assertContentFits(panel, frame: firstFrame)
+
+            try await allowLayoutToSettle()
+            XCTAssertEqual(panel.frame, firstFrame)
+            fixture.controller.close()
+        }
+    }
+
+    @MainActor
+    func testSecondaryDisplayPresentationStaysOnThatDisplayWhenContentResizes() async throws {
+        let screens = NSScreen.screens
+        guard screens.count >= 2 else { throw XCTSkip("Display selection requires two connected screens") }
+        let screen = screens[1]
+        let fixture = try await makeFixture(itemCount: 19)
+        defer { fixture.dispose() }
+        let click = NSPoint(x: screen.frame.maxX - 12, y: screen.frame.maxY - 12)
+        fixture.controller.show(model: fixture.model, anchor: fixture.anchor, clickPoint: click)
+        let panel = try presentedPanel()
+        let firstFrame = panel.frame
+        XCTAssertTrue(screen.frame.contains(firstFrame), "A click near the edge must keep the whole tray on screen")
+        XCTAssertLessThanOrEqual(firstFrame.maxX, screen.visibleFrame.maxX - 8)
+        let itemID = try XCTUnwrap(fixture.model.panelItems.first?.id)
+        fixture.model.recordPanelItemFailure(id: itemID, message: "The fixture application did not open. Please retry.")
+
+        try await waitForLayout { panel.frame.height > self.fourRowPanelHeight + 12 }
+        XCTAssertTrue(screen.frame.contains(panel.frame))
+        XCTAssertEqual(panel.screen, screen)
+        XCTAssertEqual(panel.frame.minX, firstFrame.minX, accuracy: 0.5)
+        XCTAssertEqual(panel.frame.maxY, firstFrame.maxY, accuracy: 0.5)
+        try assertContentFits(panel)
+    }
+
+    @MainActor
     func testNineteenItemsAreFullySizedBeforeShowReturns() async throws {
         let fixture = try await makeFixture(itemCount: 19)
         defer { fixture.dispose() }

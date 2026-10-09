@@ -3550,10 +3550,10 @@ final class MenuTidyModel: ObservableObject {
         controlRouter.controlClicked(event: event)
     }
 
-    func showIconPanelFromControl() {
+    func showIconPanelFromControl(at clickPoint: NSPoint? = nil) {
         if isUIPreview { isPanelPresented = true; return }
         guard !isArranging, !preparingToTerminate else { return }
-        showIconPanel(includeAlwaysHidden: false)
+        showIconPanel(includeAlwaysHidden: false, clickPoint: clickPoint)
     }
 
     func iconPanelContains(_ point: NSPoint) -> Bool { iconPanel?.contains(point) == true }
@@ -3754,7 +3754,7 @@ final class MenuTidyModel: ObservableObject {
         return verifiedIDs
     }
 
-    private func showIconPanel(includeAlwaysHidden: Bool) {
+    private func showIconPanel(includeAlwaysHidden: Bool, clickPoint: NSPoint? = nil) {
         cancelPassiveIconCapture()
         refreshPermissions()
         closeIconPanel()
@@ -3774,8 +3774,12 @@ final class MenuTidyModel: ObservableObject {
         statusBar?.apply(collapsed: true, arranging: false)
         let controller = iconPanel ?? HiddenItemsPanelController()
         iconPanel = controller
-        let anchor = snapshots.first { $0.ownIdentifier == "menu-tidy-toggle" }?.frame
-        controller.show(model: self, anchor: anchor)
+        let anchor = NSScreen.screens.first.flatMap { primaryScreen in
+            snapshots.first { $0.ownIdentifier == "menu-tidy-toggle" && $0.hasReliableGeometry }.flatMap {
+                HiddenItemsPanelPlacement.appKitAnchor(fromQuartz: $0.frame, primaryScreenFrame: primaryScreen.frame)
+            }
+        }
+        controller.show(model: self, anchor: anchor, clickPoint: clickPoint)
         Self.diagnosticLogger.notice("tray presented=true items=\(self.panelItems.count) cachedImages=\(self.panelImages.count)")
         guard screenCaptureGranted, !panelInteractionBusy else { return }
         panelTask = Task { [weak self] in

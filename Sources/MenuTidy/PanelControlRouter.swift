@@ -48,7 +48,11 @@ final class PanelControlRouter {
         logger.info("action=controlRelease matchedPress=\(hasPress) close=\(decision == .close) show=\(decision == .show) timestamp=\(event?.timestamp ?? -1) generation=\(self.state.generation)")
         switch decision {
         case .close: model?.closeIconPanel()
-        case .show: model?.showIconPanelFromControl()
+        case .show:
+            // A remote-hosted status item can report its primary-display
+            // window even when activated on a secondary menu bar. Capture
+            // the physical pointer before presentation changes window focus.
+            model?.showIconPanelFromControl(at: NSEvent.mouseLocation)
         case .ignore: break
         }
     }
