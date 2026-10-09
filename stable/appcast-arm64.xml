@@ -6,23 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.6.7</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.7</link>
-      <pubDate>Thu, 08 Oct 2026 01:08:21 +0000</pubDate>
-      <sparkle:version>63</sparkle:version>
-      <sparkle:shortVersionString>0.6.7</sparkle:shortVersionString>
+      <title>Menu Tidy 0.6.8</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.8</link>
+      <pubDate>Fri, 09 Oct 2026 00:40:25 +0000</pubDate>
+      <sparkle:version>64</sparkle:version>
+      <sparkle:shortVersionString>0.6.8</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="plain-text">## [0.6.7] - 2026-10-08
+      <description sparkle:format="plain-text">## [0.6.8] - 2026-10-09
 
-新增启动后的延迟补偿应用，给登录时尚未准备好的菜单栏图标一次重新连接机会。正式版构建号为 63，保留现有分类与偏好。
+修复独立托盘首次展开显示不全、需要移动鼠标后才恢复完整的问题。正式版构建号为 64，保留现有分类与偏好。
 
-- 在“权限与设置”中新增默认开启的“启动后自动应用待处理”。Menu Tidy 启动约 30 秒后刷新当前图标，再执行一次“应用全部待处理”；可在设置中关闭。
-- 正在刷新、应用分类、恢复图标或使用托盘时顺延执行，复用既有串行队列和批量处理范围。已确认、离线、归属待修复和需要单独识别的项目不重复处理。
-- 每次启动只进行一次补偿尝试。扫描失败时不应用旧列表；应用失败时保留选择与原因，供用户手动重试，不持续自动重试。
-- 增加 8 项应用层回归测试，覆盖 30 秒边界、延迟出现的图标、初次连接失败后补偿、忙碌及托盘交互顺延、扫描或应用失败、开关持久化与停止计时。
+- 展开前完成实际内容测量和布局，完整显示图标、底部栏及提示信息；忽略初始零高度等无效测量，避免弹框错误缩小。
+- 图标数量和操作提示变化后主动调整窗口高度，保持顶部位置稳定；超过四行的图标继续在网格内滚动。
+- 关闭时取消待执行的尺寸更新，快速再次展开不会受到旧弹框回调影响。
+- 增加 7 项真实 AppKit 窗口布局测试，全程不投递鼠标事件，覆盖首次显示、空态、滚动、反复展开、错误提示、图标数量变化和旧回调隔离。
 
-验证：本地完整检查通过 492 项核心 Swift 测试、20 项应用集成测试和 96 项 Python 测试；warnings-as-errors 构建通过。macOS 27 Apple Silicon 普通启动实测约 31.4 秒后触发补偿检查，本轮初次连接已完成，补偿时待处理数为 0；分类与草稿记录保留。完整开机登录场景、旧版 macOS 和 Intel 桌面交互仍需在对应设备上独立验证。
+验证：本地完整检查通过 492 项核心 Swift 测试、27 项应用集成测试及 96 项 Python 回归，warnings-as-errors 构建通过。在 macOS 27.0.1 Apple Silicon 上，隔离数据与真实窗口验证确认 19 项托盘首次即为完整高度。详细证据见[托盘首次布局验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.8/docs/TRAY-PANEL-LAYOUT-20261008.md)。旧版 macOS、Intel 桌面与多显示器实际交互仍需独立验收；当前签名沿用项目自签名发行身份，未经 Apple 公证。
 
 ### 软件内更新与首次安装
 
@@ -34,8 +34,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.6.7-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.6.7-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.6.8-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.6.8-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -58,12 +58,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.7/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.7/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.7/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.8/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.8/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.8/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.7/Menu-Tidy-0.6.7-macos-arm64.zip" length="3758743" type="application/octet-stream" sparkle:edSignature="3Xu980y9fz8c1u7hc/OGiqLMcX2BU8e73dnJf7nMQIXVWirwIHOoQsGoyrH83k9m8Dk1s77AwWg53zvkff3ADg=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.8/Menu-Tidy-0.6.8-macos-arm64.zip" length="3762770" type="application/octet-stream" sparkle:edSignature="6DjQsiieWavtRE0qqqLqshzLznhlYDRgg+SOKoLNf9c61bnAxn3ixBOIRUnzWI2C3dto1s47q6FvfCLKV/0+BA=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: x3ZPmnhAMB0jvF6m00Ntvsc/Py4C9Eit+FswJ9pbbxBHj1uzTf30ifrmmfJNaHQfdRI2DhxzydR1IUCAz3obCA==
-length: 6336
+edSignature: f2ZzV0UCaZjcaSVF+yOvdFm6l3C5GbJ+52ldSnVoM912lBeOq41/y8I9xytfGITfHb0JUexVUT94FQVGk6O5Bw==
+length: 6244
 -->
