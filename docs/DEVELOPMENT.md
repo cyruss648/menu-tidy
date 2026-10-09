@@ -31,6 +31,10 @@ cd menu-tidy
 
 `dev-setup.sh` 检查依赖和仓库配置，安装 `pre-commit`、`pre-push`、`commit-msg` hooks。它不安装系统软件，也不创建签名证书；已有自定义 hooks 会受到保护。遇到冲突应先阅读提示、保留既有内容，不要直接覆盖。
 
+## 项目级 Codex skill
+
+发布与本地安装流程保存在仓库的 [.agents/skills/menu-tidy-release-verify/SKILL.md](../.agents/skills/menu-tidy-release-verify/SKILL.md)，随项目提交和维护，无需安装到用户级 skill 目录。可在本项目中显式使用 `$menu-tidy-release-verify`，并说明要执行提交、推送、发布或本地安装中的哪些操作；流程会分别核验这些步骤。
+
 ## 日常检查
 
 ```sh
