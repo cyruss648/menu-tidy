@@ -13,6 +13,8 @@ final class MenuTidyTestEnvironment {
     var hiddenBundles: [String] = []
     var restoredBundles: [String] = []
     var beforeScan: (() async throws -> Void)?
+    /// Root processes queried this round; host results may belong to other owners.
+    var enumerationOwners: [MenuBarOwner]?
     var beforeVisibilityRead: (() async throws -> Void)?
     var uptime: TimeInterval = 0
     var pointerInMenuBar = false

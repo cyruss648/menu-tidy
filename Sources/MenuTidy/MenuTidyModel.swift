@@ -3196,9 +3196,8 @@ final class MenuTidyModel: ObservableObject {
         anchorScanSequence += 1
         let scanID = anchorScanSequence
         let (owners, bands) = menuBarScanInputs()
-        let scanOwners = testingEnvironment == nil
-            ? incrementalScanOwners(from: owners, discover: discover)
-            : owners
+        let scanOwners = testingEnvironment.map { $0.enumerationOwners ?? owners }
+            ?? incrementalScanOwners(from: owners, discover: discover)
         let previousSnapshots = snapshots
         let previousSnapshotOwnerKeys = snapshotOwnerKeys
         let newSnapshots: [MenuBarItemSnapshot]
@@ -3227,9 +3226,15 @@ final class MenuTidyModel: ObservableObject {
         scanSchedule.complete(scanned: scanOwners.map(ScanOwnerKey.init))
         let currentOwnerKeys = Set(owners.map(ScanOwnerKey.init))
         let scannedOwnerKeys = Set(scanOwners.map(ScanOwnerKey.init))
+        // A scanned host can return remote items owned by an unscanned app.
+        // Those current observations replace the old rows with the same IDs.
+        // Also heal duplicates retained from earlier incremental scans. The AX
+        // scanner already publishes its current inventory uniquely by ID.
+        var publishedIDs = Set(newSnapshots.map(\.id))
         let retainedSnapshots = previousSnapshots.filter { snapshot in
             guard let ownerKey = previousSnapshotOwnerKeys[snapshot.processIdentifier] else { return false }
-            return currentOwnerKeys.contains(ownerKey) && !scannedOwnerKeys.contains(ownerKey)
+            guard currentOwnerKeys.contains(ownerKey), !scannedOwnerKeys.contains(ownerKey) else { return false }
+            return publishedIDs.insert(snapshot.id).inserted
         }
         snapshots = retainedSnapshots + newSnapshots
         snapshotOwnerKeys = Dictionary(snapshots.compactMap { snapshot in
