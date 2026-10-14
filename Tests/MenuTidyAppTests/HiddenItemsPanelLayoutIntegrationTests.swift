@@ -293,21 +293,20 @@ final class HiddenItemsPanelLayoutIntegrationTests: XCTestCase {
         defaults.set(false, forKey: "startupApplyPending")
 
         let environment = MenuTidyTestEnvironment()
-        let bundle = "org.example.MenuTidyPanelLayoutFixture"
         let rules = (0..<itemCount).map { index in
             ItemRule(id: "item:panel-layout.\(index)", name: "Fixture \(index)",
-                bundleIdentifier: bundle, visibility: .collapsible)
+                bundleIdentifier: "org.example.MenuTidyPanelLayoutFixture\(index)", visibility: .collapsible)
         }
         defaults.set(try JSONEncoder().encode(ItemRuleBook(rules: Dictionary(uniqueKeysWithValues:
             rules.map { ($0.id, $0) }))), forKey: "itemRules.v1")
         for (index, rule) in rules.enumerated() {
             let pid = Int32(20000 + index)
             environment.snapshots.append(MenuBarItemSnapshot(id: rule.id, processIdentifier: pid,
-                name: rule.name, ownerName: rule.name, bundleIdentifier: bundle,
+                name: rule.name, ownerName: rule.name, bundleIdentifier: rule.bundleIdentifier,
                 frame: CGRect(x: index * 30, y: 0, width: 22, height: 22), hasReliableGeometry: true,
                 canMove: true, detail: "", persistentIdentity: true, ownIdentifier: nil))
             environment.identities[rule.id] = ObservedItemGroupHistory.Identity(id: rule.id,
-                pid: pid, bundleIdentifier: bundle, launchTime: 100)
+                pid: pid, bundleIdentifier: rule.bundleIdentifier, launchTime: 100)
         }
         let model = MenuTidyModel(testing: environment, defaults: defaults)
         model.refreshMenuItems()

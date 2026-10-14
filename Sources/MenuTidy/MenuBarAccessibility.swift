@@ -24,6 +24,7 @@ struct MenuBarItemSnapshot: Identifiable, Sendable {
     let detail: String
     let persistentIdentity: Bool
     let ownIdentifier: String?
+    var presentationIdentity: MenuBarItemPresentationIdentity? = nil
 }
 
 /// A live AX identity's candidate existing preference key, not a new item ID.
@@ -617,7 +618,9 @@ actor MenuBarAccessibility {
                 hasReliableGeometry: hasReliableGeometry, canMove: !protected,
                 detail: systemOverflow ? "系统菜单栏溢出入口，用于恢复隐藏图标，不参与分组" :
                     (protected ? "系统固定项目或 Menu Tidy 控制项，保持可见" : (persistent == nil ? "没有稳定标识，仅在本次运行中记住此图标的分类" : "")),
-                persistentIdentity: persistent != nil, ownIdentifier: own)
+                persistentIdentity: persistent != nil, ownIdentifier: own,
+                presentationIdentity: MenuBarItemPresentationIdentity.resolve(
+                    bundleIdentifier: candidate.owner.bundleIdentifier, accessibilityIdentifier: candidate.identifier))
             updated[id] = Entry(element: candidate.element, owner: candidate.owner,
                                 accessibilityIdentifier: candidate.identifier, snapshot: snapshot,
                                 hostPresentation: candidate.hostPresentation, hostGeometryUnresolved: hostGeometryUnresolved)
@@ -664,7 +667,8 @@ actor MenuBarAccessibility {
             let snapshot = MenuBarItemSnapshot(id: previous.id, processIdentifier: previous.processIdentifier,
                 name: previous.name, ownerName: previous.ownerName, bundleIdentifier: previous.bundleIdentifier,
                 frame: previous.frame, hasReliableGeometry: false, canMove: previous.canMove, detail: previous.detail,
-                persistentIdentity: previous.persistentIdentity, ownIdentifier: previous.ownIdentifier)
+                persistentIdentity: previous.persistentIdentity, ownIdentifier: previous.ownIdentifier,
+                presentationIdentity: previous.presentationIdentity)
             updated[id] = Entry(element: old.element, owner: old.owner,
                 accessibilityIdentifier: old.accessibilityIdentifier, snapshot: snapshot,
                 hostPresentation: nil, hostGeometryUnresolved: true)
@@ -700,7 +704,8 @@ actor MenuBarAccessibility {
                 let snapshot = MenuBarItemSnapshot(id: old.id, processIdentifier: old.processIdentifier,
                     name: old.name, ownerName: old.ownerName, bundleIdentifier: old.bundleIdentifier,
                     frame: old.frame, hasReliableGeometry: false, canMove: old.canMove, detail: old.detail,
-                    persistentIdentity: old.persistentIdentity, ownIdentifier: old.ownIdentifier)
+                    persistentIdentity: old.persistentIdentity, ownIdentifier: old.ownIdentifier,
+                    presentationIdentity: old.presentationIdentity)
                 updated[id] = Entry(element: current.element, owner: current.owner,
                     accessibilityIdentifier: current.accessibilityIdentifier, snapshot: snapshot,
                     hostPresentation: nil, hostGeometryUnresolved: true)

@@ -67,7 +67,8 @@ public struct NativeTrayChoices: Codable, Equatable, Sendable {
         return imported
     }
 
-    private static func accepts(bundle: String, excluding: Set<String>) -> Bool {
+    /// Intent eligibility only; the native backend must separately verify ownership.
+    public static func accepts(bundle: String, excluding: Set<String>) -> Bool {
         guard !excluding.contains(bundle), bundle.utf8.count <= 255 else { return false }
         let lower = bundle.lowercased()
         guard lower != "com.apple", !lower.hasPrefix("com.apple.") else { return false }

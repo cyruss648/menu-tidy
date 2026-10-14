@@ -17,17 +17,25 @@ struct ManagedItemRow: Identifiable {
     let canMove: Bool
     let detail: String
     let isPending: Bool
+    var presentationIdentity: MenuBarItemPresentationIdentity? = nil
+    var sourceIDs: [String] = []
+    var hasMixedGroups = false
+
+    var presentationID: String { presentationIdentity?.id ?? id }
+    var underlyingIDs: [String] { sourceIDs.isEmpty ? [id] : sourceIDs }
 
     func hasSamePresentation(as other: ManagedItemRow) -> Bool {
         id == other.id && name == other.name && ownerName == other.ownerName &&
             bundleIdentifier == other.bundleIdentifier && icon === other.icon && group == other.group &&
             isAvailable == other.isAvailable && canMove == other.canMove && detail == other.detail &&
-            isPending == other.isPending
+            isPending == other.isPending && presentationIdentity == other.presentationIdentity &&
+            sourceIDs == other.sourceIDs && hasMixedGroups == other.hasMixedGroups
     }
 
     func replacingGroup(_ group: ItemVisibility) -> ManagedItemRow {
         ManagedItemRow(id: id, name: name, ownerName: ownerName, bundleIdentifier: bundleIdentifier,
-            icon: icon, group: group, isAvailable: isAvailable, canMove: canMove, detail: detail, isPending: isPending)
+            icon: icon, group: group, isAvailable: isAvailable, canMove: canMove, detail: detail, isPending: isPending,
+            presentationIdentity: presentationIdentity, sourceIDs: sourceIDs, hasMixedGroups: hasMixedGroups)
     }
 }
 
@@ -235,6 +243,12 @@ final class MenuTidyModel: ObservableObject {
             bundleIdentifier = owner.bundleIdentifier
             launchTime = owner.launchTime
         }
+
+        init(_ identity: ObservedItemGroupHistory.Identity) {
+            pid = identity.pid
+            bundleIdentifier = identity.bundleIdentifier
+            launchTime = identity.launchTime
+        }
     }
     private var successfulScanOwnerKeys: Set<ScanOwnerKey> = []
     private var snapshotOwnerKeys: [pid_t: ScanOwnerKey] = [:]
@@ -274,11 +288,52 @@ final class MenuTidyModel: ObservableObject {
         isRecoveringPositions || isApplying || isRefreshing || isArranging || isActivatingPanelItem || preparingToTerminate
     }
     var panelItems: [ManagedItemRow] {
-        items.filter { item in
+        presentationRows(from: items.filter { item in
             item.isAvailable && item.canMove && TrayPlacementPolicy.includesInPanel(
                 group: trayPlacementGroup(id: item.id),
                 verifiedGroup: actualGroups[item.id] ?? verifiedPositionGroups[item.id],
                 includeAlwaysHidden: panelIncludesAlwaysHidden)
+        })
+    }
+
+    /// One row per native application switch or exact system module, while
+    /// retaining every underlying source in `items` for independent validation.
+    var managementItems: [ManagedItemRow] {
+        presentationRows(from: items.filter(\.isAvailable))
+    }
+
+    private func presentationRows(from sources: [ManagedItemRow]) -> [ManagedItemRow] {
+        guard usesNativeVisibility, !isArranging else { return sources }
+        var groups: [[ManagedItemRow]] = []
+        var indexes: [String: Int] = [:]
+        for item in sources {
+            if let index = indexes[item.presentationID] { groups[index].append(item) }
+            else { indexes[item.presentationID] = groups.count; groups.append([item]) }
+        }
+        return groups.map { members in
+            @MainActor func rank(_ item: ManagedItemRow) -> Int {
+                if activePanelItemID == item.id { return 0 }
+                if trayPlacementQueue.active?.id == item.id || trayPlacementQueue.pendingIDs.contains(item.id) { return 1 }
+                if trayPlacementNeedsOwnershipRepair(id: item.id) { return 2 }
+                if trayPlacementFailure(id: item.id) != nil || trayItemErrors[item.id] != nil { return 3 }
+                if item.isPending { return 4 }
+                if actualGroups[item.id] != nil { return 5 }
+                if snapshots.first(where: { $0.id == item.id })?.hasReliableGeometry == true { return 6 }
+                return 7
+            }
+            let selected = members.sorted {
+                let left = rank($0), right = rank($1)
+                return left != right ? left < right : $0.id < $1.id
+            }[0]
+            let name: String
+            if case .application? = selected.presentationIdentity, !selected.ownerName.isEmpty { name = selected.ownerName }
+            else { name = selected.name }
+            return ManagedItemRow(id: selected.id, name: name, ownerName: selected.ownerName,
+                bundleIdentifier: selected.bundleIdentifier, icon: selected.icon, group: selected.group,
+                isAvailable: true, canMove: members.allSatisfy(\.canMove),
+                detail: Array(Set(members.map(\.detail).filter { !$0.isEmpty })).sorted().joined(separator: " · "),
+                isPending: members.contains(where: \.isPending), presentationIdentity: selected.presentationIdentity,
+                sourceIDs: members.map(\.id).sorted(), hasMixedGroups: Set(members.map { trayPlacementGroup(id: $0.id) }).count > 1)
         }
     }
 
@@ -503,11 +558,22 @@ final class MenuTidyModel: ObservableObject {
                     resolveAmbiguousKeyFor: request.resolveAmbiguousKey ? request.id : nil,
                     requestedGroups: Dictionary(uniqueKeysWithValues: requestedIDs.map { ($0, request.group) }))
                 if self.isApplying { await self.workTask?.value }
-                let confirmed = self.rules.rule(for: request.id)?.visibility == request.group &&
-                    self.actualGroups[request.id] == request.group
+                let confirmed: Bool
+                let applicationGroup = self.usesNativeVisibility ? row.bundleIdentifier.flatMap {
+                    self.nativeTrayChoices.group(bundle: $0)
+                } : nil
+                if applicationGroup != nil, let bundle = row.bundleIdentifier {
+                    let current = self.items.filter { $0.isAvailable && $0.canMove && $0.bundleIdentifier == bundle }
+                    confirmed = !current.isEmpty && current.allSatisfy {
+                        self.rules.rule(for: $0.id)?.visibility == request.group && self.actualGroups[$0.id] == request.group &&
+                            self.draftSessionIdentity(for: $0.id).map { self.ownerIsCurrent($0) } == true
+                    }
+                } else {
+                    confirmed = self.rules.rule(for: request.id)?.visibility == request.group && self.actualGroups[request.id] == request.group
+                }
                 _ = self.trayPlacementQueue.finish(token: request.token)
                 if self.trayPlacementQueue.desiredGroup(id: request.id) == nil &&
-                    self.trayPlacementGroup(id: request.id) == request.group {
+                    (applicationGroup ?? self.trayPlacementGroup(id: request.id)) == request.group {
                     if confirmed {
                         self.trayPlacementErrors.removeValue(forKey: request.id)
                         self.trayItemErrors.removeValue(forKey: request.id)
@@ -1243,7 +1309,7 @@ final class MenuTidyModel: ObservableObject {
                 scanSucceeded = true
                 self.managementMessage = self.items.isEmpty
                     ? "没有读到菜单栏项目。请退出全屏、展开其他整理器后重试。"
-                    : "列表已更新，共 \(self.items.filter(\.isAvailable).count) 个项目。" +
+                    : "列表已更新，共 \(self.managementItems.count) 个项目。" +
                         (self.savedRulesNeedingVerificationCount > 0
                             ? "有 \(self.savedRulesNeedingVerificationCount) 项已保存分组待验证，可明确应用后检查；刷新列表不会自动修改位置。"
                             : "现有分组与待应用选择已保留。")
@@ -1712,6 +1778,9 @@ final class MenuTidyModel: ObservableObject {
         }.map(\.id)
         let requestedIDSet = Set(requestedIDs)
         guard !requestedIDs.isEmpty else { return }
+        let presentationKeysByID = Dictionary(uniqueKeysWithValues: items.filter { requestedIDSet.contains($0.id) }
+            .map { ($0.id, $0.presentationID) })
+        let requestedPresentationKeys = Set(presentationKeysByID.values)
         let fixedRules = requestedItemIDs.map { _ in
             items.filter { requestedIDSet.contains($0.id) }.map {
                 ItemRule(id: $0.id, name: $0.name, bundleIdentifier: $0.bundleIdentifier,
@@ -1742,8 +1811,10 @@ final class MenuTidyModel: ObservableObject {
                 } else {
                     self.collapseIfSafe()
                     if self.isCollapsed {
-                        let skipped = requestedIDSet.intersection(self.itemApplicationIssues.keys).count
-                        self.managementMessage = "已应用并确认 \(requestedIDs.count - skipped) 项分类。" +
+                        let skipped = Set(self.itemApplicationIssues.keys.compactMap {
+                            presentationKeysByID[$0] ?? self.itemsByID[$0]?.presentationID
+                        }).intersection(requestedPresentationKeys).count
+                        self.managementMessage = "已应用并确认 \(requestedPresentationKeys.count - skipped) 项分类。" +
                             (skipped > 0 ? "另有 \(skipped) 项未自动应用，选择已保留；可筛选查看原因。" : "点击菜单栏「···」可打开图标栏。") +
                             (self.offlineDrafts.isEmpty ? "" : "另有 \(self.offlineDrafts.count) 条离线草稿保留，未参与本次应用。")
                     }
@@ -3413,7 +3484,10 @@ final class MenuTidyModel: ObservableObject {
                 icon: icon, group: group, isAvailable: true, canMove: item.canMove, detail: details.joined(separator: " · "),
                 isPending: item.canMove && counts[item.id] == 1 &&
                     (rowDraftIDs[item.id] != nil || ((nativeChoice != nil || rules.rule(for: item.id) != nil) &&
-                        (observedMismatch || (usesIndependentTray && actualGroups[item.id] == nil)))))
+                        (observedMismatch || (usesIndependentTray && actualGroups[item.id] == nil)))),
+                presentationIdentity: usesNativeVisibility && !isArranging ?
+                    (item.presentationIdentity ?? MenuBarItemPresentationIdentity.resolve(
+                        bundleIdentifier: item.bundleIdentifier, accessibilityIdentifier: nil)) : nil)
         }
         let boundDraftIDs = Set(rowDraftIDs.values)
         let nextOfflineDrafts = pendingDrafts.records.filter { !boundDraftIDs.contains($0.id) }
@@ -3678,7 +3752,8 @@ final class MenuTidyModel: ObservableObject {
             visible.append(MenuBarItemSnapshot(id: item.id, processIdentifier: item.processIdentifier,
                 name: item.name, ownerName: item.ownerName, bundleIdentifier: item.bundleIdentifier,
                 frame: frame, hasReliableGeometry: true, canMove: item.canMove, detail: item.detail,
-                persistentIdentity: item.persistentIdentity, ownIdentifier: item.ownIdentifier))
+                persistentIdentity: item.persistentIdentity, ownIdentifier: item.ownIdentifier,
+                presentationIdentity: item.presentationIdentity))
         }
         return (visible, hasMissingBinding)
     }
@@ -3733,7 +3808,8 @@ final class MenuTidyModel: ObservableObject {
         MenuBarItemSnapshot(id: item.id, processIdentifier: item.processIdentifier,
             name: item.name, ownerName: item.ownerName, bundleIdentifier: item.bundleIdentifier,
             frame: frame, hasReliableGeometry: true, canMove: item.canMove, detail: item.detail,
-            persistentIdentity: item.persistentIdentity, ownIdentifier: item.ownIdentifier)
+            persistentIdentity: item.persistentIdentity, ownIdentifier: item.ownIdentifier,
+            presentationIdentity: item.presentationIdentity)
     }
 
     private func captureAndVerifyIconImages(_ confirmed: [MenuBarItemSnapshot]) async throws -> Set<String> {
@@ -4930,6 +5006,34 @@ private extension MenuTidyModel {
         guard !needsLegacyPositionRecovery else {
             throw MenuTidyManagementError.positionApplication("旧版隐藏位置仍待恢复，请先完成排序恢复再启用原生隐藏。")
         }
+        let originalRequested = Set(requestedIDs)
+        let originalDisplayed = items.filter { originalRequested.contains($0.id) && $0.canMove && $0.isAvailable }.map {
+            ItemRule(id: $0.id, name: $0.name, bundleIdentifier: $0.bundleIdentifier, visibility: $0.group)
+        }
+        guard let originalRules = ManualArrangementRules.applicationRules(requestedIDs: requestedIDs,
+            displayed: originalDisplayed, confirmed: confirmedRules) else { throw MenuBarAccessError.disappeared }
+        // Native application intent owns a bundle, not one transient AX node.
+        // Pin its owner epochs before refreshing, then validate all fresh nodes
+        // independently. A restart or an additional owner cannot inherit it.
+        var applicationScopes: [String: (group: ItemVisibility, owners: Set<ScanOwnerKey>, drafts: Set<UUID>)] = [:]
+        let byBundle = Dictionary(grouping: originalRules, by: \.bundleIdentifier)
+        for (bundle, scopedRules) in byBundle {
+            guard let bundle, NativeTrayChoices.accepts(bundle: bundle, excluding: []),
+                  let group = nativeTrayChoices.group(bundle: bundle),
+                  scopedRules.allSatisfy({ $0.visibility == group }) else { continue }
+            var owners: Set<ScanOwnerKey> = []
+            var ownedDrafts: Set<UUID> = []
+            for rule in scopedRules {
+                guard let source = snapshots.first(where: { $0.id == rule.id }),
+                      let identity = observedItemIdentity(source), self.ownerIsCurrent(identity) else {
+                    throw MenuBarAccessError.disappeared
+                }
+                owners.insert(ScanOwnerKey(identity))
+                if let record = pendingDrafts.record(for: rule.id, sessionIdentity: identity),
+                   record.rule.bundleIdentifier == bundle, record.rule.visibility == group { ownedDrafts.insert(record.id) }
+            }
+            applicationScopes[bundle] = (group, owners, ownedDrafts)
+        }
         var appConflicts: Set<String> = []
         var systemConflicts: Set<String> = []
         // An empty unrelated backend owns nothing to recover and must not
@@ -4945,12 +5049,29 @@ private extension MenuTidyModel {
             throw MenuBarAccessError.rejected
         }
         try await scanNow()
-        let requested = Set(requestedIDs)
+        let unscopedRules = originalRules.filter { rule in
+            guard let bundle = rule.bundleIdentifier else { return true }
+            return !applicationScopes.keys.contains(bundle)
+        }
+        var effectiveIDs = unscopedRules.map(\.id)
+        var effectiveRules = unscopedRules
+        for (bundle, scope) in applicationScopes {
+            let current = snapshots.filter { $0.canMove && $0.ownIdentifier == nil && $0.bundleIdentifier == bundle }
+            let identities = current.compactMap(observedItemIdentity)
+            guard !current.isEmpty, identities.count == current.count,
+                  identities.allSatisfy({ self.ownerIsCurrent($0) }),
+                  Set(identities.map(ScanOwnerKey.init)) == scope.owners else { throw MenuBarAccessError.disappeared }
+            effectiveIDs.append(contentsOf: current.map(\.id))
+            effectiveRules.append(contentsOf: current.map {
+                ItemRule(id: $0.id, name: $0.name, bundleIdentifier: bundle, visibility: scope.group)
+            })
+        }
+        let requested = Set(effectiveIDs)
         let displayed = items.filter { requested.contains($0.id) && $0.canMove && $0.isAvailable }.map {
             ItemRule(id: $0.id, name: $0.name, bundleIdentifier: $0.bundleIdentifier, visibility: $0.group)
         }
-        guard let targets = ManualArrangementRules.applicationRules(requestedIDs: requestedIDs,
-            displayed: displayed, confirmed: confirmedRules) else { throw MenuBarAccessError.disappeared }
+        guard let targets = ManualArrangementRules.applicationRules(requestedIDs: effectiveIDs,
+            displayed: displayed, confirmed: effectiveRules) else { throw MenuBarAccessError.disappeared }
         var attempted = NativeVisibilityAttemptLedger<NativeVisibilityTarget>()
         for rule in targets {
             try checkOperationDeadline()
@@ -5074,6 +5195,20 @@ private extension MenuTidyModel {
                 }
                 if Task.isCancelled || positionRecoveryMessage != nil { throw error }
             }
+        }
+        // Consume only drafts bound to this request's old source epochs, and
+        // only after all current sources confirm the same still-current choice.
+        // Unassociated drafts from previous launches remain untouched.
+        for (bundle, scope) in applicationScopes {
+            let current = snapshots.filter { $0.canMove && $0.ownIdentifier == nil && $0.bundleIdentifier == bundle }
+            guard nativeTrayChoices.group(bundle: bundle) == scope.group, !current.isEmpty,
+                  current.allSatisfy({ actualGroups[$0.id] == scope.group &&
+                      rules.rule(for: $0.id)?.visibility == scope.group }),
+                  Set(current.compactMap(observedItemIdentity).map(ScanOwnerKey.init)) == scope.owners else { continue }
+            let obsoleteDrafts = Set(pendingDrafts.records.filter {
+                scope.drafts.contains($0.id) && $0.rule.bundleIdentifier == bundle && $0.rule.visibility == scope.group
+            }.map(\.id))
+            if !obsoleteDrafts.isEmpty { pendingDrafts.remove(ids: obsoleteDrafts); persistDrafts() }
         }
         hasCompletedSetup = true
         defaults.set(true, forKey: "hasCompletedSetup")

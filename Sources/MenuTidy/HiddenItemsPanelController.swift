@@ -312,7 +312,7 @@ private struct HiddenItemsPanelView: View {
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(TrayPanelLayout.cellSize),
                 spacing: TrayPanelLayout.spacing), count: TrayPanelLayout.columns),
                 alignment: .leading, spacing: TrayPanelLayout.spacing) {
-                ForEach(model.panelItems) { item in
+                ForEach(model.panelItems, id: \.presentationID) { item in
                     HiddenPanelIconButton(name: item.name, image: model.panelImages[item.id],
                         fallbackImage: item.icon,
                         isWorking: model.activePanelItemID == item.id || model.trayPlacementIsPending(id: item.id),

@@ -61,7 +61,7 @@ struct SettingsView: View {
             ? "辅助功能用于读取图标并打开原生菜单；菜单栏显示设置用于控制图标是否显示。屏幕录制可选，用于显示原始图标外观。"
             : "辅助功能与排序目录用于调整原生图标。屏幕录制为可选增强，用于显示原始菜单栏图像；未开启时托盘显示应用身份图标。"
     }
-    private var currentTrayItems: [ManagedItemRow] { model.items.filter(\.isAvailable) }
+    private var currentTrayItems: [ManagedItemRow] { model.managementItems }
     private var unavailableItems: [ManagedItemRow] { model.items.filter { !$0.isAvailable } }
     private var attentionCount: Int {
         currentTrayItems.filter { $0.canMove && ($0.isPending || model.trayPlacementFailure(id: $0.id) != nil) }.count
@@ -73,7 +73,8 @@ struct SettingsView: View {
             let needsAttention = item.canMove && (item.isPending || model.trayPlacementFailure(id: item.id) != nil)
             let matchesFilter = presentation.trayFilter == "all" || presentation.trayFilter == group.id ||
                 (presentation.trayFilter == "attention" && needsAttention)
-            return matchesFilter && (query.isEmpty || [item.name, item.ownerName, item.bundleIdentifier ?? ""]
+            let names = model.items.filter { item.underlyingIDs.contains($0.id) }.map(\.name)
+            return matchesFilter && (query.isEmpty || (names + [item.name, item.ownerName, item.bundleIdentifier ?? ""])
                 .contains { $0.localizedCaseInsensitiveContains(query) })
         }
     }
@@ -244,7 +245,7 @@ struct SettingsView: View {
                     trayItemList
                     HStack(alignment: .top, spacing: 7) {
                         Image(systemName: "info.circle").accessibilityHidden(true)
-                        Text("更改选择会立即处理；同一应用的多个图标可能共用显示设置。缺少原始图像时，托盘显示应用图标。")
+                        Text("更改选择会立即处理；同一应用的图标共用一行显示设置，系统模块分别显示。缺少原始图像时，托盘显示应用图标。")
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 4)
                         if !model.screenCaptureGranted {
@@ -366,7 +367,7 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, minHeight: 130).padding(16)
             } else {
                 LazyVStack(spacing: 0) {
-                    ForEach(filteredTrayItems) { item in
+                    ForEach(filteredTrayItems, id: \.presentationID) { item in
                         trayItemRow(item)
                         Divider().padding(.leading, 60)
                     }
@@ -412,6 +413,9 @@ struct SettingsView: View {
                 } else if pending {
                     Text("正在按顺序处理，可继续更改选择。")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
+                } else if item.hasMixedGroups {
+                    Text("已有图标分类不一致，请明确选择此应用的显示方式。")
+                        .font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2)
                 } else {
                     Text(needsConfirmation ? "选择已保留，等待应用并确认。" :
                             (!item.canMove ? "由系统管理，保持显示。" :
