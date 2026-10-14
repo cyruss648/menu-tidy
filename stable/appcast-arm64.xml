@@ -6,22 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.6.10</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.10</link>
-      <pubDate>Wed, 14 Oct 2026 09:56:32 +0000</pubDate>
-      <sparkle:version>66</sparkle:version>
-      <sparkle:shortVersionString>0.6.10</sparkle:shortVersionString>
+      <title>Menu Tidy 0.6.11</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.11</link>
+      <pubDate>Wed, 14 Oct 2026 11:42:27 +0000</pubDate>
+      <sparkle:version>67</sparkle:version>
+      <sparkle:shortVersionString>0.6.11</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="plain-text">## [0.6.10] - 2026-10-14
+      <description sparkle:format="plain-text">## [0.6.11] - 2026-10-14
 
-修复图标列表在重复刷新后数量增多、名称滞后、行间距异常及出现大块空白的问题。正式版构建号为 66，保留现有分类与偏好。
+修复更新后 Clash Verge 和实时活动仍出现两条相同设置的问题。正式版构建号为 67，保留现有分类、规则和草稿。
 
-- 修复系统菜单栏宿主再次读到其他应用图标时，新旧记录被重复加入列表的问题；本轮读取结果替换同一图标的旧记录，并清除保留列表中的重复记录。
-- 同一应用真正不同的图标继续分别保留；未扫描应用的其他图标沿用仍有效的记录，已扫描、退出或重启进程的旧记录继续按原生命周期规则处理。
-- 增加 7 项真实应用模型集成回归，覆盖连续宿主扫描、名称更新、部分图标保留、已扫描图标消失、进程退出与 PID 重用、扫描失败及已有重复记录清理。
+- 常规应用按实际共用的显示开关合并为一行设置、一个托盘入口；系统菜单栏按完整模块标识合并展示，实时活动、Wi‑Fi、声音等仍分别显示。
+- 设置列表、搜索结果、计数和托盘采用稳定的展示标识，原始 AX 节点继续独立保留和验证，显示去重不会扩大系统图标的隐藏权限。
+- 修复 Clash 分类过程中宿主投影消失或节点换号造成的“图标已退出”误报；同一应用和进程生命周期内重新核验当前节点，全部确认后才清理本次请求的过期草稿。进程重启或归属变化时保留未确认选择并停止该次处理。
+- 增加 4 项核心身份测试及 9 项应用集成回归，覆盖多来源展示、连续换号、旧分类冲突、失败提示、节点数量变化、完整节点替换和进程重启保护。
 
-验证：本地完整检查通过 492 项核心 Swift 测试、41 项应用集成测试和 96 项 Python 回归，warnings-as-errors 构建通过。详细范围见[增量扫描回归记录](https://github.com/cyruss648/menu-tidy/blob/v0.6.10/docs/INCREMENTAL-SCAN-20261014.md)。测试使用隔离偏好和替代扫描接口，不能替代新发布包安装后的第三方图标与设置列表实机验收；旧版 macOS、Intel 桌面交互和所有第三方应用兼容性仍需独立验证。当前签名沿用项目自签名发行身份，未经 Apple 公证。
+验证：本地完整检查通过 496 项核心 Swift 测试、50 项应用集成测试和 96 项 Python 回归，warnings-as-errors 构建通过。在 macOS 27.0.1 Apple Silicon 上，签名候选包的真实 Clash 与实时活动列表首次打开、三轮刷新、关闭重开和完整重启均各显示一条；Clash 隐藏、单一托盘入口与恢复常驻通过，原规则和草稿保留。详细范围及观察到的系统展开状态见[显示条目去重记录](https://github.com/cyruss648/menu-tidy/blob/v0.6.11/docs/ITEM-PRESENTATION-20261014.md)。实时活动原生隐藏、Intel 桌面交互、旧版 macOS 和所有第三方应用仍需独立验证；沿用项目自签名发行身份，未经 Apple 公证。
 
 ### 软件内更新与首次安装
 
@@ -33,8 +34,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.6.10-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.6.10-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.6.11-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.6.11-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -57,12 +58,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.10/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.10/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.10/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.11/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.11/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.11/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.10/Menu-Tidy-0.6.10-macos-arm64.zip" length="3765206" type="application/octet-stream" sparkle:edSignature="nuPxexjKiyB0DPIlLNmsf6i8CaZBE21Ga9aRXtbNhiH9dhv1GvSfrzILEpbKRU3gWex41UdAGqWLm8dlM2vuDA=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.11/Menu-Tidy-0.6.11-macos-arm64.zip" length="3792785" type="application/octet-stream" sparkle:edSignature="qxtqY2j3j0Xp2IQRs+XLEFOV1N0dqWuj/gdh2BeCRhf8ZvdJKdBGa6al5QLSdKVFVern2ruMs20ccnzearHGDw=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: D1Y1y6nmwSu52Za8CZpbIVe3r+ErcjNDfoC9aKiPB6z904PTq/8PTNrJFIB8bvG/7mgbqdHlRQMQFw9YHqmEDg==
-length: 6319
+edSignature: 8djVJAOsJyrR1iLAR6emdUZYGFZHwb30tkyhn3aroPEFDhMHrqK9mdLtwVZRK3zVBjXyGKhyluEJkW1XOV4yBg==
+length: 6715
 -->
