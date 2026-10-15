@@ -23,6 +23,7 @@ final class MenuTidyTestEnvironment {
     var pointerInPanel = false
     var pressedMouseButtons = false
     var maintenanceTimer: Timer?
+    var desktopSessionAvailable = true
 
     func isCurrent(_ identity: ObservedItemGroupHistory.Identity) -> Bool {
         identities[identity.id] == identity

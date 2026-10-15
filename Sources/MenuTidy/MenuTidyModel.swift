@@ -233,6 +233,12 @@ final class MenuTidyModel: ObservableObject {
     private var startupPendingApplicationFinished = false
     private var periodicPendingApplicationDue: TimeInterval?
     private var periodicPendingApplicationGeneration = 0
+    @Published private(set) var desktopSessionAvailable = true
+    private let desktopSessionMonitor = DesktopSessionMonitor()
+    private var desktopSessionGeneration = 0
+    private var operationDesktopSessionGeneration = 0
+    private var sessionResumePending = false
+    private var sessionResumeDue: TimeInterval?
     private var maintenanceFireAt: TimeInterval?
     private var wasMonitoringAutoCollapse = false
     private var lastAutoCollapseCheck = ProcessInfo.processInfo.systemUptime
@@ -388,6 +394,7 @@ final class MenuTidyModel: ObservableObject {
     /// cancellation must complete before accepting another operation.
     var trayPlacementBlockedReason: String? {
         if stopping || preparingToTerminate { return "正在退出，暂时无法更改分类。" }
+        if !desktopSessionAvailable { return "桌面暂不可用，解锁后会刷新并补偿。" }
         if isRecoveringPositions || positionRecoveryMessage != nil || (usesNativeVisibility && needsLegacyPositionRecovery) {
             return "请先完成图标恢复，再应用分类。"
         }
@@ -437,6 +444,16 @@ final class MenuTidyModel: ObservableObject {
         enqueueTrayPlacements(action: .applyPending)
     }
 
+    /// Saved intent already exists. Background verification must not create a
+    /// new persistent draft merely because the desktop became unavailable.
+    private func applyAutomaticPendingTrayPlacements() {
+        guard ensureDesktopSessionAvailable(), trayPlacementBatchActionsAllowed else { return }
+        for candidate in TrayPlacementPolicy.candidates(trayPlacementCandidates, for: .applyPending) {
+            trayPlacementQueue.enqueue(id: candidate.id, group: candidate.group)
+        }
+        drainTrayPlacements()
+    }
+
     func retryFailedTrayPlacements() {
         if isUIPreview { previewApplyPending(retryOnly: true); return }
         enqueueTrayPlacements(action: .retryFailed)
@@ -481,7 +498,7 @@ final class MenuTidyModel: ObservableObject {
 
     func requestTrayPlacement(id: String, group: ItemVisibility, resolveAmbiguousKey: Bool = false) {
         if isUIPreview { previewSetGroup(id: id, group: group); return }
-        guard trayPlacementSelectionAllowed,
+        guard ensureDesktopSessionAvailable(), trayPlacementSelectionAllowed,
               let row = items.first(where: { $0.id == id && $0.canMove && $0.isAvailable }),
               snapshots.filter({ $0.id == id }).count == 1 else { return }
         var updatedChoices = nativeTrayChoices
@@ -524,11 +541,12 @@ final class MenuTidyModel: ObservableObject {
     }
 
     private func drainTrayPlacements() {
-        guard trayPlacementTask == nil else { return }
+        guard ensureDesktopSessionAvailable(), trayPlacementTask == nil else { return }
         trayPlacementTask = Task { [weak self] in
             guard let self else { return }
             defer { self.trayPlacementTask = nil }
             while !Task.isCancelled && !self.stopping && !self.preparingToTerminate {
+                guard self.ensureDesktopSessionAvailable() else { return }
                 if let blocked = self.trayPlacementBlockedReason {
                     for id in self.trayPlacementQueue.pendingIDs { self.trayPlacementErrors[id] = blocked }
                     self.trayPlacementQueue.cancelAllPending()
@@ -540,6 +558,7 @@ final class MenuTidyModel: ObservableObject {
                     try? await Task.sleep(for: .milliseconds(80))
                     continue
                 }
+                let sessionGeneration = self.desktopSessionGeneration
                 let requests = self.usesNativeVisibility ? self.trayPlacementQueue.claimNextBatch()
                     : self.trayPlacementQueue.claimNext().map { [$0] } ?? []
                 guard !requests.isEmpty else { return }
@@ -600,7 +619,8 @@ final class MenuTidyModel: ObservableObject {
                         confirmed = self.rules.rule(for: request.id)?.visibility == request.group && self.actualGroups[request.id] == request.group
                     }
                     _ = self.trayPlacementQueue.finish(token: request.token)
-                    if self.trayPlacementQueue.desiredGroup(id: request.id) == nil &&
+                    if sessionGeneration == self.desktopSessionGeneration && self.desktopSessionAvailable &&
+                        self.trayPlacementQueue.desiredGroup(id: request.id) == nil &&
                         (applicationGroup ?? self.trayPlacementGroup(id: request.id)) == request.group {
                         if confirmed {
                             self.trayPlacementErrors.removeValue(forKey: request.id)
@@ -620,7 +640,8 @@ final class MenuTidyModel: ObservableObject {
     /// Reconnect saved intent once per process lifetime. A manual refresh of
     /// the same processes does not restart rejected work or create a retry loop.
     private func reconnectDiscoveredTrayItems() {
-        guard usesIndependentTray, hasCompletedSetup, !panelInteractionBusy, trayPlacementTask == nil,
+        guard ensureDesktopSessionAvailable(), !sessionResumePending,
+              usesIndependentTray, hasCompletedSetup, !panelInteractionBusy, trayPlacementTask == nil,
               accessibilityGranted, (usesNativeVisibility ? nativeVisibilityAccessAvailable : menuBarPositionAccessAvailable), positionRecoveryMessage == nil,
               !stopping, !preparingToTerminate else { return }
         let ids = items.compactMap { row -> String? in
@@ -654,6 +675,7 @@ final class MenuTidyModel: ObservableObject {
     private var operationDeadline: TimeInterval? { operationState.active?.deadline }
 
     private func beginOperation(kind: ManagementOperationKind, itemCount: Int = 0) -> UUID {
+        operationDesktopSessionGeneration = desktopSessionGeneration
         let token = operationState.begin(kind: kind, itemCount: itemCount,
             at: Date(), uptime: ProcessInfo.processInfo.systemUptime)
         Self.diagnosticLogger.notice("managementOperation started kind=\(String(describing: kind), privacy: .public) items=\(itemCount)")
@@ -669,6 +691,9 @@ final class MenuTidyModel: ObservableObject {
 
     private func checkOperationDeadline(budget: ManagementOperationBudget = .foreground) throws {
         try Task.checkCancellation()
+        if budget == .foreground {
+            guard ensureDesktopSessionAvailable(), !operationInterruptedBySessionChange else { throw CancellationError() }
+        }
         if budget == .foreground, operationState.hasExpired(uptime: ProcessInfo.processInfo.systemUptime) {
             throw MenuTidyManagementError.operationTimedOut
         }
@@ -697,6 +722,12 @@ final class MenuTidyModel: ObservableObject {
         await workTask?.value
         await trayPlacementTask?.value
         await workTask?.value
+    }
+
+    func setDesktopSessionAvailableForTesting(_ available: Bool) {
+        precondition(testingEnvironment != nil)
+        testingEnvironment?.desktopSessionAvailable = available
+        desktopSessionAvailabilityChanged(available)
     }
     #endif
 
@@ -760,6 +791,8 @@ final class MenuTidyModel: ObservableObject {
             lastAutoCollapseCheck = testingEnvironment.uptime
             lastRecoveryCheck = testingEnvironment.uptime
             lastInteraction = testingEnvironment.uptime
+            desktopSessionAvailable = testingEnvironment.desktopSessionAvailable
+            sessionResumePending = !desktopSessionAvailable
             started = true
             rebuildRows()
             scheduleStartupPendingApplication()
@@ -784,6 +817,8 @@ final class MenuTidyModel: ObservableObject {
     func start() {
         guard !started, !isUIPreview, testingEnvironment == nil else { return }
         started = true
+        desktopSessionMonitor.onChange = { [weak self] available in self?.desktopSessionAvailabilityChanged(available) }
+        desktopSessionMonitor.start()
         controlRouter.start(model: self)
         statusBar = StatusBarController(model: self, demoMode: demoMode)
         shortcut.onPress = { [weak self] in self?.toggleVisibility() }
@@ -834,13 +869,15 @@ final class MenuTidyModel: ObservableObject {
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.registerDepartedNativeOwners()
-                    self?.scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
-                    self?.pruneObservedGroupHistory()
-                    self?.rebuildRows()
-                    self?.refreshEnvironment()
-                    self?.requestPassiveCaptureAfterEvent()
-                    self?.trayDiscoveryNeeded = true
+                    guard let self else { return }
+                    guard self.ensureDesktopSessionAvailable() else { self.trayDiscoveryNeeded = true; return }
+                    self.registerDepartedNativeOwners()
+                    self.scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
+                    self.pruneObservedGroupHistory()
+                    self.rebuildRows()
+                    self.refreshEnvironment()
+                    self.requestPassiveCaptureAfterEvent()
+                    self.trayDiscoveryNeeded = true
                 }
             })
         }
@@ -855,15 +892,99 @@ final class MenuTidyModel: ObservableObject {
             })
     }
 
+    private var operationInterruptedBySessionChange: Bool {
+        operationState.active != nil && operationDesktopSessionGeneration != desktopSessionGeneration
+    }
+
+    @discardableResult
+    private func ensureDesktopSessionAvailable() -> Bool {
+        if desktopSessionAvailable,
+           !(testingEnvironment?.desktopSessionAvailable ?? desktopSessionMonitor.refreshAvailability()) {
+            desktopSessionAvailabilityChanged(false)
+        }
+        return desktopSessionAvailable
+    }
+
+    private func requireDesktopSession(generation: Int) throws {
+        guard ensureDesktopSessionAvailable(), generation == desktopSessionGeneration else { throw CancellationError() }
+    }
+
+    private func desktopSessionAvailabilityChanged(_ available: Bool) {
+        guard started, !stopping, !preparingToTerminate, desktopSessionAvailable != available else { return }
+        desktopSessionAvailable = available
+        desktopSessionGeneration += 1
+        sessionResumePending = true
+        periodicPendingApplicationGeneration += 1
+        periodicPendingApplicationDue = nil
+        startupPendingApplicationDue = nil
+        startupPendingApplicationNeedsRefresh = true
+        if available {
+            sessionResumeDue = maintenanceUptime + 2
+            Self.diagnosticLogger.notice("desktopSession paused=false generation=\(self.desktopSessionGeneration) resumeDelaySeconds=2")
+        } else {
+            sessionResumeDue = nil
+            cancelPassiveIconCapture()
+            cancelVisibilityDiagnostics()
+            workTask?.cancel()
+            trayPlacementTask?.cancel()
+            panelActivationTask?.cancel()
+            trayPlacementQueue.cancelAllPending()
+            closeIconPanel()
+            Self.diagnosticLogger.notice("desktopSession paused=true generation=\(self.desktopSessionGeneration)")
+        }
+        rescheduleMaintenanceTimer()
+    }
+
+    private func runSessionResume(at now: TimeInterval) {
+        guard let due = sessionResumeDue, now >= due, ensureDesktopSessionAvailable() else { return }
+        if automaticPendingApplicationBusy {
+            sessionResumeDue = now + BackgroundMaintenanceSchedule.interactionInterval
+            return
+        }
+        refreshPermissions()
+        if automaticPendingApplicationBusy {
+            sessionResumeDue = now + BackgroundMaintenanceSchedule.interactionInterval
+            return
+        }
+        guard accessibilityGranted else {
+            finishSessionResumeRefresh(generation: desktopSessionGeneration, succeeded: false)
+            return
+        }
+        sessionResumeDue = nil
+        trayDiscoveryNeeded = false
+        Self.diagnosticLogger.notice("desktopSession resumeRefresh=true generation=\(self.desktopSessionGeneration)")
+        refreshMenuItems(sessionResumeGeneration: desktopSessionGeneration)
+    }
+
+    private func finishSessionResumeRefresh(generation: Int, succeeded: Bool) {
+        guard generation == desktopSessionGeneration, desktopSessionAvailable,
+              started, !stopping, !preparingToTerminate else { return }
+        let shouldApply = hasCompletedSetup && (periodicApplyPendingEnabled ||
+            (startupApplyPendingEnabled && !startupPendingApplicationFinished))
+        if succeeded, shouldApply, automaticPendingApplicationBusy {
+            sessionResumeDue = maintenanceUptime + BackgroundMaintenanceSchedule.interactionInterval
+            return
+        }
+        sessionResumePending = false
+        sessionResumeDue = nil
+        if startupApplyPendingEnabled && !startupPendingApplicationFinished { finishStartupPendingApplication() }
+        schedulePeriodicPendingApplication()
+        if succeeded, shouldApply, trayPlacementSelectionAllowed {
+            Self.diagnosticLogger.notice("desktopSession resumeApply=true generation=\(generation) items=\(self.trayPendingApplicationCount)")
+            applyAutomaticPendingTrayPlacements()
+        }
+        rescheduleMaintenanceTimer()
+    }
+
     private var shouldMonitorAutoCollapse: Bool {
-        autoCollapseEnabled && (isPanelPresented || !isCollapsed) && !isArranging && hasCompletedSetup &&
+        desktopSessionAvailable && autoCollapseEnabled && (isPanelPresented || !isCollapsed) && !isArranging && hasCompletedSetup &&
             !(settingsVisible && !isPanelPresented) && !contextMenuVisible && !panelInteractionBusy &&
             !temporarilyRevealingAll
     }
 
     private func scheduleStartupPendingApplication() {
         if started, !stopping, !preparingToTerminate, !isUIPreview, !demoMode,
-           hasCompletedSetup, startupApplyPendingEnabled, !startupPendingApplicationFinished {
+           desktopSessionAvailable, !sessionResumePending, hasCompletedSetup, startupApplyPendingEnabled, !startupPendingApplicationFinished {
             if startupPendingApplicationDue == nil {
                 startupPendingApplicationDue = maintenanceUptime + 30
             }
@@ -883,6 +1004,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     private func runStartupPendingApplication(at now: TimeInterval) {
+        guard ensureDesktopSessionAvailable() else { return }
         guard let due = startupPendingApplicationDue, now >= due else { return }
         guard startupApplyPendingEnabled, hasCompletedSetup else {
             finishStartupPendingApplication()
@@ -913,11 +1035,12 @@ final class MenuTidyModel: ObservableObject {
             let count = trayPendingApplicationCount
             finishStartupPendingApplication()
             Self.diagnosticLogger.notice("startupPendingApplication started=true items=\(count)")
-            applyPendingTrayPlacements()
+            applyAutomaticPendingTrayPlacements()
         }
     }
 
-    private func finishStartupPendingRefresh(succeeded: Bool) {
+    private func finishStartupPendingRefresh(succeeded: Bool, sessionGeneration: Int) {
+        guard desktopSessionAvailable, sessionGeneration == desktopSessionGeneration else { return }
         guard succeeded, started, !stopping, !preparingToTerminate, startupApplyPendingEnabled else {
             finishStartupPendingApplication()
             return
@@ -930,7 +1053,8 @@ final class MenuTidyModel: ObservableObject {
     private func schedulePeriodicPendingApplication() {
         periodicPendingApplicationGeneration += 1
         periodicPendingApplicationDue = started && !stopping && !preparingToTerminate && !isUIPreview && !demoMode &&
-            hasCompletedSetup && periodicApplyPendingEnabled ? maintenanceUptime + periodicApplyPendingInterval : nil
+            desktopSessionAvailable && !sessionResumePending && hasCompletedSetup && periodicApplyPendingEnabled
+            ? maintenanceUptime + periodicApplyPendingInterval : nil
         rescheduleMaintenanceTimer()
     }
 
@@ -939,6 +1063,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     private func runPeriodicPendingApplication(at now: TimeInterval) {
+        guard ensureDesktopSessionAvailable() else { return }
         guard let due = periodicPendingApplicationDue, now >= due else { return }
         guard periodicApplyPendingEnabled, hasCompletedSetup else { schedulePeriodicPendingApplication(); return }
         if automaticPendingApplicationBusy {
@@ -958,6 +1083,7 @@ final class MenuTidyModel: ObservableObject {
 
     private func finishPeriodicPendingRefresh(generation: Int, succeeded: Bool) {
         guard generation == periodicPendingApplicationGeneration, started, !stopping, !preparingToTerminate,
+              desktopSessionAvailable, !operationInterruptedBySessionChange,
               periodicApplyPendingEnabled, hasCompletedSetup else { return }
         periodicPendingApplicationDue = maintenanceUptime + periodicApplyPendingInterval
         if succeeded {
@@ -965,14 +1091,14 @@ final class MenuTidyModel: ObservableObject {
                 periodicPendingApplicationDue = maintenanceUptime + BackgroundMaintenanceSchedule.interactionInterval
             } else if trayPlacementSelectionAllowed {
                 Self.diagnosticLogger.notice("periodicPendingApplication started=true items=\(self.trayPendingApplicationCount)")
-                applyPendingTrayPlacements()
+                applyAutomaticPendingTrayPlacements()
             }
         }
         rescheduleMaintenanceTimer()
     }
 
     private func rescheduleMaintenanceTimer() {
-        guard started, !stopping, !preparingToTerminate else {
+        guard started, !stopping, !preparingToTerminate, desktopSessionAvailable else {
             timer?.invalidate(); timer = nil; maintenanceFireAt = nil
             testingEnvironment?.maintenanceTimer = nil
             wasMonitoringAutoCollapse = false
@@ -988,16 +1114,17 @@ final class MenuTidyModel: ObservableObject {
             lastAutoCollapseCheck = now
         }
         wasMonitoringAutoCollapse = monitorsAutoCollapse
-        let passiveDue = canSchedulePassiveIconCapture && passiveIconCaptureTask == nil
+        let passiveDue = !sessionResumePending && canSchedulePassiveIconCapture && passiveIconCaptureTask == nil
             ? passiveCaptureSchedule.nextAttemptAt : nil
-        let recoveryDue = needsPositionRevalidation || (trayDiscoveryNeeded && !panelInteractionBusy)
+        let recoveryDue = !sessionResumePending && (needsPositionRevalidation || (trayDiscoveryNeeded && !panelInteractionBusy))
             ? lastRecoveryCheck + BackgroundMaintenanceSchedule.interactionInterval : nil
         guard let delay = BackgroundMaintenanceSchedule.nextDelay(at: now,
-            autoCollapseDue: monitorsAutoCollapse ? lastAutoCollapseCheck + BackgroundMaintenanceSchedule.interactionInterval : nil,
-            permissionDue: settingsVisible || isArranging ? lastPermissionCheck + BackgroundMaintenanceSchedule.permissionInterval : nil,
+            autoCollapseDue: !sessionResumePending && monitorsAutoCollapse ? lastAutoCollapseCheck + BackgroundMaintenanceSchedule.interactionInterval : nil,
+            permissionDue: !sessionResumePending && (settingsVisible || isArranging) ? lastPermissionCheck + BackgroundMaintenanceSchedule.permissionInterval : nil,
             passiveCaptureDue: passiveDue, recoveryDue: recoveryDue,
             startupApplicationDue: startupPendingApplicationDue,
-            periodicApplicationDue: periodicPendingApplicationDue) else {
+            periodicApplicationDue: periodicPendingApplicationDue,
+            sessionResumeDue: sessionResumeDue) else {
             timer?.invalidate(); timer = nil; maintenanceFireAt = nil
             testingEnvironment?.maintenanceTimer = nil
             return
@@ -1020,8 +1147,13 @@ final class MenuTidyModel: ObservableObject {
         timer = nil
         testingEnvironment?.maintenanceTimer = nil
         maintenanceFireAt = nil
-        guard started, !stopping, !preparingToTerminate else { return }
+        guard started, !stopping, !preparingToTerminate, ensureDesktopSessionAvailable() else { return }
         let now = maintenanceUptime
+        if sessionResumePending {
+            runSessionResume(at: now)
+            rescheduleMaintenanceTimer()
+            return
+        }
         if shouldMonitorAutoCollapse && now >= lastAutoCollapseCheck + BackgroundMaintenanceSchedule.interactionInterval {
             lastAutoCollapseCheck = now
             checkAutoCollapse()
@@ -1303,10 +1435,12 @@ final class MenuTidyModel: ObservableObject {
 
     func refreshMenuItems(collapseWhenFinished: Bool = false, prepareOverflow: Bool = false,
                           discover: Bool = true, applyStartupPendingWhenFinished: Bool = false,
-                          periodicPendingGeneration: Int? = nil) {
+                          periodicPendingGeneration: Int? = nil, sessionResumeGeneration: Int? = nil) {
         if isUIPreview { managementMessage = "预览：图标列表已更新，当前选择已保留。"; return }
+        guard ensureDesktopSessionAvailable() else { return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         guard accessibilityGranted else { managementError = "先在权限页开启辅助功能权限，再读取菜单栏图标。"; return }
+        let refreshSessionGeneration = desktopSessionGeneration
         requestPassiveCaptureAfterEvent()
         if prepareOverflow { closeIconPanel() }
         isRefreshing = true
@@ -1331,8 +1465,11 @@ final class MenuTidyModel: ObservableObject {
                    !self.settingsVisible, !self.contextMenuVisible, !self.isPanelPresented {
                     self.collapseIfSafe()
                 }
-                if applyStartupPendingWhenFinished {
-                    self.finishStartupPendingRefresh(succeeded: scanSucceeded && !Task.isCancelled)
+                if let generation = sessionResumeGeneration {
+                    self.finishSessionResumeRefresh(generation: generation, succeeded: scanSucceeded && !Task.isCancelled)
+                } else if applyStartupPendingWhenFinished {
+                    self.finishStartupPendingRefresh(succeeded: scanSucceeded && !Task.isCancelled,
+                        sessionGeneration: refreshSessionGeneration)
                 } else if let generation = periodicPendingGeneration {
                     self.finishPeriodicPendingRefresh(generation: generation, succeeded: scanSucceeded && !Task.isCancelled)
                 } else if scanSucceeded && !Task.isCancelled {
@@ -1851,6 +1988,7 @@ final class MenuTidyModel: ObservableObject {
                         preservePanel: Bool = false, resolveAmbiguousKeyFor resolutionID: String? = nil,
                         requestedGroups: [String: ItemVisibility]? = nil) {
         if isUIPreview { previewApplyPending(retryOnly: false); return }
+        guard ensureDesktopSessionAvailable() else { return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         if !preservePanel { closeIconPanel() }
         panelTask?.cancel()
@@ -1998,7 +2136,10 @@ final class MenuTidyModel: ObservableObject {
                 failureMessage = MenuBarAccessError.cancelled.localizedDescription
             }
 
-            if self.operationCancellationRequested {
+            if self.operationInterruptedBySessionChange {
+                self.managementError = nil
+                self.managementMessage = "桌面暂不可用，本次处理已暂停；解锁后会刷新并补偿，原选择已保留。"
+            } else if self.operationCancellationRequested {
                 self.managementError = nil
                 self.managementMessage = self.positionRecoveryMessage == nil
                     ? "本次应用已停止。已确认的分类保留，其余选择仍待处理。"
@@ -3342,6 +3483,8 @@ final class MenuTidyModel: ObservableObject {
     }
 
     private func scanNow(allowNativeOwnerRecovery: Bool = false, discover: Bool = false) async throws {
+        let sessionGeneration = desktopSessionGeneration
+        try requireDesktopSession(generation: sessionGeneration)
         registerDepartedNativeOwners()
         if allowNativeOwnerRecovery && isRefreshing && !isApplying && !isActivatingPanelItem &&
             !isRecoveringPositions && !isArranging && !preparingToTerminate && !stopping &&
@@ -3375,6 +3518,7 @@ final class MenuTidyModel: ObservableObject {
             throw error
         }
         logOwnAnchors(newSnapshots, scanID: scanID)
+        try requireDesktopSession(generation: sessionGeneration)
         guard !stopping, !Task.isCancelled, scanID == anchorScanSequence else { throw MenuBarAccessError.cancelled }
         // A process can exit while AX scanning is suspended. Retain its
         // recovery intent before reconciliation discards the old evidence.
@@ -3387,6 +3531,17 @@ final class MenuTidyModel: ObservableObject {
         // Those current observations replace the old rows with the same IDs.
         // Also heal duplicates retained from earlier incremental scans. The AX
         // scanner already publishes its current inventory uniquely by ID.
+        let previousActualGroups = actualGroups
+        let previousNativeEvidence = nativeVisibilityEvidence
+        var published = false
+        defer {
+            if !published {
+                snapshots = previousSnapshots
+                snapshotOwnerKeys = previousSnapshotOwnerKeys
+                actualGroups = previousActualGroups
+                nativeVisibilityEvidence = previousNativeEvidence
+            }
+        }
         var publishedIDs = Set(newSnapshots.map(\.id))
         let retainedSnapshots = previousSnapshots.filter { snapshot in
             guard let ownerKey = previousSnapshotOwnerKeys[snapshot.processIdentifier] else { return false }
@@ -3428,6 +3583,8 @@ final class MenuTidyModel: ObservableObject {
             }
             actualGroups = verifiedPositionGroups
         }
+        try requireDesktopSession(generation: sessionGeneration)
+        published = true
         rememberObservedGroups(scannedOwners: scanOwners)
         rebuildRows()
     }
@@ -3728,7 +3885,7 @@ final class MenuTidyModel: ObservableObject {
     private var canSchedulePassiveIconCapture: Bool {
         guard testingEnvironment == nil else { return false }
         if #unavailable(macOS 15.2) { return false }
-        return !demoMode && !stopping && !preparingToTerminate && accessibilityGranted && screenCaptureGranted &&
+        return desktopSessionAvailable && !sessionResumePending && !demoMode && !stopping && !preparingToTerminate && accessibilityGranted && screenCaptureGranted &&
             !isRecoveringPositions && !isRefreshing && !isApplying && !isArranging && !isActivatingPanelItem &&
             !isPanelPresented && !contextMenuVisible && panelActivationTask == nil
     }
@@ -4597,6 +4754,7 @@ final class MenuTidyModel: ObservableObject {
 
     func recoverVisibility() {
         if isUIPreview { return }
+        guard ensureDesktopSessionAvailable(), !sessionResumePending else { return }
         if usesNativeVisibility {
             guard !preparingToTerminate, !stopping else { return }
             statusBar?.restoreControlVisibility()
@@ -4825,6 +4983,10 @@ final class MenuTidyModel: ObservableObject {
         controlRouter.stop()
         stopping = true
         started = false
+        desktopSessionMonitor.stop()
+        desktopSessionGeneration += 1
+        sessionResumeDue = nil
+        sessionResumePending = false
         startupPendingApplicationDue = nil
         periodicPendingApplicationDue = nil
         periodicPendingApplicationGeneration += 1
@@ -5057,6 +5219,7 @@ private extension MenuTidyModel {
     }
 
     func reconcileNativeVisibilityEvidence() async {
+        let sessionGeneration = desktopSessionGeneration
         var confirmed: [String: NativeVisibilityEvidence] = [:]
         for (id, evidence) in nativeVisibilityEvidence {
             guard self.ownerIsCurrent(evidence.identity),
@@ -5077,6 +5240,7 @@ private extension MenuTidyModel {
         }
         // Positive-only checks above can suspend. Catch a departure during
         // those reads before replacing the last evidence for that owner epoch.
+        guard ensureDesktopSessionAvailable(), sessionGeneration == desktopSessionGeneration else { return }
         registerDepartedNativeOwners()
         scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
         nativeVisibilityEvidence = confirmed
@@ -5186,6 +5350,7 @@ private extension MenuTidyModel {
                           self.ownerIsCurrent(identity) else {
                         throw MenuTidyManagementError.positionApplication("尚未确认此图标当前可见，未改变系统设置。")
                     }
+                    try checkOperationDeadline()
                     confirmNativeRule(rule, identity: identity, target: nil)
                     continue
                 }
@@ -5275,6 +5440,7 @@ private extension MenuTidyModel {
                         try await waitForNativeVisibility(id: item.id, target: job.target,
                             identity: observed, visible: job.rule.visibility == .visible)
                     }
+                    try checkOperationDeadline()
                     guard job.identities.allSatisfy({ self.ownerIsCurrent($0.1) }) else { throw MenuBarAccessError.disappeared }
                     for (item, observed) in job.identities {
                         confirmNativeRule(ItemRule(id: item.id, name: item.name, bundleIdentifier: item.bundleIdentifier,
@@ -5336,6 +5502,7 @@ private extension MenuTidyModel {
     }
 
     func recordNativeApplicationFailure(_ error: Error, ids: Set<String>) {
+        guard ensureDesktopSessionAvailable(), !operationInterruptedBySessionChange else { return }
         for id in ids {
             nativeVisibilityEvidence.removeValue(forKey: id)
             actualGroups.removeValue(forKey: id)
@@ -5403,7 +5570,7 @@ private extension MenuTidyModel {
         var consecutive = 0
         var refreshed = false
         while ProcessInfo.processInfo.systemUptime < deadline {
-            try Task.checkCancellation()
+            try checkOperationDeadline()
             guard !stopping, (testingEnvironment != nil || AXIsProcessTrusted()), self.ownerIsCurrent(identity),
                   snapshots.first(where: { $0.id == id }).flatMap(observedItemIdentity) == identity else {
                 throw MenuBarAccessError.disappeared
@@ -5420,6 +5587,7 @@ private extension MenuTidyModel {
                 case .system(let key): observed = await access.inspectNativeSystemVisibility(id: id, key: key)
                 }
             }
+            try checkOperationDeadline()
             let agrees = allowed == visible && observed == visible
             consecutive = agrees ? consecutive + 1 : 0
             if consecutive >= 2 { return }

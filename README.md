@@ -33,7 +33,7 @@ macOS 没有一个面向第三方应用的公开菜单栏统一管理 API。Menu
 - **可选原始图像**：在获得屏幕录制权限后采集已确认的小区域图像；采集失败时使用应用图标回退。
 - **自动收起与登录启动**：均可在设置中开启，默认关闭。
 - **启动后补偿应用**：默认在 Menu Tidy 启动约 30 秒后刷新图标，并自动执行一次“应用全部待处理”；忙碌时顺延，失败项保留供手动重试，可在设置中关闭。
-- **后台周期补偿**：默认每 5 分钟刷新并应用待处理项，可关闭或改为 1、15、30 分钟；与启动补偿共用已有维护计时器。原生普通应用在批量场景中合并显示开关写入，仍分别核验结果。范围及回归见[周期补偿与批量应用](docs/PERIODIC-BATCH-20261015.md)。
+- **后台周期补偿**：默认每 5 分钟刷新并应用待处理项，可关闭或改为 1、15、30 分钟；锁屏或会话不可用时暂停，解锁后先刷新再补偿，并重新计算完整周期；与启动补偿共用已有维护计时器。原生普通应用在批量场景中合并显示开关写入，仍分别核验结果。范围及回归见[周期补偿与批量应用](docs/PERIODIC-BATCH-20261015.md)。
 - **应用内更新**：使用 Sparkle 检查对应架构和更新通道；更新会等待当前整理或恢复操作结束。
 
 ### 三种显示方式
@@ -153,6 +153,6 @@ cd menu-tidy
 
 ## 版本与许可证
 
-当前源码版本为 **0.6.13（构建 69）**。版本变更见 [CHANGELOG.md](CHANGELOG.md)，公开可安装版本以 [GitHub Releases](https://github.com/cyruss648/menu-tidy/releases) 为准。本轮后台定时补偿与批量处理见[周期补偿与批量应用](docs/PERIODIC-BATCH-20261015.md)。Atoll 原生隐藏与重复草稿的修复及实机验证见[Atoll 验证记录](docs/ATOLL-NATIVE-HIDING-20261015.md)；此前 Clash 与实时活动的显示去重见[显示条目去重记录](docs/ITEM-PRESENTATION-20261014.md)。
+当前源码版本为 **0.6.14（构建 70）**。版本变更见 [CHANGELOG.md](CHANGELOG.md)，公开可安装版本以 [GitHub Releases](https://github.com/cyruss648/menu-tidy/releases) 为准。本轮锁屏暂停与解锁补偿见[锁屏补偿验证](docs/SESSION-RECONCILIATION-20261015.md)，后台定时补偿与批量处理见[周期补偿与批量应用](docs/PERIODIC-BATCH-20261015.md)。Atoll 原生隐藏与重复草稿的修复及实机验证见[Atoll 验证记录](docs/ATOLL-NATIVE-HIDING-20261015.md)；此前 Clash 与实时活动的显示去重见[显示条目去重记录](docs/ITEM-PRESENTATION-20261014.md)。
 
 本项目采用 **MIT OR Apache-2.0** 双许可证，可自行选择其中一种许可证使用。许可声明见 [LICENSE](LICENSE)，完整条款见 [MIT License](LICENSE-MIT) 和 [Apache License 2.0](LICENSE-APACHE)。第三方组件保留各自的许可证与版权声明。

@@ -1213,7 +1213,7 @@ struct SettingsView: View {
                     .labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
             Divider()
-            preferenceRow(title: "后台自动应用待处理", subtitle: "定时刷新并应用未完成的选择；忙碌或托盘打开时顺延，失败项下个周期再试。") {
+            preferenceRow(title: "后台自动应用待处理", subtitle: "定时刷新并应用未完成的选择；锁屏时暂停，解锁后刷新并补偿。忙碌或托盘打开时顺延，失败项下个周期再试。") {
                 HStack(spacing: 10) {
                     if model.periodicApplyPendingEnabled {
                         Picker("自动应用间隔", selection: $model.periodicApplyPendingInterval) {
