@@ -6,23 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.6.11</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.11</link>
-      <pubDate>Wed, 14 Oct 2026 11:42:27 +0000</pubDate>
-      <sparkle:version>67</sparkle:version>
-      <sparkle:shortVersionString>0.6.11</sparkle:shortVersionString>
+      <title>Menu Tidy 0.6.12</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.12</link>
+      <pubDate>Thu, 15 Oct 2026 02:22:21 +0000</pubDate>
+      <sparkle:version>68</sparkle:version>
+      <sparkle:shortVersionString>0.6.12</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="plain-text">## [0.6.11] - 2026-10-14
+      <description sparkle:format="plain-text">## [0.6.12] - 2026-10-15
 
-修复更新后 Clash Verge 和实时活动仍出现两条相同设置的问题。正式版构建号为 67，保留现有分类、规则和草稿。
+修复 Atoll 原生隐藏失败，以及只显示一个应用却提示两条待处理的问题。正式版构建号为 68，保留现有分类；同分类的旧来源草稿只在当前应用全部真实图标确认成功后消除。
 
-- 常规应用按实际共用的显示开关合并为一行设置、一个托盘入口；系统菜单栏按完整模块标识合并展示，实时活动、Wi‑Fi、声音等仍分别显示。
-- 设置列表、搜索结果、计数和托盘采用稳定的展示标识，原始 AX 节点继续独立保留和验证，显示去重不会扩大系统图标的隐藏权限。
-- 修复 Clash 分类过程中宿主投影消失或节点换号造成的“图标已退出”误报；同一应用和进程生命周期内重新核验当前节点，全部确认后才清理本次请求的过期草稿。进程重启或归属变化时保留未确认选择并停止该次处理。
-- 增加 4 项核心身份测试及 9 项应用集成回归，覆盖多来源展示、连续换号、旧分类冲突、失败提示、节点数量变化、完整节点替换和进程重启保护。
+- 扫描系统菜单栏宿主时，排除归属已确认的普通远程应用窗口及其子节点，避免将 Atoll 刘海窗口中的计时器误认成菜单栏图标。隐藏记录的延续也不再重新引入已确认属于这些窗口的节点。
+- 原生路径的待处理、应用全部、重试及可操作计数按设置页的应用或系统模块计数；底层来源仍逐项保留、执行和验证。
+- 当前应用全部真实来源的身份、进程生命周期、分类和原生可见性均确认后，消费相同应用、相同分类的旧稳定来源及会话草稿。失败、缺少证据、不同旧分类或其他应用的记录继续保留。
+- 增加 8 项核心和 3 项应用集成回归，并补充多来源失败计数断言，覆盖刘海窗口排除、合法宿主图标保留、未知读取、失败草稿保护、旧会话迁移和重启。
 
-验证：本地完整检查通过 496 项核心 Swift 测试、50 项应用集成测试和 96 项 Python 回归，warnings-as-errors 构建通过。在 macOS 27.0.1 Apple Silicon 上，签名候选包的真实 Clash 与实时活动列表首次打开、三轮刷新、关闭重开和完整重启均各显示一条；Clash 隐藏、单一托盘入口与恢复常驻通过，原规则和草稿保留。详细范围及观察到的系统展开状态见[显示条目去重记录](https://github.com/cyruss648/menu-tidy/blob/v0.6.11/docs/ITEM-PRESENTATION-20261014.md)。实时活动原生隐藏、Intel 桌面交互、旧版 macOS 和所有第三方应用仍需独立验证；沿用项目自签名发行身份，未经 Apple 公证。
+验证：完整检查通过 504 项核心 Swift 测试、53 项应用集成测试和 96 项 Python 回归，warnings-as-errors 构建通过。提交前在 macOS 27.0.1 Apple Silicon 上验证已签名候选包：真实 Atoll 的原生显示、隐藏、单一托盘入口、三轮刷新、窗口重开及完整重启均通过；重新放回最初保存的两条草稿后，启动确认成功自动消除，最终持久化草稿为 0，原分类保留，Atoll 刘海窗口仍正常。详细范围见[Atoll 验证记录](https://github.com/cyruss648/menu-tidy/blob/v0.6.12/docs/ATOLL-NATIVE-HIDING-20261015.md)。Intel 桌面、旧版 macOS 和其他第三方悬浮窗口需独立验收；沿用项目自签名发行身份，未经 Apple 公证。
 
 ### 软件内更新与首次安装
 
@@ -34,8 +34,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.6.11-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.6.11-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.6.12-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.6.12-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -58,12 +58,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.11/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.11/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.11/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.12/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.12/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.12/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.11/Menu-Tidy-0.6.11-macos-arm64.zip" length="3792785" type="application/octet-stream" sparkle:edSignature="qxtqY2j3j0Xp2IQRs+XLEFOV1N0dqWuj/gdh2BeCRhf8ZvdJKdBGa6al5QLSdKVFVern2ruMs20ccnzearHGDw=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.12/Menu-Tidy-0.6.12-macos-arm64.zip" length="3795140" type="application/octet-stream" sparkle:edSignature="cf7WGZEvYTaSAJK7j2f40sTubCFhNNuEbkGfkYCHBoAhZmmF19p0rQPxm3rG33eAI0rM6Yy2Jn8hmaFO+PbUDA=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 8djVJAOsJyrR1iLAR6emdUZYGFZHwb30tkyhn3aroPEFDhMHrqK9mdLtwVZRK3zVBjXyGKhyluEJkW1XOV4yBg==
-length: 6715
+edSignature: dhuXpd7vVqglMmV7kM7yRooZ3xQBvSCVAHg5TeqHsAryj6kDFzgfTA4Jq8O13dNK9gRnlTLcRxX1DikUCd22CA==
+length: 6825
 -->
