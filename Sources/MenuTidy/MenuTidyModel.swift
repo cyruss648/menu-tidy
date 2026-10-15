@@ -400,12 +400,19 @@ final class MenuTidyModel: ObservableObject {
     }
 
     var trayPendingApplicationCount: Int {
-        TrayPlacementPolicy.candidates(trayPlacementCandidates, for: .applyPending).count
+        trayPlacementPresentationCount(TrayPlacementPolicy.candidates(trayPlacementCandidates, for: .applyPending))
     }
     var trayRetryCount: Int {
-        TrayPlacementPolicy.candidates(trayPlacementCandidates, for: .retryFailed).count
+        trayPlacementPresentationCount(TrayPlacementPolicy.candidates(trayPlacementCandidates, for: .retryFailed))
     }
-    var trayPlacementOutstandingCount: Int { trayPlacementCandidates.filter(\.isOutstanding).count }
+    var trayPlacementOutstandingCount: Int {
+        trayPlacementPresentationCount(trayPlacementCandidates.filter(\.isOutstanding))
+    }
+
+    private func trayPlacementPresentationCount(_ candidates: [TrayPlacementPolicy.Candidate]) -> Int {
+        guard usesNativeVisibility, !isArranging else { return candidates.count }
+        return Set(candidates.map { itemsByID[$0.id]?.presentationID ?? $0.id }).count
+    }
 
     func applyPendingTrayPlacements() {
         if isUIPreview { previewApplyPending(retryOnly: false); return }
@@ -547,6 +554,9 @@ final class MenuTidyModel: ObservableObject {
                         self.itemApplicationIssues.removeValue(forKey: confirmedRow.id)
                     }
                     self.persistDrafts()
+                    if self.usesNativeVisibility, let bundle = row.bundleIdentifier {
+                        self.consumeConfirmedNativeApplicationDrafts(bundle: bundle, group: request.group)
+                    }
                     _ = self.trayPlacementQueue.finish(token: request.token)
                     self.rebuildRows()
                     continue
@@ -3518,7 +3528,9 @@ final class MenuTidyModel: ObservableObject {
         if items.count != nextItems.count || !zip(items, nextItems).allSatisfy({ $0.hasSamePresentation(as: $1) }) {
             items = nextItems
         }
-        let nextPendingCount = items.filter { $0.isPending && $0.isAvailable && $0.canMove }.count
+        let pendingRows = items.filter { $0.isPending && $0.isAvailable && $0.canMove }
+        let nextPendingCount = usesNativeVisibility && !isArranging
+            ? Set(pendingRows.map(\.presentationID)).count : pendingRows.count
         if actionablePendingCount != nextPendingCount { actionablePendingCount = nextPendingCount }
         let nextHasPendingChanges = nextPendingCount > 0 || !offlineDrafts.isEmpty
         if hasPendingChanges != nextHasPendingChanges { hasPendingChanges = nextHasPendingChanges }
@@ -5015,24 +5027,21 @@ private extension MenuTidyModel {
         // Native application intent owns a bundle, not one transient AX node.
         // Pin its owner epochs before refreshing, then validate all fresh nodes
         // independently. A restart or an additional owner cannot inherit it.
-        var applicationScopes: [String: (group: ItemVisibility, owners: Set<ScanOwnerKey>, drafts: Set<UUID>)] = [:]
+        var applicationScopes: [String: (group: ItemVisibility, owners: Set<ScanOwnerKey>)] = [:]
         let byBundle = Dictionary(grouping: originalRules, by: \.bundleIdentifier)
         for (bundle, scopedRules) in byBundle {
             guard let bundle, NativeTrayChoices.accepts(bundle: bundle, excluding: []),
                   let group = nativeTrayChoices.group(bundle: bundle),
                   scopedRules.allSatisfy({ $0.visibility == group }) else { continue }
             var owners: Set<ScanOwnerKey> = []
-            var ownedDrafts: Set<UUID> = []
             for rule in scopedRules {
                 guard let source = snapshots.first(where: { $0.id == rule.id }),
                       let identity = observedItemIdentity(source), self.ownerIsCurrent(identity) else {
                     throw MenuBarAccessError.disappeared
                 }
                 owners.insert(ScanOwnerKey(identity))
-                if let record = pendingDrafts.record(for: rule.id, sessionIdentity: identity),
-                   record.rule.bundleIdentifier == bundle, record.rule.visibility == group { ownedDrafts.insert(record.id) }
             }
-            applicationScopes[bundle] = (group, owners, ownedDrafts)
+            applicationScopes[bundle] = (group, owners)
         }
         var appConflicts: Set<String> = []
         var systemConflicts: Set<String> = []
@@ -5196,23 +5205,35 @@ private extension MenuTidyModel {
                 if Task.isCancelled || positionRecoveryMessage != nil { throw error }
             }
         }
-        // Consume only drafts bound to this request's old source epochs, and
-        // only after all current sources confirm the same still-current choice.
-        // Unassociated drafts from previous launches remain untouched.
+        // Bundle intent outlives individual AX sources. Only complete positive
+        // confirmation may consume matching old source drafts; different old
+        // categories and another application's records remain untouched.
         for (bundle, scope) in applicationScopes {
             let current = snapshots.filter { $0.canMove && $0.ownIdentifier == nil && $0.bundleIdentifier == bundle }
             guard nativeTrayChoices.group(bundle: bundle) == scope.group, !current.isEmpty,
                   current.allSatisfy({ actualGroups[$0.id] == scope.group &&
                       rules.rule(for: $0.id)?.visibility == scope.group }),
                   Set(current.compactMap(observedItemIdentity).map(ScanOwnerKey.init)) == scope.owners else { continue }
-            let obsoleteDrafts = Set(pendingDrafts.records.filter {
-                scope.drafts.contains($0.id) && $0.rule.bundleIdentifier == bundle && $0.rule.visibility == scope.group
-            }.map(\.id))
-            if !obsoleteDrafts.isEmpty { pendingDrafts.remove(ids: obsoleteDrafts); persistDrafts() }
+            consumeConfirmedNativeApplicationDrafts(bundle: bundle, group: scope.group)
         }
         hasCompletedSetup = true
         defaults.set(true, forKey: "hasCompletedSetup")
         return true
+    }
+
+    private func consumeConfirmedNativeApplicationDrafts(bundle: String, group: ItemVisibility) {
+        guard usesNativeVisibility, nativeTrayChoices.group(bundle: bundle) == group else { return }
+        let current = snapshots.filter { $0.canMove && $0.ownIdentifier == nil && $0.bundleIdentifier == bundle }
+        guard !current.isEmpty, current.allSatisfy({ source in
+            guard let identity = observedItemIdentity(source), ownerIsCurrent(identity),
+                  let evidence = nativeVisibilityEvidence[source.id], evidence.identity == identity,
+                  evidence.group == group, actualGroups[source.id] == group,
+                  rules.rule(for: source.id)?.visibility == group else { return false }
+            return evidence.target == .application(bundle: bundle) || (group == .visible && evidence.target == nil)
+        }) else { return }
+        if pendingDrafts.removeConfirmedNativeApplication(bundle: bundle, group: group, nativeChoices: nativeTrayChoices) > 0 {
+            persistDrafts()
+        }
     }
 
     func confirmNativeRule(_ rule: ItemRule, identity: ObservedItemGroupHistory.Identity, target: NativeVisibilityTarget?) {

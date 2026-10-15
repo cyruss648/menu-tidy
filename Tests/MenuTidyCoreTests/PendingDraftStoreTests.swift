@@ -3,6 +3,42 @@ import XCTest
 @testable import MenuTidyCore
 
 final class PendingDraftStoreTests: XCTestCase {
+    func testCompleteNativeApplicationConfirmationReplacesMatchingOldSourceDraftsOnly() throws {
+        let widget = rule("item:former-window")
+        let session = rule("session:previous-run")
+        let differentGroup = rule("session:older-different-choice", .alwaysHidden)
+        let other = ItemRule(id: "item:other-app", name: "Same display name",
+            bundleIdentifier: "example.appHelper", visibility: .collapsible)
+        var store = try PendingDraftStore(unassociatedRules: [widget, session, differentGroup, other])
+        let retained = store.records.filter { $0.rule == differentGroup || $0.rule == other }
+        XCTAssertEqual(store.removeConfirmedNativeApplication(bundle: "example.app", group: .collapsible,
+            nativeChoices: NativeTrayChoices(existing: ["example.app": .collapsible])), 2)
+        XCTAssertEqual(store.records, retained)
+        XCTAssertEqual(try roundTrip(store).records, retained)
+    }
+
+    func testNativeApplicationCleanupRequiresTheSameDurableIntent() throws {
+        var store = try PendingDraftStore(unassociatedRules: [rule("session:unassociated")])
+        let original = store.records
+        for choices in [NativeTrayChoices(), NativeTrayChoices(existing: ["example.app": .visible])] {
+            XCTAssertEqual(store.removeConfirmedNativeApplication(bundle: "example.app", group: .collapsible,
+                nativeChoices: choices), 0)
+            XCTAssertEqual(store.records, original)
+        }
+    }
+
+    func testNativeApplicationConfirmationRemovesACompatibleVerifiedSessionBackup() throws {
+        var store = PendingDraftStore()
+        let applied = rule("session:verified-before-native")
+        try store.set(applied, sessionIdentity: identity(applied.id))
+        store.removeVerified(applied, sessionIdentity: identity(applied.id))
+        XCTAssertEqual(try roundTrip(store).records.count, 1)
+        XCTAssertEqual(store.removeConfirmedNativeApplication(bundle: "example.app", group: .collapsible,
+            nativeChoices: NativeTrayChoices(existing: ["example.app": .collapsible])), 1)
+        store.retainSessionBindings { _ in false }
+        XCTAssertTrue(try roundTrip(store).records.isEmpty)
+    }
+
     func testForgetApplicationRemovesUnassociatedEditsAndVerifiedBaselinesButPreservesOthers() throws {
         let owner = identity("session:verified")
         var store = try PendingDraftStore(unassociatedRules: [rule("session:offline", .alwaysHidden)])

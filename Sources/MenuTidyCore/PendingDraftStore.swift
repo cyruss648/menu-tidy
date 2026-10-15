@@ -184,6 +184,26 @@ public struct PendingDraftStore: Codable, Sendable {
         }
     }
 
+    /// The caller must first confirm every current canonical source of this
+    /// native application. Durable bundle intent then replaces matching old
+    /// source drafts, including offline session IDs and former false sources.
+    /// A different category remains separate intent and is never consumed here.
+    @discardableResult
+    public mutating func removeConfirmedNativeApplication(bundle: String, group: ItemVisibility,
+                                                         nativeChoices: NativeTrayChoices) -> Int {
+        guard NativeTrayChoices.accepts(bundle: bundle, excluding: []),
+              nativeChoices.group(bundle: bundle) == group else { return 0 }
+        let ids = Set(savedRecords.filter {
+            $0.rule.bundleIdentifier == bundle && $0.rule.visibility == group
+        }.map(\.id))
+        records.removeAll { ids.contains($0.id) }
+        for id in ids {
+            verifiedSessionChoices.removeValue(forKey: id)
+            sessionBindings.removeValue(forKey: id)
+        }
+        return ids.count
+    }
+
     public mutating func retainSessionBindings(where isCurrent: (ObservedItemGroupHistory.Identity) -> Bool) {
         sessionBindings = sessionBindings.filter { isCurrent($0.value) }
         for record in verifiedSessionChoices.values.sorted(by: { $0.id.uuidString < $1.id.uuidString })

@@ -333,6 +333,7 @@ actor MenuBarAccessibility {
     private var entries: [String: Entry] = [:]
     private var scanReadBudget: AccessibilityScanBudget?
     private var scanApplicationMenuBarRoots: [pid_t: AXUIElement] = [:]
+    private var scanRemoteWindowRoots: [pid_t: [AXUIElement]] = [:]
     private var scanApplicationMenuBarQueries: Set<pid_t> = []
     private var scanCanContinue: Bool {
         scanReadBudget?.canPublish(at: ProcessInfo.processInfo.systemUptime, cancelled: Task.isCancelled) ?? true
@@ -399,12 +400,14 @@ actor MenuBarAccessibility {
         scanReadBudget = AccessibilityScanBudget(startedAt: ProcessInfo.processInfo.systemUptime)
         let scanStartedAt = ProcessInfo.processInfo.systemUptime
         scanApplicationMenuBarRoots.removeAll(keepingCapacity: true)
+        scanRemoteWindowRoots.removeAll(keepingCapacity: true)
         scanApplicationMenuBarQueries.removeAll(keepingCapacity: true)
         let previousContinuity = systemModuleContinuity
         var published = false
         defer {
             scanReadBudget = nil
             scanApplicationMenuBarRoots.removeAll(keepingCapacity: true)
+            scanRemoteWindowRoots.removeAll(keepingCapacity: true)
             scanApplicationMenuBarQueries.removeAll(keepingCapacity: true)
             if !published { systemModuleContinuity = previousContinuity }
         }
@@ -637,7 +640,7 @@ actor MenuBarAccessibility {
                   ownersByPID[old.owner.pid]?.launchTime == old.owner.launchTime,
                   ownersByPID[old.owner.pid]?.bundleIdentifier == old.owner.bundleIdentifier else { continue }
             // Keep non-Sendable AX entries within this actor, including on Swift 6.2.
-            if belongsToScannedApplicationMenu(old) { continue }
+            if belongsToScannedNonStatusSubtree(old) { continue }
             var alreadyEnumerated = false
             for current in updated.values {
                 if CFEqual(current.element, old.element) {
@@ -4752,6 +4755,19 @@ actor MenuBarAccessibility {
         }
         remaining -= 1
         let role = attribute(node, kAXRoleAttribute) as? String ?? ""
+        if source == .hostWindow {
+            var nodePID: pid_t = 0
+            let pidRead = AXUIElementGetPid(node, &nodePID)
+            if pidRead == .success, ownersByPID[nodePID] != nil,
+               MenuBarScanWindowPolicy.excludesRemoteWindow(role: role, depth: depth,
+                    nodePID: nodePID, hostPID: enumerationRootPID) {
+                if !(scanRemoteWindowRoots[nodePID] ?? []).contains(where: { CFEqual($0, node) }) {
+                    scanRemoteWindowRoots[nodePID, default: []].append(node)
+                }
+                Self.logger.notice("scanRemoteWindow excluded=true role=\(role, privacy: .public) ownerPID=\(nodePID) hostPID=\(enumerationRootPID) depth=\(depth)")
+                return
+            }
+        }
         // A MenuBarAgent window can expose an application's ordinary menu bar
         // alongside its status items. Both contain AXMenuBarItem leaves inside
         // the screen's menu band. Stop only the canonical AXMenuBar subtree;
@@ -4856,16 +4872,18 @@ actor MenuBarAccessibility {
         return CFEqual(root, node)
     }
 
-    /// Do not let the hidden-item continuity fallback resurrect an ordinary
-    /// menu leaf that a prior scan accepted. Only a current exact root lineage
-    /// excludes it; unreadable parents do not invalidate real hidden items.
-    private func belongsToScannedApplicationMenu(_ entry: Entry) -> Bool {
-        guard let root = scanApplicationMenuBarRoots[entry.owner.pid] else { return false }
+    /// Do not resurrect a menu leaf or floating-window child accepted by a
+    /// prior scan. Only exact current root lineage excludes it; unreadable
+    /// parents do not invalidate real hidden items.
+    private func belongsToScannedNonStatusSubtree(_ entry: Entry) -> Bool {
+        var roots = scanRemoteWindowRoots[entry.owner.pid] ?? []
+        if let menu = scanApplicationMenuBarRoots[entry.owner.pid] { roots.append(menu) }
+        guard !roots.isEmpty else { return false }
         var node: AXUIElement? = entry.element
         var visited: [AXUIElement] = []
         for _ in 0..<7 {
             guard let current = node, !visited.contains(where: { CFEqual($0, current) }) else { return false }
-            if CFEqual(current, root) { return true }
+            if roots.contains(where: { CFEqual(current, $0) }) { return true }
             visited.append(current)
             node = element(attribute(current, kAXParentAttribute))
         }

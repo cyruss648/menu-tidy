@@ -77,6 +77,10 @@ final class ItemPresentationIntegrationTests: XCTestCase {
         XCTAssertTrue(row.isPending)
         XCTAssertNotNil(fixture.model.trayPlacementFailure(id: row.id))
         XCTAssertEqual(Set(row.underlyingIDs), ["session:a", "session:b"])
+        XCTAssertEqual(fixture.model.trayPlacementOutstandingCount, 1)
+        XCTAssertEqual(fixture.model.trayPendingApplicationCount, 1)
+        XCTAssertEqual(fixture.model.trayRetryCount, 1)
+        XCTAssertEqual(fixture.model.actionablePendingCount, 1)
     }
 
     @MainActor

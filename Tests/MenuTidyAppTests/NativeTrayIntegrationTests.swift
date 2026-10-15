@@ -37,6 +37,89 @@ final class NativeTrayIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testCanonicalNativeConfirmationConsumesFormerNotchAndOldSessionDrafts() async throws {
+        let suite = "dev.hdh.MenuTidy.tests.native-old-sources.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "hasCompletedSetup")
+        defaults.set(false, forKey: "startupApplyPending")
+        defaults.set(try JSONEncoder().encode(NativeTrayChoices(existing: [bundle: .collapsible])), forKey: "nativeTrayChoices.v1")
+        let old = [rule("item:AtollNotch", .collapsible, name: "Timer window"),
+            rule("session:previous-run", .collapsible, name: "Status item")]
+        defaults.set(try JSONEncoder().encode(PendingDraftStore(unassociatedRules: old)), forKey: "itemDrafts.v1")
+        let system = environment([rule("session:canonical-status", .visible)])
+        let model = MenuTidyModel(testing: system, defaults: defaults)
+        defer { model.stop() }
+        XCTAssertEqual(model.trayPlacementOutstandingCount, 1)
+        model.refreshMenuItems()
+        await model.waitForTestingOperations()
+        XCTAssertEqual(system.hiddenBundles, [bundle])
+        XCTAssertEqual(model.managementItems.count, 1)
+        XCTAssertEqual(model.panelItems.count, 1)
+        XCTAssertEqual(model.trayPlacementOutstandingCount, 0)
+        XCTAssertEqual(model.trayRetryCount, 0)
+        XCTAssertTrue(model.offlineDrafts.isEmpty)
+        let persisted = try JSONDecoder().decode(PendingDraftStore.self,
+            from: XCTUnwrap(defaults.data(forKey: "itemDrafts.v1")))
+        XCTAssertTrue(persisted.records.isEmpty)
+        model.stop()
+        let relaunched = MenuTidyModel(testing: environment([rule("session:new-canonical-status", .visible)]), defaults: defaults)
+        defer { relaunched.stop() }
+        relaunched.refreshMenuItems()
+        await relaunched.waitForTestingOperations()
+        XCTAssertEqual(relaunched.trayPlacementOutstandingCount, 0)
+        XCTAssertTrue(relaunched.offlineDrafts.isEmpty)
+    }
+
+    @MainActor
+    func testFailedCanonicalNativeConfirmationPreservesBothOriginalDraftReceipts() async throws {
+        let suite = "dev.hdh.MenuTidy.tests.native-failure-receipts.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "hasCompletedSetup")
+        defaults.set(false, forKey: "startupApplyPending")
+        defaults.set(try JSONEncoder().encode(NativeTrayChoices(existing: [bundle: .collapsible])), forKey: "nativeTrayChoices.v1")
+        let original = try PendingDraftStore(unassociatedRules: [rule("item:AtollNotch", .collapsible), rule("session:old", .collapsible)])
+        defaults.set(try JSONEncoder().encode(original), forKey: "itemDrafts.v1")
+        let system = environment([rule("session:canonical-status", .visible)])
+        system.beforeVisibilityRead = { throw MenuBarAccessError.rejected }
+        let model = MenuTidyModel(testing: system, defaults: defaults)
+        defer { model.stop() }
+        model.refreshMenuItems()
+        await model.waitForTestingOperations()
+        XCTAssertEqual(model.trayPlacementOutstandingCount, 1)
+        XCTAssertEqual(model.trayRetryCount, 1)
+        let persisted = try JSONDecoder().decode(PendingDraftStore.self,
+            from: XCTUnwrap(defaults.data(forKey: "itemDrafts.v1")))
+        XCTAssertEqual(persisted.records, original.records)
+        XCTAssertEqual(try choices(defaults).group(bundle: bundle), .collapsible)
+        XCTAssertEqual(system.allowed[bundle], true, "A failed write restores visibility before retaining the failure")
+    }
+
+    @MainActor
+    func testNativeApplicationConfirmationPreservesOtherCategoriesAndOtherApplications() async throws {
+        let suite = "dev.hdh.MenuTidy.tests.native-mixed-drafts.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "hasCompletedSetup")
+        defaults.set(false, forKey: "startupApplyPending")
+        defaults.set(try JSONEncoder().encode(NativeTrayChoices(existing: [bundle: .collapsible])), forKey: "nativeTrayChoices.v1")
+        let matching = rule("item:former-window", .collapsible)
+        let different = rule("session:old-different-choice", .alwaysHidden)
+        let other = ItemRule(id: "session:other-app", name: "Fixture", bundleIdentifier: bundle + ".helper", visibility: .collapsible)
+        let original = try PendingDraftStore(unassociatedRules: [matching, different, other])
+        defaults.set(try JSONEncoder().encode(original), forKey: "itemDrafts.v1")
+        let model = MenuTidyModel(testing: environment([rule("session:canonical-status", .visible)]), defaults: defaults)
+        defer { model.stop() }
+        model.refreshMenuItems()
+        await model.waitForTestingOperations()
+        let persisted = try JSONDecoder().decode(PendingDraftStore.self,
+            from: XCTUnwrap(defaults.data(forKey: "itemDrafts.v1")))
+        XCTAssertEqual(persisted.records, original.records.filter { $0.rule != matching })
+        XCTAssertEqual(model.trayPlacementOutstandingCount, 0)
+    }
+
+    @MainActor
     func testAutomaticReconnectPreservesEveryConflictingLegacyCategoryInEitherOrder() async throws {
         for groups: [ItemVisibility] in [[.visible, .alwaysHidden], [.alwaysHidden, .visible],
                                          [.collapsible, .alwaysHidden], [.alwaysHidden, .collapsible]] {

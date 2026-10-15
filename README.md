@@ -152,6 +152,6 @@ cd menu-tidy
 
 ## 版本与许可证
 
-当前源码版本为 **0.6.11（构建 67）**。版本变更见 [CHANGELOG.md](CHANGELOG.md)，公开可安装版本以 [GitHub Releases](https://github.com/cyruss648/menu-tidy/releases) 为准。Clash 与实时活动重复条目的修复及实机验证见[显示条目去重记录](docs/ITEM-PRESENTATION-20261014.md)。
+当前源码版本为 **0.6.12（构建 68）**。版本变更见 [CHANGELOG.md](CHANGELOG.md)，公开可安装版本以 [GitHub Releases](https://github.com/cyruss648/menu-tidy/releases) 为准。Atoll 原生隐藏与重复草稿的修复及实机验证见[Atoll 验证记录](docs/ATOLL-NATIVE-HIDING-20261015.md)；此前 Clash 与实时活动的显示去重见[显示条目去重记录](docs/ITEM-PRESENTATION-20261014.md)。
 
 本项目采用 **MIT OR Apache-2.0** 双许可证，可自行选择其中一种许可证使用。许可声明见 [LICENSE](LICENSE)，完整条款见 [MIT License](LICENSE-MIT) 和 [Apache License 2.0](LICENSE-APACHE)。第三方组件保留各自的许可证与版权声明。
