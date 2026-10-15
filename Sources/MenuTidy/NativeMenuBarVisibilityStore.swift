@@ -1,15 +1,18 @@
 import Darwin
 import Foundation
 import MenuTidyCore
+import OSLog
 
 /// Serial ownership of exact third-party visibility records. This store does
 /// not use assessment mode, change positions, or prove that pixels disappeared.
 @MainActor
 final class NativeMenuBarVisibilityStore {
+    private static let logger = Logger(subsystem: "dev.hdh.MenuTidy", category: "NativeVisibility")
     private typealias Codec = NativeMenuBarVisibilityCodec
     private typealias Ledger = NativeMenuBarVisibilityLedger
     private let access: NativeMenuBarVisibilityAccess
     private let journal = NativeVisibilityJournalFile()
+    private let testingIO: NativeVisibilityStoreTestIO?
     private var entries: [String: Ledger.Entry] = [:]
     // Retain this knowledge if journal cancellation itself hits a transient I/O
     // failure, so same-process reload cannot adopt another writer's value.
@@ -21,16 +24,28 @@ final class NativeMenuBarVisibilityStore {
     var revealedBundles: Set<String> { Set(entries.values.filter(\.isTemporarilyRevealed).map(\.bundleIdentifier)) }
     // Capability and schema support are separate: a readable future schema
     // must not send an already-authorized user back through the file picker.
-    var accessAvailable: Bool { access.hasSelection && (try? readPreferenceValue()) != nil }
+    var accessAvailable: Bool { (testingIO != nil || access.hasSelection) && (try? readPreferenceValue()) != nil }
     func isTemporarilyRevealed(bundle: String) -> Bool { entries[bundle]?.isTemporarilyRevealed == true }
 
     private var domain: CFString { access.preferenceFile.deletingPathExtension().path as CFString }
     private let preferenceKey = "trackedApplications" as CFString
 
-    init(access: NativeMenuBarVisibilityAccess = NativeMenuBarVisibilityAccess()) {
+    convenience init(access: NativeMenuBarVisibilityAccess = NativeMenuBarVisibilityAccess()) {
+        self.init(access: access, testingIO: nil)
+    }
+
+    #if DEBUG
+    convenience init(testing io: NativeVisibilityStoreTestIO) {
+        let defaults = UserDefaults(suiteName: "dev.hdh.MenuTidy.tests.store.\(UUID().uuidString)")!
+        self.init(access: NativeMenuBarVisibilityAccess(defaults: defaults), testingIO: io)
+    }
+    #endif
+
+    private init(access: NativeMenuBarVisibilityAccess, testingIO: NativeVisibilityStoreTestIO?) {
         self.access = access
+        self.testingIO = testingIO
         do {
-            let data = try journal.load()
+            let data = try loadJournalData()
             let loaded = try data.map(Ledger.decode) ?? []
             entries = Dictionary(uniqueKeysWithValues: loaded.map { ($0.bundleIdentifier, $0) })
         } catch {
@@ -40,6 +55,7 @@ final class NativeMenuBarVisibilityStore {
     }
 
     func requestAccess() async throws -> Bool {
+        if testingIO != nil { _ = try readData(); return true }
         guard try await access.requestAccess() else { return false }
         _ = try readPreferenceValue()
         return true
@@ -50,7 +66,7 @@ final class NativeMenuBarVisibilityStore {
     /// The caller can then reconcile pending writes and restore owned items.
     func reloadForRecovery() throws {
         do {
-            let data = try journal.load()
+            let data = try loadJournalData()
             guard data != nil || !initialJournalWasUnreadable else {
                 throw failure("原来的菜单栏恢复记录无法读取且现在已缺失，不能猜测原始显示设置。请保留或恢复原来的恢复文件。")
             }
@@ -65,7 +81,7 @@ final class NativeMenuBarVisibilityStore {
             // If a previously failed removal already reached disk, keeping
             // the in-memory receipt once more is safe: reconciliation observes
             // the restored original and subsequently removes it durably.
-            try journal.save(recoveredData)
+            try saveJournalData(recoveredData)
             entries = Dictionary(uniqueKeysWithValues: recovered.map { ($0.bundleIdentifier, $0) })
             knownUnwritten.removeAll()
             initialJournalWasUnreadable = false
@@ -176,7 +192,7 @@ final class NativeMenuBarVisibilityStore {
 
     private func requireReady() throws {
         if let issue = pendingRecoveryIssue { throw failure(issue) }
-        guard access.hasSelection else { throw failure("请先允许访问菜单栏显示记录，再连接托盘图标。") }
+        guard testingIO != nil || access.hasSelection else { throw failure("请先允许访问菜单栏显示记录，再连接托盘图标。") }
     }
 
     private func assertCurrent(_ entry: Ledger.Entry) throws {
@@ -197,45 +213,116 @@ final class NativeMenuBarVisibilityStore {
         }
     }
 
-    private func perform(_ entry: Ledger.Entry) throws {
-        let expected = try entry.expectedRecord()
-        let replacement = try entry.writtenRecord()
-        guard try Codec.decode(readData()).matches(record: expected, bundleIdentifier: entry.bundleIdentifier) else { throw conflict() }
-        var prepared = entries; prepared[entry.bundleIdentifier] = entry
-        knownUnwritten[entry.bundleIdentifier] = entry
-        try save(prepared) // durable write-ahead intent before changing preferences
+    private func perform(_ entry: Ledger.Entry) throws { try perform([entry]) }
 
-        // Re-read after journal I/O and merge only the target into the latest
-        // table. A final byte check catches intervening edits; CFPreferences
-        // provides no atomic compare-and-swap, so a later race stays possible.
+    /// Every target has durable intent before one merged preference write.
+    /// Recovery remains per complete target record, including uncertain writes.
+    private func perform(_ changes: [Ledger.Entry]) throws {
+        guard !changes.isEmpty else { return }
+        let initial = try Codec.decode(readData())
+        for entry in changes {
+            guard try initial.matches(record: entry.expectedRecord(), bundleIdentifier: entry.bundleIdentifier) else { throw conflict() }
+        }
+        var prepared = entries
+        for entry in changes {
+            prepared[entry.bundleIdentifier] = entry
+            knownUnwritten[entry.bundleIdentifier] = entry
+        }
+        try save(prepared)
         let written: Data
         do {
             let fresh = try readData()
-            guard let merged = try Codec.decode(fresh).replacingRecord(bundleIdentifier: entry.bundleIdentifier,
-                    expected: expected, replacement: replacement), try readData() == fresh else { throw conflict() }
+            var merged = fresh
+            for entry in changes {
+                guard let next = try Codec.decode(merged).replacingRecord(bundleIdentifier: entry.bundleIdentifier,
+                    expected: entry.expectedRecord(), replacement: entry.writtenRecord()) else { throw conflict() }
+                merged = next
+            }
+            // CFPreferences has no compare-and-swap. Preserve the final
+            // race check; a later competing write still requires recovery.
+            guard try readData() == fresh else { throw conflict() }
             written = merged
         } catch {
-            knownUnwritten[entry.bundleIdentifier] = entry
-            let cancelled = try Ledger.discardingKnownUnwritten(entry, from: Array(entries.values))
+            var cancelled = Array(entries.values)
+            for entry in changes { cancelled = try Ledger.discardingKnownUnwritten(entry, from: cancelled) }
             try save(Dictionary(uniqueKeysWithValues: cancelled.map { ($0.bundleIdentifier, $0) }))
-            knownUnwritten.removeValue(forKey: entry.bundleIdentifier)
+            for entry in changes { knownUnwritten.removeValue(forKey: entry.bundleIdentifier) }
             throw error
         }
-        knownUnwritten.removeValue(forKey: entry.bundleIdentifier)
+        for entry in changes { knownUnwritten.removeValue(forKey: entry.bundleIdentifier) }
+        try writePreferenceData(written)
+        let readback = try Codec.decode(readData())
+        for entry in changes {
+            guard try readback.matches(record: entry.writtenRecord(), bundleIdentifier: entry.bundleIdentifier) else {
+                throw failure("菜单栏显示结果尚未确认，恢复记录已保留；没有覆盖新的目标记录。")
+            }
+        }
+        var completed = entries
+        for entry in changes { completed[entry.bundleIdentifier] = entry.completingPending() }
+        try save(completed)
+        Self.logger.notice("nativeVisibility batchWriteConfirmed=true targetCount=\(changes.count) preferenceWrites=1")
+    }
+
+    /// Ordinary applications share one preference table. Unsupported or
+    /// externally changed targets keep their own errors; qualified peers can
+    /// still share a single write and durable journal commit.
+    func changeVisibility(_ hiddenByBundle: [String: Bool]) -> [String: Result<Void, Error>] {
+        var results: [String: Result<Void, Error>] = [:]
+        var changes: [Ledger.Entry] = []
+        for bundle in hiddenByBundle.keys.sorted() {
+            do {
+                try requireReady()
+                try reconcile(bundle: bundle)
+                let snapshot = try Codec.decode(readData())
+                if hiddenByBundle[bundle] == true {
+                    if let entry = entries[bundle] {
+                        try assertCurrent(entry)
+                    } else {
+                        guard try snapshot.isAllowed(bundleIdentifier: bundle) else {
+                            throw failure("此图标原本已被系统设置隐藏。请先允许它显示，再连接托盘。")
+                        }
+                        changes.append(Ledger.Entry(bundleIdentifier: bundle,
+                            originalRecord: try snapshot.record(bundleIdentifier: bundle), mode: .original, pending: .hide))
+                    }
+                } else if let entry = entries[bundle] {
+                    if try snapshot.matches(record: entry.originalRecord, bundleIdentifier: bundle) {
+                        var next = entries; next.removeValue(forKey: bundle); try save(next)
+                    } else {
+                        guard entry.mode == .hidden else { throw conflict() }
+                        changes.append(entry.preparing(.restore))
+                    }
+                } else {
+                    guard try snapshot.isAllowed(bundleIdentifier: bundle) else { throw conflict() }
+                }
+                results[bundle] = .success(())
+            } catch { results[bundle] = .failure(error) }
+        }
+        do { try requireReady(); try perform(changes) }
+        catch { for entry in changes { results[entry.bundleIdentifier] = .failure(error) } }
+        return results
+    }
+
+    private func loadJournalData() throws -> Data? {
+        if let testingIO { return testingIO.journalData }
+        return try journal.load()
+    }
+
+    private func saveJournalData(_ data: Data?) throws {
+        if let testingIO { try testingIO.saveJournal(data); return }
+        try journal.save(data)
+    }
+
+    private func writePreferenceData(_ written: Data) throws {
+        if let testingIO { try testingIO.writePreferences(written); return }
         CFPreferencesSetValue(preferenceKey, written as CFData, domain,
                               kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
         guard CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) else {
             throw failure("菜单栏显示开关尚未确认，恢复记录已保留。")
         }
-        let readback = try Codec.decode(readData())
-        guard try readback.matches(record: replacement, bundleIdentifier: entry.bundleIdentifier) else {
-            throw failure("菜单栏显示结果尚未确认，恢复记录已保留；没有覆盖新的目标记录。")
-        }
-        var completed = entries; completed[entry.bundleIdentifier] = entry.completingPending()
-        try save(completed)
     }
 
     private func readPreferenceValue() throws -> CFPropertyList {
+        if let testingIO { return try testingIO.readPreferences() as CFData }
         guard CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost),
               let raw = CFPreferencesCopyValue(preferenceKey, domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) else {
             throw failure("无法读取菜单栏显示记录，请重新允许访问指定文件。")
@@ -253,7 +340,7 @@ final class NativeMenuBarVisibilityStore {
     private func save(_ next: [String: Ledger.Entry]) throws {
         do {
             let data = try next.isEmpty ? nil : Ledger.encode(Array(next.values))
-            try journal.save(data)
+            try saveJournalData(data)
             entries = next
         } catch {
             pendingRecoveryIssue = "菜单栏恢复记录未能安全保存，已停止后续写入；请保留 Transactions/NativeVisibility.plist 并重新启动恢复。"

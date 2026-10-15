@@ -1,6 +1,6 @@
 # 构建与发布
 
-Menu Tidy 当前源码版本为 **0.6.12（build 68）**。本轮 Atoll 原生隐藏、重复草稿和计数修复见[更新记录](../CHANGELOG.md)及[Atoll 验证记录](ATOLL-NATIVE-HIDING-20261015.md)；此前 Clash 与实时活动的显示去重见[显示条目去重记录](ITEM-PRESENTATION-20261014.md)，增量扫描合并修复见[增量扫描回归记录](INCREMENTAL-SCAN-20261014.md)，托盘多显示器定位见[双屏窗口验证](TRAY-PANEL-DISPLAY-20261009.md)，旧分类与托盘自动收起见[0.6.5 回归验证](ACCEPTANCE-0.6.5.md)，资源占用见[资源占用验证](RESOURCE-USAGE.md)，独立托盘与原生隐藏见[当前托盘记录](TRAY-EXPERIENCE.md)。历史隔离更新器的签名安装、重启与偏好保留证据仍分别记录。`SPARKLE_PRIVATE_KEY` 已获用户明确授权并上传。下面的流程只在对应 Actions 与 Release 实际完成后构成公开发布，不把本地打包视为 GitHub 发布物安装验收。
+Menu Tidy 当前源码版本为 **0.6.13（build 69）**。本轮周期补偿与多应用批处理见[周期补偿与批量应用](PERIODIC-BATCH-20261015.md)，Atoll 原生隐藏、重复草稿和计数修复见[更新记录](../CHANGELOG.md)及[Atoll 验证记录](ATOLL-NATIVE-HIDING-20261015.md)；此前 Clash 与实时活动的显示去重见[显示条目去重记录](ITEM-PRESENTATION-20261014.md)，增量扫描合并修复见[增量扫描回归记录](INCREMENTAL-SCAN-20261014.md)，托盘多显示器定位见[双屏窗口验证](TRAY-PANEL-DISPLAY-20261009.md)，旧分类与托盘自动收起见[0.6.5 回归验证](ACCEPTANCE-0.6.5.md)，资源占用见[资源占用验证](RESOURCE-USAGE.md)，独立托盘与原生隐藏见[当前托盘记录](TRAY-EXPERIENCE.md)。历史隔离更新器的签名安装、重启与偏好保留证据仍分别记录。`SPARKLE_PRIVATE_KEY` 已获用户明确授权并上传。下面的流程只在对应 Actions 与 Release 实际完成后构成公开发布，不把本地打包视为 GitHub 发布物安装验收。
 
 普通提交和 Pull Request 会生成供检查的构建产物；只有推送与应用版本一致的 `v*` 标签，才会尝试创建 GitHub Release。**版本带预发布后缀时进入 preview，并标为 Prerelease；没有后缀时进入 stable。** 例如 `v0.6.0-beta.1` 不改变稳定版 Latest，`v0.6.0` 则作为稳定版发布并更新 Latest。不要用文案中的“预览版”代替实际版本后缀。
 

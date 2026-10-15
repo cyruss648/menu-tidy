@@ -129,6 +129,7 @@ final class IncrementalScanIntegrationTests: XCTestCase {
         defaults.set(false, forKey: "shortcutEnabled")
         defaults.set(false, forKey: "autoCollapse")
         defaults.set(false, forKey: "startupApplyPending")
+        defaults.set(false, forKey: "periodicApplyPending")
         let system = MenuTidyTestEnvironment()
         system.snapshots = initialSnapshots ?? [snapshot("session:a"), snapshot("session:b")]
         for id in ["session:a", "session:b"] {

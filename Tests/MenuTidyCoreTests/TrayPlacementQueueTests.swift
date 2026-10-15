@@ -3,6 +3,48 @@ import XCTest
 @testable import MenuTidyCore
 
 final class TrayPlacementQueueTests: XCTestCase {
+    func testBatchClaimsAllOrdinaryChoicesAndBlocksUntilEveryTokenFinishes() throws {
+        var queue = TrayPlacementQueue()
+        queue.enqueue(id: "a", group: .collapsible)
+        queue.enqueue(id: "b", group: .alwaysHidden)
+        let batch = queue.claimNextBatch()
+        XCTAssertEqual(batch.map(\.id), ["a", "b"])
+        XCTAssertEqual(queue.desiredGroup(id: "b"), .alwaysHidden)
+        queue.enqueue(id: "c", group: .visible)
+        XCTAssertTrue(queue.finish(token: batch[0].token))
+        XCTAssertTrue(queue.claimNextBatch().isEmpty)
+        XCTAssertNil(queue.claimNext())
+        XCTAssertTrue(queue.finish(token: batch[1].token))
+        XCTAssertEqual(queue.claimNextBatch().map(\.id), ["c"])
+    }
+
+    func testNewChoiceForAnyActiveBatchMemberSurvivesOldCompletion() throws {
+        var queue = TrayPlacementQueue()
+        queue.enqueue(id: "a", group: .collapsible)
+        queue.enqueue(id: "b", group: .alwaysHidden)
+        let batch = queue.claimNextBatch()
+        queue.enqueue(id: "b", group: .visible)
+        XCTAssertEqual(queue.desiredGroup(id: "b"), .visible)
+        for request in batch { XCTAssertTrue(queue.finish(token: request.token)) }
+        XCTAssertEqual(queue.claimNextBatch().map(\.group), [.visible])
+        XCTAssertFalse(queue.finish(token: batch[1].token))
+    }
+
+    func testIdentificationIsAnOrderedBoundaryBetweenBatches() throws {
+        var queue = TrayPlacementQueue()
+        queue.enqueue(id: "a", group: .collapsible)
+        queue.enqueue(id: "identify", group: .collapsible, resolveAmbiguousKey: true)
+        queue.enqueue(id: "b", group: .alwaysHidden)
+        let first = queue.claimNextBatch()
+        XCTAssertEqual(first.map(\.id), ["a"])
+        queue.finish(token: first[0].token)
+        let identify = queue.claimNextBatch()
+        XCTAssertEqual(identify.map(\.id), ["identify"])
+        XCTAssertTrue(identify[0].resolveAmbiguousKey)
+        queue.finish(token: identify[0].token)
+        XCTAssertEqual(queue.claimNextBatch().map(\.id), ["b"])
+    }
+
     func testAllThreeGroupsSurviveQueueAndExplicitRetry() throws {
         for group in ItemVisibility.allCases {
             var queue = TrayPlacementQueue()

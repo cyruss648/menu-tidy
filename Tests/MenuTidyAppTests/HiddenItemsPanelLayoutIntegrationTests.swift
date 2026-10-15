@@ -291,6 +291,7 @@ final class HiddenItemsPanelLayoutIntegrationTests: XCTestCase {
         defaults.set(false, forKey: "autoCollapse")
         defaults.set(false, forKey: "shortcutEnabled")
         defaults.set(false, forKey: "startupApplyPending")
+        defaults.set(false, forKey: "periodicApplyPending")
 
         let environment = MenuTidyTestEnvironment()
         let rules = (0..<itemCount).map { index in

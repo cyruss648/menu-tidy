@@ -204,6 +204,7 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
                              choices: [String: ItemVisibility]? = nil) throws -> Fixture {
         let suite = "dev.hdh.MenuTidy.tests.startup.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.set(false, forKey: "periodicApplyPending")
         defaults.set(completedSetup, forKey: "hasCompletedSetup")
         defaults.set(false, forKey: "shortcutEnabled")
         defaults.set(false, forKey: "autoCollapse")

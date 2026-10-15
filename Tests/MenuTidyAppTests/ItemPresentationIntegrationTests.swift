@@ -166,6 +166,7 @@ final class ItemPresentationIntegrationTests: XCTestCase {
         defaults.set(false, forKey: "shortcutEnabled")
         defaults.set(false, forKey: "autoCollapse")
         defaults.set(false, forKey: "startupApplyPending")
+        defaults.set(false, forKey: "periodicApplyPending")
         defaults.set(try JSONEncoder().encode(ItemRuleBook(rules: Dictionary(uniqueKeysWithValues: rules.map { ($0.id, $0) }))),
             forKey: "itemRules.v1")
         let system = MenuTidyTestEnvironment()

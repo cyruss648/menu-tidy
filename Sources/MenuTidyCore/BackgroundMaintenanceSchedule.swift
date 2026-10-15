@@ -8,9 +8,10 @@ public enum BackgroundMaintenanceSchedule {
 
     public static func nextDelay(at now: TimeInterval, autoCollapseDue: TimeInterval?,
                                  permissionDue: TimeInterval?, passiveCaptureDue: TimeInterval?,
-                                 recoveryDue: TimeInterval?, startupApplicationDue: TimeInterval? = nil) -> TimeInterval? {
+                                 recoveryDue: TimeInterval?, startupApplicationDue: TimeInterval? = nil,
+                                 periodicApplicationDue: TimeInterval? = nil) -> TimeInterval? {
         guard now.isFinite else { return nil }
-        let deadlines = [autoCollapseDue, permissionDue, passiveCaptureDue, recoveryDue, startupApplicationDue]
+        let deadlines = [autoCollapseDue, permissionDue, passiveCaptureDue, recoveryDue, startupApplicationDue, periodicApplicationDue]
             .compactMap { $0 }.filter(\.isFinite)
         guard let deadline = deadlines.min() else { return nil }
         return max(0.05, deadline - now)

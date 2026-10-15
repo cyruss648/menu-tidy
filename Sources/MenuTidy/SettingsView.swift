@@ -1208,9 +1208,24 @@ struct SettingsView: View {
                 }
             }
             Divider()
-            preferenceRow(title: "启动后自动应用待处理", subtitle: "启动约 30 秒后刷新图标并应用一次；失败项保留供手动重试。") {
+            preferenceRow(title: "启动后自动应用待处理", subtitle: "启动约 30 秒后刷新图标并应用一次，未完成的选择继续保留。") {
                 Toggle("启动后自动应用待处理", isOn: $model.startupApplyPendingEnabled)
                     .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            Divider()
+            preferenceRow(title: "后台自动应用待处理", subtitle: "定时刷新并应用未完成的选择；忙碌或托盘打开时顺延，失败项下个周期再试。") {
+                HStack(spacing: 10) {
+                    if model.periodicApplyPendingEnabled {
+                        Picker("自动应用间隔", selection: $model.periodicApplyPendingInterval) {
+                            ForEach(PendingApplicationInterval.choices, id: \.self) { seconds in
+                                Text("每 \(Int(seconds / 60)) 分钟").tag(seconds)
+                            }
+                        }
+                        .labelsHidden().pickerStyle(.menu).frame(width: 120)
+                    }
+                    Toggle("后台自动应用待处理", isOn: $model.periodicApplyPendingEnabled)
+                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }
             }
             Divider()
             preferenceRow(title: "登录时启动", subtitle: "登录 Mac 后自动开启 Menu Tidy。") {

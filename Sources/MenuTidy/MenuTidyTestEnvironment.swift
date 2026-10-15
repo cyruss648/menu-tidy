@@ -10,11 +10,13 @@ final class MenuTidyTestEnvironment {
     var identities: [String: ObservedItemGroupHistory.Identity] = [:]
     var allowed: [String: Bool] = [:]
     var managedBundles: Set<String> = []
+    var visibilityBatches: [[String: Bool]] = []
     var hiddenBundles: [String] = []
     var restoredBundles: [String] = []
     var beforeScan: (() async throws -> Void)?
     /// Root processes queried this round; host results may belong to other owners.
     var enumerationOwners: [MenuBarOwner]?
+    var beforeVisibilityReadForItem: ((String) async throws -> Void)?
     var beforeVisibilityRead: (() async throws -> Void)?
     var uptime: TimeInterval = 0
     var pointerInMenuBar = false

@@ -43,6 +43,7 @@ final class NativeTrayIntegrationTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: "hasCompletedSetup")
         defaults.set(false, forKey: "startupApplyPending")
+        defaults.set(false, forKey: "periodicApplyPending")
         defaults.set(try JSONEncoder().encode(NativeTrayChoices(existing: [bundle: .collapsible])), forKey: "nativeTrayChoices.v1")
         let old = [rule("item:AtollNotch", .collapsible, name: "Timer window"),
             rule("session:previous-run", .collapsible, name: "Status item")]
@@ -78,6 +79,7 @@ final class NativeTrayIntegrationTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: "hasCompletedSetup")
         defaults.set(false, forKey: "startupApplyPending")
+        defaults.set(false, forKey: "periodicApplyPending")
         defaults.set(try JSONEncoder().encode(NativeTrayChoices(existing: [bundle: .collapsible])), forKey: "nativeTrayChoices.v1")
         let original = try PendingDraftStore(unassociatedRules: [rule("item:AtollNotch", .collapsible), rule("session:old", .collapsible)])
         defaults.set(try JSONEncoder().encode(original), forKey: "itemDrafts.v1")
@@ -103,6 +105,7 @@ final class NativeTrayIntegrationTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: "hasCompletedSetup")
         defaults.set(false, forKey: "startupApplyPending")
+        defaults.set(false, forKey: "periodicApplyPending")
         defaults.set(try JSONEncoder().encode(NativeTrayChoices(existing: [bundle: .collapsible])), forKey: "nativeTrayChoices.v1")
         let matching = rule("item:former-window", .collapsible)
         let different = rule("session:old-different-choice", .alwaysHidden)

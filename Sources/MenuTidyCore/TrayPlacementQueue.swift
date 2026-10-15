@@ -28,7 +28,8 @@ public struct TrayPlacementQueue: Sendable {
         let resolveAmbiguousKey: Bool
     }
 
-    public private(set) var active: Request?
+    public private(set) var activeRequests: [Request] = []
+    public var active: Request? { activeRequests.first }
     private var pendingOrder: [String] = []
     private var pendingIntents: [String: Intent] = [:]
 
@@ -58,7 +59,7 @@ public struct TrayPlacementQueue: Sendable {
 
     public func desiredGroup(id: String) -> ItemVisibility? {
         if let pending = pendingIntents[id] { return pending.group }
-        return active.flatMap { $0.id == id ? $0.group : nil }
+        return activeRequests.first(where: { $0.id == id })?.group
     }
 
     /// A native application switch can own several icons. A new explicit
@@ -76,8 +77,23 @@ public struct TrayPlacementQueue: Sendable {
         pendingIntents.removeValue(forKey: id)
         let request = Request(token: UUID(), id: id, group: intent.group,
             resolveAmbiguousKey: intent.resolveAmbiguousKey)
-        active = request
+        activeRequests = [request]
         return request
+    }
+
+    /// One immutable batch owns the native operation. Explicit identification
+    /// remains a separate request; later user choices stay queued independently.
+    public mutating func claimNextBatch() -> [Request] {
+        guard activeRequests.isEmpty, let first = pendingOrder.first else { return [] }
+        if pendingIntents[first]?.resolveAmbiguousKey == true { return claimNext().map { [$0] } ?? [] }
+        var requests: [Request] = []
+        while let id = pendingOrder.first, let intent = pendingIntents[id], !intent.resolveAmbiguousKey {
+            pendingOrder.removeFirst()
+            pendingIntents.removeValue(forKey: id)
+            requests.append(Request(token: UUID(), id: id, group: intent.group))
+        }
+        activeRequests = requests
+        return requests
     }
 
     /// Use on success, failure, or cancellation after awaited native cleanup.
@@ -85,8 +101,8 @@ public struct TrayPlacementQueue: Sendable {
     /// in pending, and an old completion cannot release a newer active request.
     @discardableResult
     public mutating func finish(token: UUID) -> Bool {
-        guard active?.token == token else { return false }
-        active = nil
+        guard let index = activeRequests.firstIndex(where: { $0.token == token }) else { return false }
+        activeRequests.remove(at: index)
         return true
     }
 
