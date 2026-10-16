@@ -91,11 +91,19 @@ struct MenuBarVisibilityInspection: Sendable {
     var hasFrame: Bool { frame != nil }
 }
 
-struct MenuBarPresentationBaseline: Sendable { fileprivate let token: UUID }
+struct MenuBarPresentationBaseline: Sendable {
+    fileprivate let token: UUID
+    #if DEBUG
+    static func testing() -> Self { Self(token: UUID()) }
+    #endif
+}
 struct MenuBarItemPresentation: Sendable {
     enum Kind: Sendable { case menu, window }
     fileprivate let token: UUID
     let kind: Kind
+    #if DEBUG
+    static func testingMenu() -> Self { Self(token: UUID(), kind: .menu) }
+    #endif
 }
 enum MenuBarPresentationStatus: Sendable { case open, closed, unavailable }
 

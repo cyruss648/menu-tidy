@@ -117,6 +117,8 @@ final class MenuTidyModel: ObservableObject {
     @Published private(set) var panelError: String?
     @Published private(set) var panelActivationError: String?
     @Published private(set) var activePanelItemID: String?
+    @Published private(set) var pendingPanelItemID: String?
+    @Published private(set) var isResumingPanelRecovery = false
     @Published private(set) var trayItemErrors: [String: String] = [:]
     @Published private var trayPlacementQueue = TrayPlacementQueue()
     @Published private var trayPlacementErrors: [String: String] = [:]
@@ -238,6 +240,7 @@ final class MenuTidyModel: ObservableObject {
     private var desktopSessionGeneration = 0
     private var operationDesktopSessionGeneration = 0
     private var sessionResumePending = false
+    private var sessionResumeNeedsRefresh = true
     private var sessionResumeDue: TimeInterval?
     private var maintenanceFireAt: TimeInterval?
     private var wasMonitoringAutoCollapse = false
@@ -295,6 +298,19 @@ final class MenuTidyModel: ObservableObject {
     private var panelTask: Task<Void, Never>?
     private var panelIncludesAlwaysHidden = false
     private var panelActivationTask: Task<Void, Never>?
+    private struct InterruptedNativePanelRecovery {
+        let id: String
+        let identity: ObservedItemGroupHistory.Identity
+    }
+    private var interruptedNativePanelRecoveries: [NativeVisibilityTarget: InterruptedNativePanelRecovery] = [:]
+    private enum PendingPanelActionKind { case nativeItem(useNativeAction: Bool), application }
+    private struct PendingPanelAction {
+        let id: String
+        let identity: ObservedItemGroupHistory.Identity
+        let kind: PendingPanelActionKind
+        let sessionGeneration: Int
+    }
+    private var pendingPanelAction: PendingPanelAction?
     private var trayPlacementTask: Task<Void, Never>?
     private var panelIsPreparingNativeAction = false
     private var trayConnectionAttempts: [String: ObservedItemGroupHistory.Identity] = [:]
@@ -310,6 +326,15 @@ final class MenuTidyModel: ObservableObject {
     var isPanelItemOperationRunning: Bool { panelActivationTask != nil }
     var panelInteractionBusy: Bool {
         isRecoveringPositions || isApplying || isRefreshing || isArranging || isActivatingPanelItem || preparingToTerminate
+    }
+    var panelItemActionsDisabled: Bool { panelInteractionBusy && !isResumingPanelRecovery }
+    var panelRecoveryProgress: String? {
+        if positionRecoveryMessage != nil { return nil }
+        if pendingPanelItemID != nil { return "正在恢复图标，完成后将打开所选图标…" }
+        if isResumingPanelRecovery || !interruptedNativePanelRecoveries.isEmpty {
+            return "正在恢复锁屏前的图标…"
+        }
+        return nil
     }
     var panelItems: [ManagedItemRow] {
         presentationRows(from: items.filter { item in
@@ -395,6 +420,7 @@ final class MenuTidyModel: ObservableObject {
     var trayPlacementBlockedReason: String? {
         if stopping || preparingToTerminate { return "正在退出，暂时无法更改分类。" }
         if !desktopSessionAvailable { return "桌面暂不可用，解锁后会刷新并补偿。" }
+        if !interruptedNativePanelRecoveries.isEmpty { return "正在恢复锁屏前打开的图标，请稍候。" }
         if isRecoveringPositions || positionRecoveryMessage != nil || (usesNativeVisibility && needsLegacyPositionRecovery) {
             return "请先完成图标恢复，再应用分类。"
         }
@@ -721,6 +747,7 @@ final class MenuTidyModel: ObservableObject {
     func waitForTestingOperations() async {
         await workTask?.value
         await trayPlacementTask?.value
+        await panelActivationTask?.value
         await workTask?.value
     }
 
@@ -914,6 +941,7 @@ final class MenuTidyModel: ObservableObject {
         desktopSessionAvailable = available
         desktopSessionGeneration += 1
         sessionResumePending = true
+        sessionResumeNeedsRefresh = true
         periodicPendingApplicationGeneration += 1
         periodicPendingApplicationDue = nil
         startupPendingApplicationDue = nil
@@ -937,12 +965,14 @@ final class MenuTidyModel: ObservableObject {
 
     private func runSessionResume(at now: TimeInterval) {
         guard let due = sessionResumeDue, now >= due, ensureDesktopSessionAvailable() else { return }
-        if automaticPendingApplicationBusy {
+        // A tray waiting for its own interrupted reveal must not block that
+        // recovery. Actual native menus and other management work still wait.
+        if sessionResumeBusy {
             sessionResumeDue = now + BackgroundMaintenanceSchedule.interactionInterval
             return
         }
         refreshPermissions()
-        if automaticPendingApplicationBusy {
+        if sessionResumeBusy {
             sessionResumeDue = now + BackgroundMaintenanceSchedule.interactionInterval
             return
         }
@@ -950,8 +980,13 @@ final class MenuTidyModel: ObservableObject {
             finishSessionResumeRefresh(generation: desktopSessionGeneration, succeeded: false)
             return
         }
+        if !sessionResumeNeedsRefresh {
+            finishSessionResumeRefresh(generation: desktopSessionGeneration, succeeded: true)
+            return
+        }
         sessionResumeDue = nil
         trayDiscoveryNeeded = false
+        isResumingPanelRecovery = !interruptedNativePanelRecoveries.isEmpty
         Self.diagnosticLogger.notice("desktopSession resumeRefresh=true generation=\(self.desktopSessionGeneration)")
         refreshMenuItems(sessionResumeGeneration: desktopSessionGeneration)
     }
@@ -961,6 +996,13 @@ final class MenuTidyModel: ObservableObject {
               started, !stopping, !preparingToTerminate else { return }
         let shouldApply = hasCompletedSetup && (periodicApplyPendingEnabled ||
             (startupApplyPendingEnabled && !startupPendingApplicationFinished))
+        if succeeded { sessionResumeNeedsRefresh = false }
+        if !succeeded, !interruptedNativePanelRecoveries.isEmpty {
+            positionRecoveryMessage = positionRecoveryMessage ??
+                "锁屏后的图标恢复尚未完成，请在托盘设置中重试恢复图标。" +
+                (managementError.map { "\n" + $0 } ?? "")
+            panelError = positionRecoveryMessage
+        }
         if succeeded, shouldApply, automaticPendingApplicationBusy {
             sessionResumeDue = maintenanceUptime + BackgroundMaintenanceSchedule.interactionInterval
             return
@@ -974,6 +1016,13 @@ final class MenuTidyModel: ObservableObject {
             applyAutomaticPendingTrayPlacements()
         }
         rescheduleMaintenanceTimer()
+    }
+
+    private var sessionResumeBusy: Bool {
+        if !interruptedNativePanelRecoveries.isEmpty {
+            return panelInteractionBusy || trayPlacementTask != nil || contextMenuVisible || temporarilyRevealingAll
+        }
+        return automaticPendingApplicationBusy
     }
 
     private var shouldMonitorAutoCollapse: Bool {
@@ -1297,6 +1346,7 @@ final class MenuTidyModel: ObservableObject {
             }
             nativeVisibilityEvidence.removeAll()
             positionRecoveryMessage = nil
+            interruptedNativePanelRecoveries.removeAll()
             for item in snapshots {
                 if let identity = observedItemIdentity(item) { trayConnectionAttempts[item.id] = identity }
             }
@@ -1466,7 +1516,9 @@ final class MenuTidyModel: ObservableObject {
                     self.collapseIfSafe()
                 }
                 if let generation = sessionResumeGeneration {
+                    self.isResumingPanelRecovery = false
                     self.finishSessionResumeRefresh(generation: generation, succeeded: scanSucceeded && !Task.isCancelled)
+                    self.resumePendingPanelAction(succeeded: scanSucceeded && !Task.isCancelled, generation: generation)
                 } else if applyStartupPendingWhenFinished {
                     self.finishStartupPendingRefresh(succeeded: scanSucceeded && !Task.isCancelled,
                         sessionGeneration: refreshSessionGeneration)
@@ -1493,6 +1545,7 @@ final class MenuTidyModel: ObservableObject {
                 try self.checkImageRefreshCancellation()
                 try await self.scanNow(allowNativeOwnerRecovery: true, discover: discover)
                 completedScans += 1
+                try await self.recoverInterruptedNativePanelActions()
                 try self.checkOperationDeadline()
                 // Discovery can first restore our ownership for a departed
                 // process. ScreenCaptureKit and temporary
@@ -1704,7 +1757,7 @@ final class MenuTidyModel: ObservableObject {
         if stopping || preparingToTerminate { throw CancellationError() }
     }
 
-    private func hiddenImageCoverage() -> (requested: Set<String>, unobservedConfiguredCount: Int) {
+    func hiddenImageCoverage() -> (requested: Set<String>, unobservedConfiguredCount: Int) {
         // Share the panel's accepted/observed membership; drafts are not inputs.
         let counts = Dictionary(grouping: snapshots, by: \.id).mapValues(\.count)
         let requested = Set(snapshots.filter { item in
@@ -1714,10 +1767,15 @@ final class MenuTidyModel: ObservableObject {
                     observedVisibility: observedGroupForDisplay(id: item.id),
                     includeAlwaysHidden: true)
         }.map(\.id))
-        let configuredHidden = Set(rules.rules.values.filter {
-            $0.visibility == .collapsible || $0.visibility == .alwaysHidden
-        }.map(\.id)).union(requested)
-        return (requested, configuredHidden.subtracting(requested).count)
+        // Offline intent is already reconciled against current application
+        // switches in rebuildRows. Old source IDs of an online application do
+        // not describe additional missing icons; choices without old rules do.
+        let unobserved = Set(items.filter { !$0.isAvailable && $0.group != .visible }.map { item in
+            if usesNativeVisibility, let bundle = item.bundleIdentifier,
+               NativeTrayChoices.accepts(bundle: bundle, excluding: []) { return "native-app:" + bundle }
+            return item.id
+        })
+        return (requested, unobserved.count)
     }
 
     private func updateIconImageWarning(summary: ImageAvailabilitySummary,
@@ -4081,6 +4139,7 @@ final class MenuTidyModel: ObservableObject {
     }
 
     private func showIconPanel(includeAlwaysHidden: Bool, clickPoint: NSPoint? = nil) {
+        guard ensureDesktopSessionAvailable() else { return }
         cancelPassiveIconCapture()
         refreshPermissions()
         closeIconPanel()
@@ -4141,6 +4200,8 @@ final class MenuTidyModel: ObservableObject {
 
     func closeIconPanel() {
         if isUIPreview { isPanelPresented = false; return }
+        pendingPanelAction = nil
+        pendingPanelItemID = nil
         panelTask?.cancel()
         panelTask = nil
         isPanelPresented = false
@@ -4210,8 +4271,10 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func openPanelApplication(id: String) {
-        guard !isUIPreview, !panelInteractionBusy, !preparingToTerminate, isPanelPresented,
+        if queuePanelActionForRecovery(id: id, kind: .application) { return }
+        guard !isUIPreview, ensureDesktopSessionAvailable(), !panelInteractionBusy, !preparingToTerminate, isPanelPresented,
               panelItems.contains(where: { $0.id == id }), canOpenPanelApplication(id: id) else { return }
+        let sessionGeneration = desktopSessionGeneration
         beginPanelItemOperation(id: id, progress: "正在打开应用窗口…")
         panelActivationTask = Task { [weak self] in
             guard let self else { return }
@@ -4223,6 +4286,7 @@ final class MenuTidyModel: ObservableObject {
                 await self.passiveIconCaptureTask?.value
                 try Task.checkCancellation()
                 try await self.scanNow()
+                try self.requireDesktopSession(generation: sessionGeneration)
                 guard let source = self.snapshots.first(where: { $0.id == id }),
                       let identity = self.observedItemIdentity(source), self.ownerIsCurrent(identity),
                       self.canOpenPanelApplication(id: id),
@@ -4233,6 +4297,7 @@ final class MenuTidyModel: ObservableObject {
                 configuration.activates = true
                 configuration.createsNewApplicationInstance = false
                 let opened = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+                try self.requireDesktopSession(generation: sessionGeneration)
                 try Task.checkCancellation()
                 guard opened.processIdentifier == source.processIdentifier,
                       self.ownerIsCurrent(identity) else { throw MenuBarAccessError.disappeared }
@@ -4240,6 +4305,7 @@ final class MenuTidyModel: ObservableObject {
                 var confirmed = false
                 while ProcessInfo.processInfo.systemUptime < deadline {
                     try Task.checkCancellation()
+                    try self.requireDesktopSession(generation: sessionGeneration)
                     guard !self.stopping, !self.preparingToTerminate, self.ownerIsCurrent(identity) else {
                         throw MenuBarAccessError.disappeared
                     }
@@ -4254,6 +4320,7 @@ final class MenuTidyModel: ObservableObject {
                 Self.diagnosticLogger.notice("trayApplicationOpen windowConfirmed=true iconVisibilityUnchanged=true")
                 self.closeIconPanel()
             } catch {
+                guard self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration else { return }
                 let message = error is CancellationError ? "打开应用已取消。" : error.localizedDescription
                 self.recordPanelItemFailure(id: id, message: message)
             }
@@ -4268,11 +4335,14 @@ final class MenuTidyModel: ObservableObject {
             return
         }
         if isUIPreview { return }
-        guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging,
+        if queuePanelActionForRecovery(id: id, kind: .nativeItem(useNativeAction: useNativeAction)) { return }
+        guard ensureDesktopSessionAvailable(), positionRecoveryMessage == nil, interruptedNativePanelRecoveries.isEmpty,
+              !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging,
               !preparingToTerminate, isPanelPresented,
               panelItems.contains(where: { $0.id == id }) else { return }
         refreshPermissions()
         guard accessibilityGranted else { requestAccessibility(); return }
+        let sessionGeneration = desktopSessionGeneration
         beginPanelItemOperation(id: id, progress: "正在打开目标图标…")
         panelActivationTask = Task { [weak self] in
             guard let self else { return }
@@ -4281,6 +4351,7 @@ final class MenuTidyModel: ObservableObject {
             var candidates: [MenuBarPositionCandidate] = []
             var revealedKey: String?
             var nativeRevealedTarget: NativeVisibilityTarget?
+            var nativeRevealedIdentity: ObservedItemGroupHistory.Identity?
             var presentation: MenuBarItemPresentation?
             var revealVerified = false
             var pressAttempted = false
@@ -4302,6 +4373,7 @@ final class MenuTidyModel: ObservableObject {
                         throw MenuTidyManagementError.positionApplication("此图标尚未连接到托盘，请在图标设置中重试。")
                     }
                     nativeRevealedTarget = target
+                    nativeRevealedIdentity = evidence.identity
                     try self.temporarilyRevealNativeTarget(target)
                     try await self.waitForNativeVisibility(id: id, target: target,
                         identity: evidence.identity, visible: true)
@@ -4310,7 +4382,8 @@ final class MenuTidyModel: ObservableObject {
                     try await self.scanNow()
                     revealVerified = true
                 }
-                try await self.access.validateItemActionSupport(id: id)
+                try self.requireDesktopSession(generation: sessionGeneration)
+                if self.testingEnvironment == nil { try await self.access.validateItemActionSupport(id: id) }
                 if self.usesPositionHiding,
                    let controlID = self.snapshots.first(where: { $0.ownIdentifier == "menu-tidy-toggle" })?.id {
                     candidates = try await self.access.prepareBackgroundPositionCandidates(ids: [id, controlID],
@@ -4329,9 +4402,12 @@ final class MenuTidyModel: ObservableObject {
                 // Yield the popup layer before the source opens its own menu.
                 // Keep the existing tray view so failures can return in place.
                 suspendedPanelToken = self.iconPanel?.suspendForNativePresentation()
-                let baseline = try await self.access.prepareItemPresentation(id: id)
+                let baseline = try await self.preparePanelItemPresentation(id: id)
+                try self.requireDesktopSession(generation: sessionGeneration)
                 pressAttempted = true
-                presentation = try await self.access.pressItem(id: id, baseline: baseline)
+                presentation = try await self.pressPanelItem(id: id, baseline: baseline)
+                try self.requireDesktopSession(generation: sessionGeneration)
+                try Task.checkCancellation()
                 if let presentation {
                     self.panelIsPreparingNativeAction = false
                     self.closeIconPanel()
@@ -4343,7 +4419,10 @@ final class MenuTidyModel: ObservableObject {
                         self.panelItemProgress = "目标界面已打开，关闭后自动恢复隐藏。"
                         var unknownSince: TimeInterval?
                         while !Task.isCancelled && !self.preparingToTerminate {
-                            switch await self.access.presentationStatus(presentation) {
+                            try self.requireDesktopSession(generation: sessionGeneration)
+                            let status = await self.panelPresentationStatus(presentation)
+                            try self.requireDesktopSession(generation: sessionGeneration)
+                            switch status {
                             case .closed:
                                 presentationClosed = true
                                 break
@@ -4371,11 +4450,21 @@ final class MenuTidyModel: ObservableObject {
                     Self.diagnosticLogger.notice("backgroundItemAction presentationConfirmed=false")
                 }
             } catch is CancellationError {
-                self.panelActivationError = "后台操作已取消。"
+                if self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration {
+                    self.panelActivationError = "后台操作已取消。"
+                }
             } catch {
-                await self.refreshAfterHiddenFailure(error)
-                self.panelActivationError = error.localizedDescription
-                Self.diagnosticLogger.notice("backgroundItemAction failed=true")
+                if self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration {
+                    await self.refreshAfterHiddenFailure(error)
+                    self.panelActivationError = error.localizedDescription
+                    Self.diagnosticLogger.notice("backgroundItemAction failed=true")
+                }
+            }
+            if !self.ensureDesktopSessionAvailable() || sessionGeneration != self.desktopSessionGeneration {
+                canRestore = false
+                if let target = nativeRevealedTarget, let identity = nativeRevealedIdentity {
+                    self.deferNativePanelRecovery(id: id, target: target, identity: identity)
+                }
             }
             if canRestore, (revealedKey != nil || nativeRevealedTarget != nil), pressAttempted, !presentationClosed,
                !self.preparingToTerminate, !self.stopping {
@@ -4383,11 +4472,15 @@ final class MenuTidyModel: ObservableObject {
                 let wasCancelled = Task.isCancelled
                 let checkClosure = Task { @MainActor in
                     if let retainedPresentation {
+                        guard self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration else { return false }
                         if wasCancelled, retainedPresentation.kind == .menu {
-                            await self.access.cancelCurrentMenuPresentation()
+                            if self.testingEnvironment == nil { await self.access.cancelCurrentMenuPresentation() }
                         }
                         for _ in 0..<4 {
-                            if await self.access.presentationStatus(retainedPresentation) == .closed { return true }
+                            guard self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration else { return false }
+                            let status = await self.panelPresentationStatus(retainedPresentation)
+                            guard self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration else { return false }
+                            if status == .closed { return true }
                             try? await Task.sleep(for: .milliseconds(150))
                         }
                         return false
@@ -4395,7 +4488,7 @@ final class MenuTidyModel: ObservableObject {
                     return await self.access.hasVisiblePresentation(id: id) == false
                 }
                 canRestore = await checkClosure.value
-                if !canRestore {
+                if !canRestore, self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration {
                     if !self.usesNativeVisibility { self.positionLayoutRecoveryNeeded = true }
                     self.positionRecoveryMessage = "目标界面尚未确认关闭。图标保留可见，关闭后可重试恢复位置。"
                 }
@@ -4445,10 +4538,11 @@ final class MenuTidyModel: ObservableObject {
                 }
                 await cleanup.value
             }
-            if canRestore, let target = nativeRevealedTarget {
+            if canRestore, let target = nativeRevealedTarget, let identity = nativeRevealedIdentity {
                 let cleanup = Task { @MainActor in
                     do {
-                        let shouldHide = !self.stopping && !self.preparingToTerminate && AXIsProcessTrusted() &&
+                        try self.requireDesktopSession(generation: sessionGeneration)
+                        let shouldHide = !self.stopping && !self.preparingToTerminate && (self.testingEnvironment != nil || AXIsProcessTrusted()) &&
                             self.latestNativeGroup(id: id, target: target) != .visible
                         if shouldHide { try self.rehideNativeTarget(target) }
                         else { try self.restoreNativeTarget(target) }
@@ -4461,12 +4555,21 @@ final class MenuTidyModel: ObservableObject {
                         }
                         Self.diagnosticLogger.notice("backgroundItemAction nativeHiddenRestored=true")
                     } catch {
-                        self.removeNativeEvidence(target: target)
-                        self.rebuildRows()
-                        self.positionRecoveryMessage = "图标显示状态尚未恢复：\(error.localizedDescription)"
+                        if !self.ensureDesktopSessionAvailable() || sessionGeneration != self.desktopSessionGeneration {
+                            self.deferNativePanelRecovery(id: id, target: target, identity: identity)
+                        } else {
+                            self.removeNativeEvidence(target: target)
+                            self.rebuildRows()
+                            self.positionRecoveryMessage = "图标显示状态尚未恢复：\(error.localizedDescription)"
+                        }
                     }
                 }
                 await cleanup.value
+            }
+            if !self.ensureDesktopSessionAvailable() || sessionGeneration != self.desktopSessionGeneration {
+                if let target = nativeRevealedTarget, let identity = nativeRevealedIdentity {
+                    self.deferNativePanelRecovery(id: id, target: target, identity: identity)
+                }
             }
             await self.access.discardBackgroundPositionCandidates(candidates)
             if let error = self.panelActivationError ?? self.positionRecoveryMessage {
@@ -4477,6 +4580,117 @@ final class MenuTidyModel: ObservableObject {
 
     func cancelPanelItemActivation() {
         panelActivationTask?.cancel()
+    }
+
+    private func deferNativePanelRecovery(id: String, target: NativeVisibilityTarget,
+                                         identity: ObservedItemGroupHistory.Identity) {
+        let alreadyPending = interruptedNativePanelRecoveries[target] != nil
+        interruptedNativePanelRecoveries[target] = InterruptedNativePanelRecovery(id: id, identity: identity)
+        if !alreadyPending { Self.diagnosticLogger.notice("backgroundItemAction recoveryDeferredUntilSessionResume=true") }
+    }
+
+    /// Retain one new user click during resume, never the pre-lock menu
+    /// command. Repeated clicks replace the request; closing the tray cancels it.
+    private func queuePanelActionForRecovery(id: String, kind: PendingPanelActionKind) -> Bool {
+        guard ensureDesktopSessionAvailable(), isPanelPresented, sessionResumePending,
+              !interruptedNativePanelRecoveries.isEmpty || isResumingPanelRecovery,
+              !isActivatingPanelItem, !isApplying, !isRecoveringPositions, !isArranging,
+              !stopping, !preparingToTerminate, positionRecoveryMessage == nil,
+              panelItems.contains(where: { $0.id == id }),
+              let source = snapshots.first(where: { $0.id == id }),
+              let identity = observedItemIdentity(source), ownerIsCurrent(identity) else { return false }
+        pendingPanelAction = PendingPanelAction(id: id, identity: identity, kind: kind, sessionGeneration: desktopSessionGeneration)
+        pendingPanelItemID = id
+        Self.diagnosticLogger.notice("backgroundItemAction newUserClickQueuedUntilRecovery=true")
+        return true
+    }
+
+    private func resumePendingPanelAction(succeeded: Bool, generation: Int) {
+        guard let pending = pendingPanelAction, pending.sessionGeneration == generation,
+              generation == desktopSessionGeneration else { return }
+        pendingPanelAction = nil
+        pendingPanelItemID = nil
+        guard succeeded, interruptedNativePanelRecoveries.isEmpty,
+              ensureDesktopSessionAvailable(), isPanelPresented, !panelInteractionBusy,
+              !stopping, !preparingToTerminate else { return }
+        guard ownerIsCurrent(pending.identity),
+              snapshots.first(where: { $0.id == pending.id }).flatMap(observedItemIdentity) == pending.identity,
+              panelItems.contains(where: { $0.id == pending.id }) else {
+            recordPanelItemFailure(id: pending.id, message: "图标身份已变化，请重新选择图标。")
+            return
+        }
+        Self.diagnosticLogger.notice("backgroundItemAction queuedUserClickResumed=true")
+        switch pending.kind {
+        case .nativeItem(let useNativeAction): activatePanelItem(id: pending.id, useNativeAction: useNativeAction)
+        case .application: openPanelApplication(id: pending.id)
+        }
+    }
+
+    /// The native ledger retains the exact temporary reveal across the pause.
+    /// Resume uses a fresh scan and never repeats the third-party menu action.
+    private func recoverInterruptedNativePanelActions() async throws {
+        guard !interruptedNativePanelRecoveries.isEmpty else { return }
+        for (target, recovery) in interruptedNativePanelRecoveries {
+            try checkOperationDeadline()
+            do {
+                guard nativeTargetIsManaged(target) else {
+                    interruptedNativePanelRecoveries.removeValue(forKey: target)
+                    continue
+                }
+                guard ownerIsCurrent(recovery.identity),
+                      snapshots.first(where: { $0.id == recovery.id }).flatMap(observedItemIdentity) == recovery.identity else {
+                    // A changed source may not inherit the old action's proof.
+                    try restoreNativeTarget(target)
+                    removeNativeEvidence(target: target)
+                    interruptedNativePanelRecoveries.removeValue(forKey: target)
+                    continue
+                }
+                let group = latestNativeGroup(id: recovery.id, target: target)
+                if group == .visible {
+                    try restoreNativeTarget(target)
+                    removeNativeEvidence(target: target)
+                } else {
+                    try rehideNativeTarget(target)
+                    try await waitForNativeVisibility(id: recovery.id, target: target, identity: recovery.identity, visible: false)
+                    confirmNativeRule(ItemRule(id: recovery.id, name: itemsByID[recovery.id]?.name ?? "",
+                        bundleIdentifier: recovery.identity.bundleIdentifier, visibility: group), identity: recovery.identity, target: target)
+                }
+                interruptedNativePanelRecoveries.removeValue(forKey: target)
+                Self.diagnosticLogger.notice("backgroundItemAction resumedHiddenRestored=true")
+            } catch is CancellationError { throw CancellationError() }
+            catch {
+                removeNativeEvidence(target: target)
+                positionRecoveryMessage = "图标显示状态尚未恢复：\(error.localizedDescription)"
+                throw error
+            }
+        }
+        rebuildRows()
+    }
+
+    private func preparePanelItemPresentation(id: String) async throws -> MenuBarPresentationBaseline {
+        #if DEBUG
+        if testingEnvironment != nil { return .testing() }
+        #endif
+        return try await access.prepareItemPresentation(id: id)
+    }
+
+    private func pressPanelItem(id: String, baseline: MenuBarPresentationBaseline) async throws -> MenuBarItemPresentation? {
+        #if DEBUG
+        if let testingEnvironment {
+            testingEnvironment.panelPressCount += 1
+            try await testingEnvironment.beforePanelPress?()
+            return .testingMenu()
+        }
+        #endif
+        return try await access.pressItem(id: id, baseline: baseline)
+    }
+
+    private func panelPresentationStatus(_ presentation: MenuBarItemPresentation) async -> MenuBarPresentationStatus {
+        if let testingEnvironment {
+            testingEnvironment.panelStatusReadCount += 1
+            return await testingEnvironment.panelPresentationStatus?() ?? .closed
+        }
+        return await access.presentationStatus(presentation)
     }
 
     func beginArrangement() {
@@ -4997,6 +5211,7 @@ final class MenuTidyModel: ObservableObject {
         cancelVisibilityDiagnostics()
         workTask?.cancel()
         trayPlacementTask?.cancel()
+        panelActivationTask?.cancel()
         trayPlacementQueue.cancelAllPending()
         timer?.invalidate()
         timer = nil
@@ -5123,7 +5338,10 @@ private extension MenuTidyModel {
         }
     }
     func nativeTargetIsRevealed(_ target: NativeVisibilityTarget) -> Bool {
-        if testingEnvironment != nil { return false }
+        if let testingEnvironment {
+            guard case .application(let bundle) = target else { return false }
+            return testingEnvironment.revealedBundles.contains(bundle)
+        }
         return switch target {
         case .application(let bundle): nativeVisibilityStore.isTemporarilyRevealed(bundle: bundle)
         case .system(let key): nativeSystemVisibilityStore.isTemporarilyRevealed(key: key)
@@ -5154,12 +5372,27 @@ private extension MenuTidyModel {
         }
     }
     func temporarilyRevealNativeTarget(_ target: NativeVisibilityTarget) throws {
+        if let testingEnvironment {
+            guard case .application(let bundle) = target,
+                  testingEnvironment.managedBundles.contains(bundle) else { throw MenuBarAccessError.rejected }
+            testingEnvironment.allowed[bundle] = true
+            testingEnvironment.revealedBundles.insert(bundle)
+            return
+        }
         switch target {
         case .application(let bundle): try nativeVisibilityStore.temporarilyReveal(bundle: bundle)
         case .system(let key): try nativeSystemVisibilityStore.temporarilyReveal(key: key)
         }
     }
     func rehideNativeTarget(_ target: NativeVisibilityTarget) throws {
+        if let testingEnvironment {
+            guard case .application(let bundle) = target else { throw MenuBarAccessError.rejected }
+            try testingEnvironment.beforeRehide?()
+            testingEnvironment.allowed[bundle] = false
+            testingEnvironment.revealedBundles.remove(bundle)
+            testingEnvironment.rehiddenBundles.append(bundle)
+            return
+        }
         switch target {
         case .application(let bundle): try nativeVisibilityStore.rehide(bundle: bundle)
         case .system(let key): try nativeSystemVisibilityStore.rehide(key: key)
@@ -5169,6 +5402,7 @@ private extension MenuTidyModel {
         if let testingEnvironment {
             guard case .application(let bundle) = target else { throw MenuBarAccessError.rejected }
             if testingEnvironment.managedBundles.remove(bundle) != nil { testingEnvironment.allowed[bundle] = true }
+            testingEnvironment.revealedBundles.remove(bundle)
             testingEnvironment.restoredBundles.append(bundle)
             return
         }
@@ -5199,12 +5433,19 @@ private extension MenuTidyModel {
         return succeeded
     }
     func restoreAllNativeTargets() -> Bool {
+        if let testingEnvironment {
+            for bundle in testingEnvironment.managedBundles { try? restoreNativeTarget(.application(bundle: bundle)) }
+            interruptedNativePanelRecoveries.removeAll()
+            return true
+        }
         let reloadsSucceeded = reloadAllNativeRecoveryJournalsIfNeeded()
         let applications = nativeVisibilityStore.restoreAll()
         let systems = nativeSystemVisibilityStore.restoreAll()
         nativeOwnerRecoveries.retainManagedTargets(managedNativeTargets)
         if !systems.isEmpty { recheckNativeVisibilityAccess() }
-        return reloadsSucceeded && applications.isEmpty && systems.isEmpty && nativeRecoveryIssue == nil
+        let restored = reloadsSucceeded && applications.isEmpty && systems.isEmpty && nativeRecoveryIssue == nil
+        if restored { interruptedNativePanelRecoveries.removeAll() }
+        return restored
     }
     func latestNativeGroup(id: String, target: NativeVisibilityTarget) -> ItemVisibility {
         if case .application(let bundle) = target, let group = nativeTrayChoices.group(bundle: bundle) { return group }
@@ -5566,10 +5807,12 @@ private extension MenuTidyModel {
 
     func waitForNativeVisibility(id: String, target: NativeVisibilityTarget,
                                  identity: ObservedItemGroupHistory.Identity, visible: Bool) async throws {
+        let sessionGeneration = desktopSessionGeneration
         let deadline = ProcessInfo.processInfo.systemUptime + 2.5
         var consecutive = 0
         var refreshed = false
         while ProcessInfo.processInfo.systemUptime < deadline {
+            try requireDesktopSession(generation: sessionGeneration)
             try checkOperationDeadline()
             guard !stopping, (testingEnvironment != nil || AXIsProcessTrusted()), self.ownerIsCurrent(identity),
                   snapshots.first(where: { $0.id == id }).flatMap(observedItemIdentity) == identity else {
@@ -5587,6 +5830,7 @@ private extension MenuTidyModel {
                 case .system(let key): observed = await access.inspectNativeSystemVisibility(id: id, key: key)
                 }
             }
+            try requireDesktopSession(generation: sessionGeneration)
             try checkOperationDeadline()
             let agrees = allowed == visible && observed == visible
             consecutive = agrees ? consecutive + 1 : 0
@@ -5612,6 +5856,7 @@ private extension MenuTidyModel {
         nativeVisibilityEvidence.removeAll()
         actualGroups.removeAll()
         positionRecoveryMessage = nil
+        panelError = nil
         if !reconnect {
             for item in snapshots {
                 if let identity = observedItemIdentity(item) { trayConnectionAttempts[item.id] = identity }

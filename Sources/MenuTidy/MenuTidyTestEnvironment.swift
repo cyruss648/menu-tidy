@@ -24,6 +24,13 @@ final class MenuTidyTestEnvironment {
     var pressedMouseButtons = false
     var maintenanceTimer: Timer?
     var desktopSessionAvailable = true
+    var revealedBundles: Set<String> = []
+    var panelPressCount = 0
+    var panelStatusReadCount = 0
+    var rehiddenBundles: [String] = []
+    var beforePanelPress: (() async throws -> Void)?
+    var panelPresentationStatus: (() async -> MenuBarPresentationStatus)?
+    var beforeRehide: (() throws -> Void)?
 
     func isCurrent(_ identity: ObservedItemGroupHistory.Identity) -> Bool {
         identities[identity.id] == identity

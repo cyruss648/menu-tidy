@@ -150,6 +150,33 @@ final class ItemPresentationIntegrationTests: XCTestCase {
         XCTAssertEqual(Set(fixture.model.items.map { fixture.model.trayPlacementGroup(id: $0.id) }), [.visible, .alwaysHidden])
     }
 
+    @MainActor
+    func testImageCoverageDoesNotCountAnOnlineApplicationsOldSourceAsAnOfflineIcon() async throws {
+        let rule = ItemRule(id: "item:old", name: "Fixture", bundleIdentifier: application, visibility: .collapsible)
+        let fixture = try makeFixture([snapshot("session:current", bundle: application)], rules: [rule])
+        defer { fixture.dispose() }
+        fixture.model.applyPendingTrayPlacements()
+        await fixture.model.waitForTestingOperations()
+        XCTAssertEqual(fixture.model.hiddenImageCoverage().requested, ["session:current"])
+        XCTAssertEqual(fixture.model.hiddenImageCoverage().unobservedConfiguredCount, 0)
+        fixture.setSources([])
+        try await refresh(fixture)
+        XCTAssertTrue(fixture.model.hiddenImageCoverage().requested.isEmpty)
+        XCTAssertEqual(fixture.model.hiddenImageCoverage().unobservedConfiguredCount, 1)
+    }
+
+    @MainActor
+    func testImageCoverageIncludesOfflineNativeChoicesWithoutAnOldSourceRule() async throws {
+        let fixture = try makeFixture([snapshot("session:transient", bundle: application)])
+        defer { fixture.dispose() }
+        fixture.model.requestTrayPlacement(id: "session:transient", group: .collapsible)
+        await fixture.model.waitForTestingOperations()
+        fixture.setSources([])
+        try await refresh(fixture)
+        XCTAssertEqual(fixture.model.hiddenImageCoverage().unobservedConfiguredCount, 1)
+        XCTAssertEqual(fixture.model.items.filter { !$0.isAvailable }.count, 1)
+    }
+
     private func snapshot(_ id: String, bundle: String, identifier: String? = nil) -> MenuBarItemSnapshot {
         MenuBarItemSnapshot(id: id, processIdentifier: bundle == host ? 10002 : (bundle == application ? 10001 : 10003),
             name: "Fixture", ownerName: "Fixture", bundleIdentifier: bundle,

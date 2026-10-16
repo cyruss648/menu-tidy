@@ -1,5 +1,7 @@
 # 文档索引
 
+托盘原生菜单触发锁屏后的取消与恢复修复，见[2026-10-16 托盘会话恢复](TRAY-SESSION-RECOVERY-20261016.md)。
+
 日常安装与使用从[项目 README](../README.md)开始。发布包、架构及签名信息以 [GitHub Releases](https://github.com/cyruss648/menu-tidy/releases) 的对应版本说明为准。
 
 当前日常流程是 **常驻显示 / 收起后隐藏 / 始终隐藏** 三项选择，更改后立即处理；同一列表提供应用全部待处理及重试失败项。点击菜单栏箭头打开六列独立托盘，首帧使用有效原图缓存或明确的应用身份图标；屏幕录制为可选增强。当前交互以[项目 README](../README.md)与[统一图标管理页](UNIFIED-MANAGEMENT.md)为准；[独立托盘体验](TRAY-EXPERIENCE.md)保留原生实现边界与对应版本实机证据。

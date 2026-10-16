@@ -278,6 +278,11 @@ private struct HiddenItemsPanelView: View {
             }
             if let error = displayedError {
                 errorNotice(error)
+            } else if let progress = model.panelRecoveryProgress {
+                Text(progress)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             } else if let id = lastInteractedItemID, model.trayPlacementIsPending(id: id) {
                 let message = model.trayPlacementMessage(id: id) ?? "正在调整图标位置…"
                 Text(message)
@@ -315,24 +320,24 @@ private struct HiddenItemsPanelView: View {
                 ForEach(model.panelItems, id: \.presentationID) { item in
                     HiddenPanelIconButton(name: item.name, image: model.panelImages[item.id],
                         fallbackImage: item.icon,
-                        isWorking: model.activePanelItemID == item.id || model.trayPlacementIsPending(id: item.id),
+                        isWorking: model.activePanelItemID == item.id || model.pendingPanelItemID == item.id || model.trayPlacementIsPending(id: item.id),
                         hasError: model.trayItemErrors[item.id] != nil ||
                             (!model.trayPlacementIsPending(id: item.id) && model.trayPlacementMessage(id: item.id) != nil),
-                        isDisabled: model.panelInteractionBusy,
+                        isDisabled: model.panelItemActionsDisabled,
                         placementMessage: model.trayPlacementMessage(id: item.id),
                         onHover: { hoveredItemID = $0 ? item.id : (hoveredItemID == item.id ? nil : hoveredItemID) }) {
                             openItem(id: item.id)
                         }
                         .contextMenu {
                             Button(model.panelPrimaryActionTitle(id: item.id)) { openItem(id: item.id) }
-                                .disabled(model.panelInteractionBusy)
+                                .disabled(model.panelItemActionsDisabled)
                             if model.canOpenPanelApplication(id: item.id) {
                                 if model.panelPrimaryActionTitle(id: item.id) != "打开应用" {
                                     Button("打开应用") { openItem(id: item.id, action: .application) }
-                                        .disabled(model.panelInteractionBusy)
+                                        .disabled(model.panelItemActionsDisabled)
                                 }
                                 Button("尝试原生图标操作") { openItem(id: item.id, action: .nativeActivation) }
-                                    .disabled(model.panelInteractionBusy)
+                                    .disabled(model.panelItemActionsDisabled)
                             }
                             Divider()
                             Button("常驻菜单栏") {
