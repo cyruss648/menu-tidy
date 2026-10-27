@@ -28,7 +28,7 @@ public enum NativeTrayIntentPolicy {
 
     public static func migratingConfirmed(_ confirmed: ItemRule, saved: ItemRuleBook,
                                            drafts: [ItemRule], choices: NativeTrayChoices,
-                                           excluding: Set<String> = []) -> NativeTrayChoices {
+                                           excluding: Set<String> = [], observedBundles: Set<String> = []) -> NativeTrayChoices {
         guard let bundle = confirmed.bundleIdentifier, choices.group(bundle: bundle) == nil else { return choices }
         let related = effectiveRules(saved: saved, drafts: drafts).rules.values
             .filter { $0.bundleIdentifier == bundle }
@@ -36,7 +36,7 @@ public enum NativeTrayIntentPolicy {
         var result = choices
         var candidates = ItemRuleBook(rules: Dictionary(uniqueKeysWithValues: related.map { ($0.id, $0) }))
         candidates.set(confirmed)
-        result.migrate(saved: candidates, excluding: excluding)
+        result.migrate(saved: candidates, excluding: excluding, observedBundles: observedBundles)
         return result
     }
 

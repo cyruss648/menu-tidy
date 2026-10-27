@@ -191,7 +191,7 @@ public struct PendingDraftStore: Codable, Sendable {
     @discardableResult
     public mutating func removeConfirmedNativeApplication(bundle: String, group: ItemVisibility,
                                                          nativeChoices: NativeTrayChoices) -> Int {
-        guard NativeTrayChoices.accepts(bundle: bundle, excluding: []),
+        guard nativeChoices.accepts(bundle: bundle, excluding: []),
               nativeChoices.group(bundle: bundle) == group else { return 0 }
         let ids = Set(savedRecords.filter {
             $0.rule.bundleIdentifier == bundle && $0.rule.visibility == group

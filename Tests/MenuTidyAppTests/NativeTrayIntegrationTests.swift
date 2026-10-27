@@ -73,6 +73,29 @@ final class NativeTrayIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testObservedSingleComponentApplicationBundleIsSavedWithNativeEvidence() async throws {
+        let suite = "dev.hdh.MenuTidy.tests.single-component-bundle.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "hasCompletedSetup")
+        defaults.set(false, forKey: "startupApplyPending")
+        defaults.set(false, forKey: "periodicApplyPending")
+        let rule = ItemRule(id: "session:st", name: "st", bundleIdentifier: "st", visibility: .visible)
+        let system = environment([rule])
+        system.snapshots[0].presentationIdentity = .application(bundle: "st")
+        let model = MenuTidyModel(testing: system, defaults: defaults)
+        defer { model.stop() }
+
+        model.requestTrayPlacement(id: rule.id, group: .collapsible)
+        await model.waitForTestingOperations()
+
+        let saved = try choices(defaults)
+        XCTAssertEqual(saved.group(bundle: "st"), .collapsible)
+        XCTAssertTrue(saved.accepts(bundle: "st", excluding: []))
+        XCTAssertFalse(NativeTrayChoices.accepts(bundle: "st", excluding: []))
+    }
+
+    @MainActor
     func testFailedCanonicalNativeConfirmationPreservesBothOriginalDraftReceipts() async throws {
         let suite = "dev.hdh.MenuTidy.tests.native-failure-receipts.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

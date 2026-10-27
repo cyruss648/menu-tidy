@@ -175,6 +175,7 @@ final class MenuTidyModel: ObservableObject {
         precondition(testingEnvironment == nil, "Integration tests cannot open the production native store.")
         return NativeMenuBarVisibilityStore()
     }()
+    private lazy var nativeAssessmentStore = NativeMenuBarAssessmentStore()
     private lazy var nativeSystemVisibilityStore: NativeSystemMenuBarVisibilityStore = {
         precondition(testingEnvironment == nil, "Integration tests cannot open the production system store.")
         return NativeSystemMenuBarVisibilityStore()
@@ -528,9 +529,16 @@ final class MenuTidyModel: ObservableObject {
               let row = items.first(where: { $0.id == id && $0.canMove && $0.isAvailable }),
               snapshots.filter({ $0.id == id }).count == 1 else { return }
         var updatedChoices = nativeTrayChoices
+        let observedBundles: Set<String> = switch row.presentationIdentity {
+        case .application(let bundle) where bundle == row.bundleIdentifier:
+            [bundle]
+        default:
+            []
+        }
         let sharesApplicationSwitch = usesNativeVisibility && row.bundleIdentifier.map {
             updatedChoices.set(bundle: $0, group: group,
-                excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
+                excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }),
+                observedBundles: observedBundles)
         } == true
         let counts = Dictionary(grouping: snapshots, by: \.id).mapValues(\.count)
         let affected = sharesApplicationSwitch ? items.filter {
@@ -902,6 +910,7 @@ final class MenuTidyModel: ObservableObject {
                     self.scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
                     self.pruneObservedGroupHistory()
                     self.rebuildRows()
+                    self.refreshNativeAssessmentIfNeeded()
                     self.refreshEnvironment()
                     self.requestPassiveCaptureAfterEvent()
                     self.trayDiscoveryNeeded = true
@@ -910,12 +919,19 @@ final class MenuTidyModel: ObservableObject {
         }
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.requestPassiveCaptureAfterEvent(); self?.recoverVisibility() }
+                MainActor.assumeIsolated {
+                    self?.requestPassiveCaptureAfterEvent()
+                    self?.refreshNativeAssessmentIfNeeded()
+                    self?.recoverVisibility()
+                }
             })
         }
         applicationObservers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.requestPassiveCaptureAfterEvent() }
+                MainActor.assumeIsolated {
+                    self?.requestPassiveCaptureAfterEvent()
+                    self?.refreshNativeAssessmentIfNeeded()
+                }
             })
     }
 
@@ -1772,7 +1788,7 @@ final class MenuTidyModel: ObservableObject {
         // not describe additional missing icons; choices without old rules do.
         let unobserved = Set(items.filter { !$0.isAvailable && $0.group != .visible }.map { item in
             if usesNativeVisibility, let bundle = item.bundleIdentifier,
-               NativeTrayChoices.accepts(bundle: bundle, excluding: []) { return "native-app:" + bundle }
+               nativeTrayChoices.accepts(bundle: bundle, excluding: []) { return "native-app:" + bundle }
             return item.id
         })
         return (requested, unobserved.count)
@@ -1930,6 +1946,12 @@ final class MenuTidyModel: ObservableObject {
         cancelPassiveIconCapture()
         do {
             let counts = Dictionary(grouping: snapshots, by: \.id).mapValues(\.count)
+            let observedBundles: Set<String>
+            if case .application(let bundle)? = row.presentationIdentity, bundle == row.bundleIdentifier {
+                observedBundles = [bundle]
+            } else {
+                observedBundles = []
+            }
             let currentTargets = items.filter { $0.isAvailable && $0.canMove && counts[$0.id] == 1 }.map {
                 TrayPlacementPolicy.DraftTarget(rule: ItemRule(id: $0.id, name: $0.name,
                     bundleIdentifier: $0.bundleIdentifier, visibility: $0.group),
@@ -1941,7 +1963,8 @@ final class MenuTidyModel: ObservableObject {
             let prepared = try TrayPlacementPolicy.reassociatingDraft(in: pendingDrafts, id: id,
                 to: target, currentTargets: currentTargets,
                 nativeChoices: usesNativeVisibility ? nativeTrayChoices : nil,
-                excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
+                excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }),
+                observedBundles: observedBundles)
             try saveTrayIntent(drafts: prepared.drafts, nativeChoices: prepared.nativeChoices)
             for affectedID in prepared.affectedIDs {
                 itemApplicationIssues.removeValue(forKey: affectedID)
@@ -1983,7 +2006,7 @@ final class MenuTidyModel: ObservableObject {
               let row = itemsByID[id], let bundle = row.bundleIdentifier,
               nativeTrayChoices.group(bundle: bundle) != nil ||
                 rules.rule(for: id)?.bundleIdentifier == bundle || isUIPreview else { return false }
-        return NativeTrayChoices.canForget(bundle: bundle, liveBundles: [],
+        return nativeTrayChoices.canForget(bundle: bundle, liveBundles: [],
             excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
     }
 
@@ -1994,7 +2017,7 @@ final class MenuTidyModel: ObservableObject {
               !items.contains(where: { $0.id == id && $0.isAvailable }) else { return false }
         guard forgetItemAffectsApplication(id: id) else { return true }
         guard nativeChoicesLoadIssue == nil, let bundle = row.bundleIdentifier else { return false }
-        return NativeTrayChoices.canForget(bundle: bundle,
+        return nativeTrayChoices.canForget(bundle: bundle,
             liveBundles: Set(items.filter(\.isAvailable).compactMap(\.bundleIdentifier)),
             excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
     }
@@ -4374,7 +4397,7 @@ final class MenuTidyModel: ObservableObject {
                     }
                     nativeRevealedTarget = target
                     nativeRevealedIdentity = evidence.identity
-                    try self.temporarilyRevealNativeTarget(target)
+                    try await self.temporarilyRevealNativeTarget(target)
                     try await self.waitForNativeVisibility(id: id, target: target,
                         identity: evidence.identity, visible: true)
                     // AirDrop's old source is removed while hidden. Bind its
@@ -5231,18 +5254,39 @@ final class MenuTidyModel: ObservableObject {
 
 @MainActor
 private extension MenuTidyModel {
+    var usesNativeAssessment: Bool {
+        testingEnvironment == nil && nativeAssessmentStore.isAvailable
+    }
+
+    func syncNativeAssessmentIntent() {
+        guard usesNativeAssessment else { return }
+        let hidden = Set(nativeTrayChoices.choices.compactMap { bundle, group in
+            group == .visible ? nil : bundle
+        })
+        nativeAssessmentStore.syncDesiredHiddenBundles(hidden)
+    }
+
+    func refreshNativeAssessmentIfNeeded() {
+        guard usesNativeAssessment else { return }
+        syncNativeAssessmentIntent()
+        guard !nativeAssessmentStore.hiddenBundles.isEmpty else { return }
+        nativeAssessmentStore.refresh(observedBundles: Set(snapshots.compactMap(\.bundleIdentifier)))
+    }
+
     var nativeRecoveryIssue: String? {
         if testingEnvironment != nil { return nil }
         return nativeVisibilityStore.pendingRecoveryIssue ?? nativeSystemVisibilityStore.pendingRecoveryIssue
     }
     var hasManagedNativeTargets: Bool {
         if let testingEnvironment { return !testingEnvironment.managedBundles.isEmpty }
-        return !nativeVisibilityStore.managedBundles.isEmpty || !nativeSystemVisibilityStore.managedKeys.isEmpty
+        return !nativeAssessmentStore.managedBundles.isEmpty || !nativeVisibilityStore.managedBundles.isEmpty ||
+            !nativeSystemVisibilityStore.managedKeys.isEmpty
     }
 
     var managedNativeTargets: Set<NativeVisibilityTarget> {
         if let testingEnvironment { return Set(testingEnvironment.managedBundles.map { .application(bundle: $0) }) }
-        return Set(nativeVisibilityStore.managedBundles.map { .application(bundle: $0) })
+        return Set(nativeAssessmentStore.managedBundles.map { .application(bundle: $0) })
+            .union(nativeVisibilityStore.managedBundles.map { .application(bundle: $0) })
             .union(nativeSystemVisibilityStore.managedKeys.map { .system(key: $0) })
     }
 
@@ -5333,7 +5377,8 @@ private extension MenuTidyModel {
             return false
         }
         return switch target {
-        case .application(let bundle): nativeVisibilityStore.managedBundles.contains(bundle)
+        case .application(let bundle): nativeAssessmentStore.isManaged(bundle: bundle) ||
+            nativeVisibilityStore.managedBundles.contains(bundle)
         case .system(let key): nativeSystemVisibilityStore.managedKeys.contains(key)
         }
     }
@@ -5343,7 +5388,8 @@ private extension MenuTidyModel {
             return testingEnvironment.revealedBundles.contains(bundle)
         }
         return switch target {
-        case .application(let bundle): nativeVisibilityStore.isTemporarilyRevealed(bundle: bundle)
+        case .application(let bundle): nativeAssessmentStore.isTemporarilyRevealed(bundle: bundle) ||
+            nativeVisibilityStore.isTemporarilyRevealed(bundle: bundle)
         case .system(let key): nativeSystemVisibilityStore.isTemporarilyRevealed(key: key)
         }
     }
@@ -5353,7 +5399,12 @@ private extension MenuTidyModel {
             return testingEnvironment.allowed[bundle] ?? true
         }
         return switch target {
-        case .application(let bundle): try nativeVisibilityStore.readAllowed(bundle: bundle)
+        case .application(let bundle):
+            if nativeAssessmentStore.isManaged(bundle: bundle) || nativeAssessmentStore.isActive {
+                nativeAssessmentStore.isAllowed(bundle: bundle)
+            } else {
+                try nativeVisibilityStore.readAllowed(bundle: bundle)
+            }
         case .system(let key): try nativeSystemVisibilityStore.readAllowed(key: key)
         }
     }
@@ -5367,11 +5418,16 @@ private extension MenuTidyModel {
             return true
         }
         return switch target {
-        case .application(let bundle): try nativeVisibilityStore.hide(bundle: bundle)
+        case .application(let bundle):
+            if nativeAssessmentStore.isManaged(bundle: bundle) {
+                true
+            } else {
+                try nativeVisibilityStore.hide(bundle: bundle)
+            }
         case .system(let key): try nativeSystemVisibilityStore.hide(key: key)
         }
     }
-    func temporarilyRevealNativeTarget(_ target: NativeVisibilityTarget) throws {
+    func temporarilyRevealNativeTarget(_ target: NativeVisibilityTarget) async throws {
         if let testingEnvironment {
             guard case .application(let bundle) = target,
                   testingEnvironment.managedBundles.contains(bundle) else { throw MenuBarAccessError.rejected }
@@ -5380,7 +5436,12 @@ private extension MenuTidyModel {
             return
         }
         switch target {
-        case .application(let bundle): try nativeVisibilityStore.temporarilyReveal(bundle: bundle)
+        case .application(let bundle):
+            if nativeAssessmentStore.isManaged(bundle: bundle) {
+                try await nativeAssessmentStore.temporarilyReveal(bundle: bundle)
+            } else {
+                try nativeVisibilityStore.temporarilyReveal(bundle: bundle)
+            }
         case .system(let key): try nativeSystemVisibilityStore.temporarilyReveal(key: key)
         }
     }
@@ -5394,7 +5455,12 @@ private extension MenuTidyModel {
             return
         }
         switch target {
-        case .application(let bundle): try nativeVisibilityStore.rehide(bundle: bundle)
+        case .application(let bundle):
+            if nativeAssessmentStore.isManaged(bundle: bundle) {
+                nativeAssessmentStore.rehide(bundle: bundle)
+            } else {
+                try nativeVisibilityStore.rehide(bundle: bundle)
+            }
         case .system(let key): try nativeSystemVisibilityStore.rehide(key: key)
         }
     }
@@ -5407,7 +5473,12 @@ private extension MenuTidyModel {
             return
         }
         switch target {
-        case .application(let bundle): try nativeVisibilityStore.restore(bundle: bundle)
+        case .application(let bundle):
+            if nativeAssessmentStore.isManaged(bundle: bundle) {
+                nativeAssessmentStore.restore(bundle: bundle)
+            } else {
+                try nativeVisibilityStore.restore(bundle: bundle)
+            }
         case .system(let key): try nativeSystemVisibilityStore.restore(key: key)
         }
     }
@@ -5439,6 +5510,7 @@ private extension MenuTidyModel {
             return true
         }
         let reloadsSucceeded = reloadAllNativeRecoveryJournalsIfNeeded()
+        nativeAssessmentStore.restoreAll()
         let applications = nativeVisibilityStore.restoreAll()
         let systems = nativeSystemVisibilityStore.restoreAll()
         nativeOwnerRecoveries.retainManagedTargets(managedNativeTargets)
@@ -5497,6 +5569,7 @@ private extension MenuTidyModel {
 
     func applyNativeVisibilityRules(requestedIDs: [String], confirmedRules: [ItemRule]?) async throws -> Bool {
         recheckNativeVisibilityAccess()
+        syncNativeAssessmentIntent()
         if let issue = nativeChoicesLoadIssue { throw MenuTidyManagementError.positionApplication(issue) }
         guard !needsLegacyPositionRecovery else {
             throw MenuTidyManagementError.positionApplication("旧版隐藏位置仍待恢复，请先完成排序恢复再启用原生隐藏。")
@@ -5513,7 +5586,7 @@ private extension MenuTidyModel {
         var applicationScopes: [String: (group: ItemVisibility, owners: Set<ScanOwnerKey>)] = [:]
         let byBundle = Dictionary(grouping: originalRules, by: \.bundleIdentifier)
         for (bundle, scopedRules) in byBundle {
-            guard let bundle, NativeTrayChoices.accepts(bundle: bundle, excluding: []),
+            guard let bundle, nativeTrayChoices.accepts(bundle: bundle, excluding: []),
                   let group = nativeTrayChoices.group(bundle: bundle),
                   scopedRules.allSatisfy({ $0.visibility == group }) else { continue }
             var owners: Set<ScanOwnerKey> = []
@@ -5656,7 +5729,12 @@ private extension MenuTidyModel {
         for job in prepared {
             if case .application(let bundle) = job.target { applicationChanges[bundle] = job.rule.visibility != .visible }
         }
-        let applicationResults = changeNativeApplicationVisibility(applicationChanges)
+        let observedApplicationBundles: Set<String> = Set(snapshots.compactMap { snapshot in
+            guard snapshot.canMove, snapshot.ownIdentifier == nil else { return nil }
+            return snapshot.bundleIdentifier
+        })
+        let applicationResults = await changeNativeApplicationVisibility(applicationChanges,
+            observedBundles: observedApplicationBundles)
         var unconfirmed = Set(prepared.compactMap { job -> NativeVisibilityTarget? in
             if case .application = job.target { return job.target }
             return nil
@@ -5726,8 +5804,13 @@ private extension MenuTidyModel {
         let identities: [(MenuBarItemSnapshot, ObservedItemGroupHistory.Identity)]
     }
 
-    func changeNativeApplicationVisibility(_ changes: [String: Bool]) -> [String: Result<Void, Error>] {
+    func changeNativeApplicationVisibility(_ changes: [String: Bool],
+                                           observedBundles: Set<String> = []) async
+        -> [String: Result<Void, Error>] {
         guard !changes.isEmpty else { return [:] }
+        if usesNativeAssessment {
+            return await nativeAssessmentStore.changeVisibility(changes, observedBundles: observedBundles)
+        }
         guard let testingEnvironment else { return nativeVisibilityStore.changeVisibility(changes) }
         testingEnvironment.visibilityBatches.append(changes)
         var results: [String: Result<Void, Error>] = [:]
@@ -5791,7 +5874,8 @@ private extension MenuTidyModel {
         // intent and pending edits must survive an older confirmation.
         let updatedChoices = NativeTrayIntentPolicy.migratingConfirmed(rule, saved: rules,
             drafts: pendingDrafts.records.map(\.rule), choices: nativeTrayChoices,
-            excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }))
+            excluding: Set([Bundle.main.bundleIdentifier].compactMap { $0 }),
+            observedBundles: Set([identity.bundleIdentifier].compactMap { $0 }))
         if updatedChoices != nativeTrayChoices, let encoded = try? JSONEncoder().encode(updatedChoices) {
             defaults.set(encoded, forKey: "nativeTrayChoices.v1")
             nativeTrayChoices = updatedChoices
@@ -5811,6 +5895,7 @@ private extension MenuTidyModel {
         let deadline = ProcessInfo.processInfo.systemUptime + 2.5
         var consecutive = 0
         var refreshed = false
+        var observedVisibleDuringHide = false
         while ProcessInfo.processInfo.systemUptime < deadline {
             try requireDesktopSession(generation: sessionGeneration)
             try checkOperationDeadline()
@@ -5818,20 +5903,33 @@ private extension MenuTidyModel {
                   snapshots.first(where: { $0.id == id }).flatMap(observedItemIdentity) == identity else {
                 throw MenuBarAccessError.disappeared
             }
-            let allowed = try nativeAllowed(target)
+            let allowed: Bool
             let observed: Bool?
-            if let testingEnvironment {
+            if case .application(let bundle) = target,
+               nativeAssessmentStore.isManaged(bundle: bundle) || nativeAssessmentStore.isActive {
+                try await nativeAssessmentStore.waitForPendingActivation()
+                allowed = nativeAssessmentStore.isAllowed(bundle: bundle)
+                // MenuBarAgent keeps the source AX node alive on macOS 27;
+                // the assessment assertion is the authoritative visibility
+                // result for this backend, while AX remains an item identity
+                // check performed above.
+                observed = allowed
+            } else {
+                allowed = try nativeAllowed(target)
+                if let testingEnvironment {
                 try await testingEnvironment.beforeVisibilityReadForItem?(id)
                 try await testingEnvironment.beforeVisibilityRead?()
                 observed = testingEnvironment.visibility(id: id)
-            } else {
-                switch target {
-                case .application: observed = await access.inspectNativeVisibility(id: id)
-                case .system(let key): observed = await access.inspectNativeSystemVisibility(id: id, key: key)
+                } else {
+                    switch target {
+                    case .application: observed = await access.inspectNativeVisibility(id: id)
+                    case .system(let key): observed = await access.inspectNativeSystemVisibility(id: id, key: key)
+                    }
                 }
             }
             try requireDesktopSession(generation: sessionGeneration)
             try checkOperationDeadline()
+            if !visible, observed == true { observedVisibleDuringHide = true }
             let agrees = allowed == visible && observed == visible
             consecutive = agrees ? consecutive + 1 : 0
             if consecutive >= 2 { return }
@@ -5845,7 +5943,9 @@ private extension MenuTidyModel {
         }
         throw MenuTidyManagementError.positionApplication(visible
             ? "图标尚未在菜单栏中可操作，已停止本次打开。"
-            : "系统尚未完成隐藏，已恢复图标，可重试。")
+            : (observedVisibleDuringHide
+                ? "系统显示设置已写入，但图标仍在菜单栏中；已恢复图标，选择已保留。当前应用或 macOS 版本可能不支持原生隐藏。"
+                : "系统尚未完成隐藏，已恢复图标，选择已保留；可重试。"))
     }
 
     func recoverNativeVisibilityAndRefresh(reconnect: Bool = true) {
@@ -5914,6 +6014,11 @@ extension MenuTidyModel {
         if testingEnvironment != nil { nativeVisibilityAccessAvailable = true; return }
         if isUIPreview { return }
         guard usesNativeVisibility else { return }
+        if nativeAssessmentStore.isAvailable {
+            nativeVisibilityAccessAvailable = true
+            nativeVisibilityAccessMessage = "macOS 27 原生菜单栏显示控制可用。选择图标后由系统按应用隐藏；系统图标仍使用各自的显示设置。"
+            return
+        }
         nativeVisibilityAccessAvailable = nativeVisibilityStore.accessAvailable
         if let key = nativeSystemVisibilityStore.managedKeys.sorted().first(where: {
             !nativeSystemVisibilityStore.accessAvailable(key: $0)

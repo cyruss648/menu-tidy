@@ -9,6 +9,9 @@ final class MenuTidyTestEnvironment {
     var snapshots: [MenuBarItemSnapshot] = []
     var identities: [String: ObservedItemGroupHistory.Identity] = [:]
     var allowed: [String: Bool] = [:]
+    /// Optional physical-visibility substitute for integration tests. When
+    /// absent, the fixture follows the native preference as before.
+    var observedVisibility: [String: Bool] = [:]
     var managedBundles: Set<String> = []
     var visibilityBatches: [[String: Bool]] = []
     var hiddenBundles: [String] = []
@@ -38,6 +41,6 @@ final class MenuTidyTestEnvironment {
 
     func visibility(id: String) -> Bool? {
         guard let item = snapshots.first(where: { $0.id == id }), let bundle = item.bundleIdentifier else { return nil }
-        return allowed[bundle] ?? true
+        return observedVisibility[bundle] ?? allowed[bundle] ?? true
     }
 }

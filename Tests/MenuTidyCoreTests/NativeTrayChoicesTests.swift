@@ -157,6 +157,23 @@ final class NativeTrayChoicesTests: XCTestCase {
         XCTAssertTrue(restored.records.isEmpty)
     }
 
+    func testObservedSingleComponentBundleRequiresLiveEvidenceAndPersistsThatEvidence() throws {
+        var choices = NativeTrayChoices()
+        XCTAssertFalse(choices.set(bundle: "st", group: .collapsible))
+        XCTAssertTrue(choices.set(bundle: "st", group: .collapsible, observedBundles: ["st"]))
+        XCTAssertFalse(NativeTrayChoices.accepts(bundle: "st", excluding: []))
+        XCTAssertTrue(choices.accepts(bundle: "st", excluding: []))
+
+        let reloaded = try JSONDecoder().decode(NativeTrayChoices.self,
+            from: JSONEncoder().encode(choices))
+        XCTAssertEqual(reloaded.group(bundle: "st"), .collapsible)
+        XCTAssertTrue(reloaded.accepts(bundle: "st", excluding: []))
+
+        XCTAssertThrowsError(try JSONDecoder().decode(NativeTrayChoices.self,
+            from: Data(#"{"choices":{"st":"collapsible"}}"#.utf8)))
+        XCTAssertFalse(choices.set(bundle: "App", group: .collapsible))
+    }
+
     func testMigrationIsIdempotentAndPreservesUnmentionedChoices() {
         var choices = NativeTrayChoices(existing: ["org.example.Offline": .alwaysHidden])
         let saved = book([("one", "org.example.App", .visible)])

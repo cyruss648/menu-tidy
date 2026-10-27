@@ -42,6 +42,22 @@ final class NativeBatchApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testPreferenceWriteWithoutPhysicalHideStaysPendingAndRestoresTarget() async throws {
+        let f = try Fixture(); defer { f.dispose() }
+        // The preference backend accepts the write, while the AX substitute
+        // reports that this source is still physically visible.
+        f.system.observedVisibility[f.a] = true
+        f.model.applyPendingTrayPlacements()
+        await f.model.waitForTestingOperations()
+
+        XCTAssertEqual(f.system.allowed[f.a], true)
+        XCTAssertEqual(f.system.allowed[f.b], false)
+        XCTAssertTrue(f.model.items.first { $0.id == "session:a" }?.isPending == true)
+        XCTAssertTrue(f.model.trayPlacementFailure(id: "session:a")?.contains("仍在菜单栏中") == true)
+        XCTAssertEqual(Set(f.system.restoredBundles), [f.a])
+    }
+
+    @MainActor
     func testCancellationAfterBatchWriteRecoversEveryUnconfirmedApplication() async throws {
         let f = try Fixture(); defer { f.dispose() }
         var cancelled = false

@@ -90,7 +90,7 @@ public enum TrayPlacementPolicy {
     /// a conflicting sibling cannot consume or overwrite the original record.
     public static func reassociatingDraft(in store: PendingDraftStore, id: UUID, to target: DraftTarget,
                                          currentTargets: [DraftTarget], nativeChoices: NativeTrayChoices?,
-                                         excluding: Set<String> = []) throws -> DraftAssociation {
+                                          excluding: Set<String> = [], observedBundles: Set<String> = []) throws -> DraftAssociation {
         var updated = store
         try updated.reassociate(id: id, to: target.rule, sessionIdentity: target.identity)
         guard let associated = updated.record(for: target.rule.id, sessionIdentity: target.identity) else {
@@ -98,7 +98,8 @@ public enum TrayPlacementPolicy {
         }
         var choices = nativeChoices
         let shared = target.rule.bundleIdentifier.map {
-            choices?.set(bundle: $0, group: associated.rule.visibility, excluding: excluding) == true
+            choices?.set(bundle: $0, group: associated.rule.visibility,
+                excluding: excluding, observedBundles: observedBundles) == true
         } == true
         let affected = shared ? currentTargets.filter {
             $0.rule.bundleIdentifier == target.rule.bundleIdentifier && $0.rule.id != target.rule.id

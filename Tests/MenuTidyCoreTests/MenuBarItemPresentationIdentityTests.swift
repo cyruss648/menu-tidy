@@ -33,6 +33,12 @@ final class MenuBarItemPresentationIdentityTests: XCTestCase {
         }
     }
 
+    func testObservedSingleComponentApplicationCanSharePresentationIdentity() {
+        XCTAssertNil(MenuBarItemPresentationIdentity.resolve(bundleIdentifier: "st", accessibilityIdentifier: nil))
+        XCTAssertEqual(MenuBarItemPresentationIdentity.resolve(bundleIdentifier: "st", accessibilityIdentifier: nil,
+            observedApplication: true), .application(bundle: "st"))
+    }
+
     func testDisplayIdentityDoesNotBroadenSystemPreferenceOrPresentationDelegation() {
         let host = SystemModuleIdentity.ownerBundleIdentifier
         let live = "live-activity-pill-com.apple.chrono.WidgetRenderer-Activities"

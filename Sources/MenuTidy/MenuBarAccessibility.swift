@@ -631,7 +631,9 @@ actor MenuBarAccessibility {
                     (protected ? "系统固定项目或 Menu Tidy 控制项，保持可见" : (persistent == nil ? "没有稳定标识，仅在本次运行中记住此图标的分类" : "")),
                 persistentIdentity: persistent != nil, ownIdentifier: own,
                 presentationIdentity: MenuBarItemPresentationIdentity.resolve(
-                    bundleIdentifier: candidate.owner.bundleIdentifier, accessibilityIdentifier: candidate.identifier))
+                    bundleIdentifier: candidate.owner.bundleIdentifier, accessibilityIdentifier: candidate.identifier,
+                    observedApplication: candidate.source == .applicationExtras &&
+                        candidate.owner.bundleIdentifier != "com.apple.MenuBarAgent"))
             updated[id] = Entry(element: candidate.element, owner: candidate.owner,
                                 accessibilityIdentifier: candidate.identifier, snapshot: snapshot,
                                 hostPresentation: candidate.hostPresentation, hostGeometryUnresolved: hostGeometryUnresolved)
@@ -2021,6 +2023,19 @@ actor MenuBarAccessibility {
             }) else { return nil }
             return rect
         }
+        guard let role = read(entry.element, kAXRoleAttribute) as? String,
+              role == kAXMenuBarItemRole || role == kAXButtonRole,
+              let initialFrame = originalFrame() else { return nil }
+        // A hosted mirror is a positive visibility source only after its
+        // complete stored path and current frame are revalidated. Matching a
+        // PID, label, or nearby frame is never enough to bind it.
+        var validatedHostPresentation = false
+        if let host = entry.hostPresentation {
+            var budget = MirrorReadBudget()
+            validatedHostPresentation = currentHostFrame(host, original: entry.element,
+                owner: entry.owner, identifier: entry.accessibilityIdentifier,
+                budget: &budget) == host.snapshotFrame && budget.isValid
+        }
         func sourceInHitAncestry(at point: CGPoint) -> Bool? {
             guard !Task.isCancelled, ProcessInfo.processInfo.systemUptime < deadline else { return nil }
             let hit = Self.copyElementAtPositionOnMainThread(point)
@@ -2032,10 +2047,12 @@ actor MenuBarAccessibility {
                       !visited.contains(where: { CFEqual($0, node) }) else { return nil }
                 visited.append(node)
                 if CFEqual(node, entry.element) { return true }
-                // A known hosted mirror is not a negative source observation.
-                // Rebinding it belongs to a fresh scan, never metadata matching.
                 if let host = entry.hostPresentation,
-                   host.path.contains(where: { CFEqual($0, node) }) { return nil }
+                   host.path.contains(where: { CFEqual($0, node) }) {
+                    // This is the exact live path established by the scan;
+                    // unlike a PID/frame match it is valid positive evidence.
+                    return validatedHostPresentation ? true : nil
+                }
                 guard let role = read(node, kAXRoleAttribute) as? String else { return nil }
                 if role == kAXApplicationRole || role == kAXSystemWideRole { return false }
                 guard let parent = element(read(node, kAXParentAttribute)) else { return nil }
@@ -2043,16 +2060,20 @@ actor MenuBarAccessibility {
             }
             return nil
         }
-        guard let role = read(entry.element, kAXRoleAttribute) as? String,
-              role == kAXMenuBarItemRole || role == kAXButtonRole,
-              let initialFrame = originalFrame() else { return nil }
         let point = CGPoint(x: initialFrame.midX, y: initialFrame.midY)
         guard let first = sourceInHitAncestry(at: point), originalFrame() == initialFrame,
-              liveOwnerMatches(entry), let second = sourceInHitAncestry(at: point), first == second,
+              liveOwnerMatches(entry), let second = sourceInHitAncestry(at: point),
               originalFrame() == initialFrame,
               read(entry.element, kAXRoleAttribute) as? String == role,
               AXIsProcessTrusted(), liveOwnerMatches(entry), !Task.isCancelled,
               ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+        guard first == second else { return nil }
+        // An identifier-less origin can be replaced by a distinct AX object
+        // while remaining visible. A negative result from that stale binding
+        // is unknown unless the scan also established a live host path.
+        if first == false, entry.accessibilityIdentifier == nil, !validatedHostPresentation {
+            return nil
+        }
         return first
     }
 

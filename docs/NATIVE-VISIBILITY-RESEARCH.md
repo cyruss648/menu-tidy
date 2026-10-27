@@ -131,3 +131,16 @@
 - 移除本应用制造的占位拥挤不代表屏幕空间无限。用户保留的常驻图标自身超出菜单栏空间时，macOS 仍可能显示原生溢出入口。
 
 原始 fixture 日志、截图及偏好快照在忽略目录 `.local/native-visibility-fixture/`、`.local/system-visibility-fixture/` 和 `.local/text-input-visibility/`。这些证据包含本机应用信息，不提交到仓库。上述独立实验不代替最终 Menu Tidy 集成版本的托盘点击、退出恢复与性能验收。
+
+
+### 2026-10-27：Menu Tidy 集成 assessment 后端
+
+在 macOS 27 的真实 Menu Tidy 集成验证中，已接入 `MenuBarClientCore` 的 assessment allow-list 能力，用于控制第三方应用菜单栏图标的允许显示状态。实现通过动态加载系统能力并按完整应用 bundle ID 建立应用级 allow-list；同一应用的多个图标共用一个 assessment 状态，系统模块仍沿用各自的原生路径，避免把整个 `MenuBarAgent` 宿主作为一个目标处理。
+
+本次接入同时保留了旧 AX 与恢复账本路径作为兼容和恢复边界。应用在切换后会重新扫描实际菜单栏状态，以 assessment 状态和真实可见性共同确认；只有 assessment 后端明确返回成功并完成当前目标确认时才消费待处理选择。后端缺失、动态调用失败、超时或无法取得可靠确认时，选择继续保留为“需处理”，并回退到兼容路径，避免把未知状态当作隐藏成功。
+
+实机验证覆盖 macOS 27 Apple Silicon 上的 `st`：切换为“常驻显示”后显示确认，切换为“收起后隐藏”后再次显示确认，菜单栏对照图中对应图标分别出现和消失，最终待处理数量为 0。`st` 的单段 bundle ID 会被作为真实应用身份观察和持久化；已有 `NativeSystemVisibility.plist` 的系统图标记录保持不变。
+
+托盘点击已隐藏图标时，替换 assessment assertion 会保留当前 assertion 直到新的 allow-list 生效；新的 allow-list 只移除当前目标 bundle，其他隐藏应用不会因为一次临时显示而全部恢复。目标菜单关闭后再安装包含原隐藏集合的 assertion。
+
+该能力依赖 macOS 27 的系统行为，不能外推到旧版 macOS。assessment allow-list 是应用级状态，不能替代系统模块的独立控制；时钟、通知中心等其他系统项目仍受其自身实现和系统 UI 限制。项目发行版继续使用自签名身份，本文实机证据不构成 Apple 公证或 Intel 桌面验收。
