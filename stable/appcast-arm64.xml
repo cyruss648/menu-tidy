@@ -6,24 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.6.18</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.18</link>
-      <pubDate>Thu, 29 Oct 2026 02:28:31 +0000</pubDate>
-      <sparkle:version>74</sparkle:version>
-      <sparkle:shortVersionString>0.6.18</sparkle:shortVersionString>
+      <title>Menu Tidy 0.6.19</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.19</link>
+      <pubDate>Thu, 29 Oct 2026 07:57:03 +0000</pubDate>
+      <sparkle:version>75</sparkle:version>
+      <sparkle:shortVersionString>0.6.19</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="plain-text">## [0.6.18] - 2026-10-29
+      <description sparkle:format="plain-text">## [0.6.19] - 2026-10-29
 
-为托盘图标图像增加跨重启持久化缓存，减少 Menu Tidy 重启后托盘图标暂时没有图像的问题。
+修复 macOS 27 上“更新原始图标图像”无法采集被 Menu Tidy 原生隐藏的第三方托盘图标的问题。
 
-- 将经过图标身份和可见性核验的原始托盘图像以 PNG 保存到用户的 `Application Support/Menu Tidy/Icon Images/v1`，同时保存图标身份、所属应用、尺寸、屏幕布局、外观和时间等校验信息。
-- 启动和打开托盘时先恢复仍能唯一对应到当前图标的缓存图像，再继续扫描和异步重新采集；实时采集成功后更新磁盘缓存。
-- 进程重启、PID 重用、所属应用变化、图标尺寸变化、屏幕或外观变化、缓存损坏及超过 90 天的记录都会拒绝或清理旧图像；无法唯一识别的临时图标不跨重启绑定。
-- 图像缓存与分类规则、草稿和原生托盘选择分开保存，缓存写入失败不会影响已有分类或当前运行中的图像显示。
-- 增加图像 PNG 重载、身份/尺寸/环境失效回归测试。
+- 原生隐藏的应用图标按应用逐个临时显示、重新扫描、核验并截图，完成后立即恢复隐藏状态，避免其他隐藏图标残留的 AX 宿主几何遮蔽当前目标。
+- 对临时显示期间仍被 MenuBarAgent 保留旧宿主区域的应用，使用经过完整来源枚举、进程身份和连续稳定 frame 校验的原始 AX frame；不会把普通可见性检查的严格绑定规则放宽到其他场景。
+- 截图前后继续校验 Bundle ID、PID、启动时间、尺寸、显示器和图标归属；缓存恢复也拒绝进程重启、PID 重用或应用身份不一致的图像。
+- 增加副屏坐标选择、原生临时显示采集、Bundle ID 绑定和操作预算回归覆盖；图像刷新预算提高到 90 秒以容纳完整托盘逐项恢复流程。
 
-验证：完整检查通过 511 项核心 Swift 测试、120 项应用集成测试、96 项 Python 回归及 warnings-as-errors 构建。该版本沿用项目自签名发行身份，未经 Apple 公证；真实第三方托盘图标和旧版 macOS、Intel 桌面仍需独立验收。
+验证：完整检查通过 513 项核心 Swift 测试、120 项应用集成测试、96 项 Python 回归及 warnings-as-errors 构建；双屏窗口测试在当前单屏环境跳过 2 项。该版本沿用项目自签名发行身份，未经 Apple 公证；最终真实 Clash Verge 采集和旧版 macOS、Intel 桌面仍需独立验收。
 
 ### 软件内更新与首次安装
 
@@ -35,8 +34,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.6.18-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.6.18-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.6.19-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.6.19-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -59,12 +58,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.18/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.18/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.18/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.19/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.19/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.19/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.18/Menu-Tidy-0.6.18-macos-arm64.zip" length="3935889" type="application/octet-stream" sparkle:edSignature="TDtN3uBwXn7g1XrqZ4AheS6/aQ4XuRpJ8n0wIhV3aJLhFp0j0YlknSjKQm/nCW1x/LX/J0VKdmTiRG4957lAAg=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.19/Menu-Tidy-0.6.19-macos-arm64.zip" length="3961018" type="application/octet-stream" sparkle:edSignature="4kkPEf0cUnQpPWcHje74PbpMG3XYAv17WiVYLuHL9S4qamjPb+n8NkSOwhAXIqe8gThyHSty6RMa7ojAZKn8DQ=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: e07dNHKGtEuxSjPoqsADNwHmxSTl163x5UU34trJz7+AYr36+Ce+tvkBfb4O8/gcZ596dDncwh4oA/yVzO8lDQ==
-length: 6229
+edSignature: JP1kK+NTzPZWmY0XksmJlb3MAqvFRIBx8ZRvLRfydKQYdABhD9yLmgBe5pccBmlxZqgQBEOb/Opbjs3oTtsLAA==
+length: 6241
 -->
