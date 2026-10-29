@@ -38,7 +38,7 @@ final class ManagementOperationStateTests: XCTestCase {
 
     func testForegroundBudgetsRemainBoundedForLargeOrInvalidItemCounts() {
         XCTAssertEqual(ManagementOperationKind.refresh.timeLimit(itemCount: 1_000), 6)
-        XCTAssertEqual(ManagementOperationKind.refreshImages.timeLimit(itemCount: 1_000), 30)
+        XCTAssertEqual(ManagementOperationKind.refreshImages.timeLimit(itemCount: 1_000), 90)
         XCTAssertEqual(ManagementOperationKind.apply.timeLimit(itemCount: -1), 12)
         XCTAssertEqual(ManagementOperationKind.apply.timeLimit(itemCount: 4), 14)
         XCTAssertEqual(ManagementOperationKind.apply.timeLimit(itemCount: 1_000), 20)

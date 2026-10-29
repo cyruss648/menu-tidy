@@ -223,6 +223,11 @@ final class MenuTidyModel: ObservableObject {
     /// Explicit image refresh temporarily changes managed weights without
     /// changing the accepted classification or its original evidence.
     private var isRefreshingManagedIcons = false
+    /// Native macOS 27 image refresh temporarily reveals application-scoped
+    /// targets. Keep their prior evidence while the AX inventory is visible;
+    /// the reveal is presentation-only and must not turn a confirmed hidden
+    /// item into an unclassified row.
+    private var isRefreshingNativeIcons = false
     private var needsPositionRevalidation = false { didSet { rescheduleMaintenanceTimer() } }
     private var positionRecoveryGeneration = 0
     var usesPositionHiding: Bool {
@@ -1576,7 +1581,10 @@ final class MenuTidyModel: ObservableObject {
                         try await self.scanNow()
                         completedScans += 1
                     }
-                    do { try await self.prepareIconImages() }
+                    do {
+                        let issues = try await self.refreshHiddenNativeIconImagesIfNeeded()
+                        inventoryIssues.append(contentsOf: issues)
+                    }
                     catch {
                         try self.checkImageRefreshCancellation(error)
                         inventoryIssues.append("采集图标图像：\(error.localizedDescription)")
@@ -4117,22 +4125,202 @@ final class MenuTidyModel: ObservableObject {
     }
 
     @discardableResult
-    private func prepareIconImages() async throws -> Set<String> {
+    private func prepareIconImages(for target: NativeVisibilityTarget? = nil) async throws -> Set<String> {
         defer { recomputeIconImageWarning() }
         cancelPassiveIconCapture()
         await passiveIconCaptureTask?.value
         try Task.checkCancellation()
-        try await iconCapture.refreshBindings(snapshots: snapshots)
+        // A native target is captured by direct screen-region requests after
+        // its assessment assertion has been confirmed. ScreenCaptureKit's
+        // independent status-item window inventory is often empty on macOS
+        // 27, and it is unnecessary for the direct region path. Keep the
+        // window binding refresh for ordinary visible/panel capture.
+        if target == nil { try await iconCapture.refreshBindings(snapshots: snapshots) }
         var confirmed: [MenuBarItemSnapshot] = []
-        for item in snapshots where item.canMove && item.hasReliableGeometry && item.ownIdentifier == nil {
+        for item in snapshots where item.canMove && item.ownIdentifier == nil {
             try Task.checkCancellation()
-            let inspection = await access.inspectVisibility(id: item.id)
-            if inspection.centerHit && inspection.frame == item.frame { confirmed.append(item) }
+            if let target, await nativeTarget(for: item) != target { continue }
+            let targetIsRevealed = target.map(nativeTargetIsRevealed) ?? false
+            let canUseRevealedOrigin = targetIsRevealed && target.map {
+                if case .application = $0 { return true }
+                return false
+            } == true
+            let inspection = await access.inspectVisibility(id: item.id,
+                allowUnresolvedOrigin: canUseRevealedOrigin)
+            let frameMatchesSnapshot = inspection.frame == item.frame
+            let candidate: MenuBarItemSnapshot
+            if item.hasReliableGeometry && frameMatchesSnapshot {
+                candidate = item
+            } else if targetIsRevealed, let frame = inspection.frame,
+                      canUseRevealedOrigin || inspection.centerHit {
+                // The host mirror may still expose another application's old
+                // rectangle. Use the current target origin only after the
+                // native reveal has been confirmed and the live AX owner has
+                // supplied a valid menu-bar frame.
+                candidate = snapshotForVerifiedIconCapture(item, frame: frame)
+            } else {
+                let targetDescription = target.map { self.nativeTargetDescription($0) } ?? "visible"
+                Self.diagnosticLogger.notice("nativeIconImageCandidate selected=false target=\(targetDescription, privacy: .public) reliable=\(item.hasReliableGeometry) hasEntry=\(inspection.hasEntry) hasFrame=\(inspection.hasFrame) centerHit=\(inspection.centerHit) frameMatches=\(frameMatchesSnapshot)")
+                continue
+            }
+            var nativeRevealConfirmed = false
+            if let target, targetIsRevealed {
+                nativeRevealConfirmed = await nativeTargetHasUniqueVisibleOwner(target, item: candidate)
+            }
+            let centerConfirmed = inspection.centerHit && inspection.frame == candidate.frame
+            let targetDescription = target.map { self.nativeTargetDescription($0) } ?? "visible"
+            Self.diagnosticLogger.notice("nativeIconImageCandidate selected=\(centerConfirmed || nativeRevealConfirmed) target=\(targetDescription, privacy: .public) reliable=\(item.hasReliableGeometry) hasEntry=\(inspection.hasEntry) hasFrame=\(inspection.hasFrame) centerHit=\(inspection.centerHit) frameMatches=\(frameMatchesSnapshot) nativeReveal=\(nativeRevealConfirmed) frame=\(NSStringFromRect(candidate.frame), privacy: .public)")
+            if centerConfirmed || nativeRevealConfirmed {
+                confirmed.append(candidate)
+            }
         }
         guard !confirmed.isEmpty else { return [] }
-        let verified = try await captureAndVerifyIconImages(confirmed)
+        let nativeRevealTargets = target.map { Set([$0]) } ?? []
+        let verified = try await captureAndVerifyIconImages(confirmed,
+            nativeRevealTargets: nativeRevealTargets)
         panelError = nil
+        let targetDescription = target.map(nativeTargetDescription) ?? "visible"
+        Self.diagnosticLogger.notice("nativeIconImageCapture target=\(targetDescription, privacy: .public) candidates=\(confirmed.count) captured=\(verified.count)")
         return verified
+    }
+
+    /// A hidden native application can leave an old AX host rectangle behind
+    /// while its replacement is being revealed. A strict center hit may then
+    /// identify that stale hidden sibling even though the target's assessment
+    /// assertion is active. Trust the native visibility result only when the
+    /// target frame is still exact and no other managed target that is allowed
+    /// to be visible overlaps its center.
+    private func nativeTargetHasUniqueVisibleOwner(_ target: NativeVisibilityTarget,
+                                                    item: MenuBarItemSnapshot) async -> Bool {
+        guard nativeTargetIsRevealed(target), (try? nativeAllowed(target)) == true,
+              item.processIdentifier > 0,
+              let identity = observedItemIdentity(item), ownerIsCurrent(identity) else { return false }
+        if case .application(let bundle) = target, item.bundleIdentifier != bundle { return false }
+        let center = CGPoint(x: item.frame.midX, y: item.frame.midY)
+        for other in snapshots where other.id != item.id && other.canMove &&
+            other.hasReliableGeometry && other.ownIdentifier == nil {
+            let intersection = other.frame.intersection(item.frame)
+            let overlaps = other.frame.contains(center) ||
+                (!intersection.isNull && intersection.width * intersection.height > 0)
+            guard overlaps, let otherTarget = await nativeTarget(for: other), otherTarget != target,
+                  nativeTargetIsManaged(otherTarget), (try? nativeAllowed(otherTarget)) == true else { continue }
+            return false
+        }
+        return true
+    }
+
+    private func nativeTargetDescription(_ target: NativeVisibilityTarget) -> String {
+        switch target {
+        case .application(let bundle): return "application:\(bundle)"
+        case .system(let key): return "system:\(key)"
+        }
+    }
+
+    /// Native macOS 27 hiding removes an application from the physical menu
+    /// bar. A screenshot refresh therefore has to reveal the applications that
+    /// Menu Tidy already owns, capture their verified visible frames, and
+    /// restore the exact hidden state before returning to the normal scan.
+    /// Persistent choices and recovery journals remain owned by the existing
+    /// native stores throughout this operation.
+    private func refreshHiddenNativeIconImagesIfNeeded() async throws -> [String] {
+        guard usesNativeVisibility else {
+            _ = try await prepareIconImages()
+            return []
+        }
+
+        let counts = Dictionary(grouping: snapshots, by: \.id).mapValues(\.count)
+        var targets = Set<NativeVisibilityTarget>()
+        // A native application choice can be present without a current AX
+        // snapshot: the assessment backend deliberately removes a hidden app
+        // from the physical menu bar. Use the persisted application-level
+        // choice as the source of truth, then let the post-reveal discovery
+        // scan find its fresh item identity.
+        for (bundle, group) in nativeTrayChoices.choices where group == .collapsible || group == .alwaysHidden {
+            let target = NativeVisibilityTarget.application(bundle: bundle)
+            guard nativeTargetIsManaged(target) else { continue }
+            targets.insert(target)
+        }
+        // Include managed system targets and any legacy item-backed target
+        // whose native application choice has not yet been migrated.
+        for item in snapshots where counts[item.id] == 1 && item.canMove && item.ownIdentifier == nil {
+            let group = trayPlacementGroup(id: item.id)
+            guard group == .collapsible || group == .alwaysHidden,
+                  let target = await nativeTarget(for: item), nativeTargetIsManaged(target) else { continue }
+            targets.insert(target)
+        }
+
+        var revealed: [NativeVisibilityTarget] = []
+        var issues: [String] = []
+        var captureError: Error?
+        var restoreError: Error?
+        var needsFinalScan = false
+        isRefreshingNativeIcons = true
+        defer { isRefreshingNativeIcons = false }
+        do {
+            // Refresh targets that are already visible first. Hidden native
+            // targets are handled one at a time below so a stale AX rectangle
+            // from another hidden application cannot make their screenshot
+            // identity ambiguous.
+            do { _ = try await prepareIconImages() }
+            catch {
+                try checkImageRefreshCancellation(error)
+                issues.append("采集当前可见图标失败：\(error.localizedDescription)")
+            }
+            for target in targets {
+                try checkImageRefreshCancellation()
+                try checkOperationDeadline()
+                do {
+                    try await temporarilyRevealNativeTarget(target)
+                    revealed.append(target)
+                    needsFinalScan = true
+                    // Replacing the assessment assertion for one application
+                    // at a time lets MenuBarAgent lay out a unique, hittable
+                    // AX item. Revealing every hidden application together can
+                    // leave stale AX rectangles overlapping a visible item;
+                    // identity validation must reject that ambiguity.
+                    try await Task.sleep(for: .milliseconds(300))
+                    try await scanNow(discover: true)
+                    let captured = try await prepareIconImages(for: target)
+                    Self.diagnosticLogger.notice("nativeIconImageRefresh target=\(self.nativeTargetDescription(target), privacy: .public) targetReady=true captured=\(captured.count)")
+                } catch {
+                    try checkImageRefreshCancellation(error)
+                    issues.append("临时显示已管理的隐藏图标失败：\(error.localizedDescription)")
+                }
+
+                // Rehide immediately after this target's capture so the next
+                // target does not reintroduce the same overlap. The outer
+                // cleanup below still covers cancellation or an interrupted
+                // rehide call.
+                if revealed.contains(target) {
+                    do {
+                        try rehideNativeTarget(target)
+                        revealed.removeAll { $0 == target }
+                        if usesNativeAssessment { try await nativeAssessmentStore.waitForPendingActivation() }
+                        try await scanNow(discover: true)
+                    } catch {
+                        if restoreError == nil { restoreError = error }
+                    }
+                }
+            }
+        } catch {
+            captureError = error
+        }
+
+        for target in revealed.reversed() {
+            do { try rehideNativeTarget(target) }
+            catch { if restoreError == nil { restoreError = error } }
+        }
+        if usesNativeAssessment {
+            do { try await nativeAssessmentStore.waitForPendingActivation() }
+            catch { if restoreError == nil { restoreError = error } }
+        }
+        if needsFinalScan {
+            do { try await scanNow(discover: true) }
+            catch { if restoreError == nil { restoreError = error } }
+        }
+        if let restoreError { throw restoreError }
+        if let captureError { throw captureError }
+        return issues
     }
 
     private func snapshotForVerifiedIconCapture(_ item: MenuBarItemSnapshot, frame: CGRect) -> MenuBarItemSnapshot {
@@ -4143,7 +4331,8 @@ final class MenuTidyModel: ObservableObject {
             presentationIdentity: item.presentationIdentity)
     }
 
-    private func captureAndVerifyIconImages(_ confirmed: [MenuBarItemSnapshot]) async throws -> Set<String> {
+    private func captureAndVerifyIconImages(_ confirmed: [MenuBarItemSnapshot],
+                                            nativeRevealTargets: Set<NativeVisibilityTarget> = []) async throws -> Set<String> {
         let requested = Set(confirmed.map(\.id))
         let checkpoint = try iconCapture.beginVisibleCaptureValidation(ids: Array(requested))
         var invalid = requested
@@ -4156,8 +4345,24 @@ final class MenuTidyModel: ObservableObject {
         // verification before propagating a later cancellation; never discard
         // every old, valid cache entry just because a refresh was cancelled.
         for item in confirmed where captured[item.id] != nil {
-            let inspection = await access.inspectVisibility(id: item.id)
-            if inspection.centerHit && inspection.frame == item.frame { invalid.remove(item.id) }
+            var nativeTarget: NativeVisibilityTarget?
+            for target in nativeRevealTargets where await self.nativeTarget(for: item) == target {
+                nativeTarget = target
+                break
+            }
+            let allowUnresolvedOrigin = nativeTarget.map {
+                if case .application = $0 { return true }
+                return false
+            } == true
+            let inspection = await access.inspectVisibility(id: item.id,
+                allowUnresolvedOrigin: allowUnresolvedOrigin)
+            var nativeRevealConfirmed = false
+            if let nativeTarget {
+                nativeRevealConfirmed = await nativeTargetHasUniqueVisibleOwner(nativeTarget, item: item)
+            }
+            if (inspection.centerHit || nativeRevealConfirmed) && inspection.frame == item.frame {
+                invalid.remove(item.id)
+            }
         }
         let verifiedIDs = Set(captured.keys).subtracting(invalid)
         Self.diagnosticLogger.notice("iconImages postCaptureVerified=\(verifiedIDs.count) discarded=\(invalid.count)")
@@ -5554,7 +5759,9 @@ private extension MenuTidyModel {
             }
             guard let allowed = try? nativeAllowed(target) else { continue }
             if nativeTargetIsRevealed(target) {
-                if isActivatingPanelItem && evidence.group != .visible { confirmed[id] = evidence }
+                if (isActivatingPanelItem || isRefreshingNativeIcons) && evidence.group != .visible {
+                    confirmed[id] = evidence
+                }
             } else if allowed == (evidence.group == .visible) { confirmed[id] = evidence }
         }
         // Positive-only checks above can suspend. Catch a departure during

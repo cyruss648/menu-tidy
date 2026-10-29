@@ -2334,7 +2334,13 @@ actor MenuBarAccessibility {
     }
 
     /// Does not rescan, open overflow, alter layout, or synthesize input.
-    func inspectVisibility(id: String) -> MenuBarVisibilityInspection {
+    ///
+    /// A temporarily revealed application on macOS 27 can have a valid
+    /// originating AX frame while its MenuBarAgent mirror is still carrying a
+    /// stale binding. The caller may opt into that raw-origin geometry only
+    /// for an already authenticated native reveal; ordinary visibility checks
+    /// remain strict and continue to require the bound host frame.
+    func inspectVisibility(id: String, allowUnresolvedOrigin: Bool = false) -> MenuBarVisibilityInspection {
         guard let entry = entries[id] else {
             return MenuBarVisibilityInspection(frame: nil, centerHit: false, hasEntry: false)
         }
@@ -2343,6 +2349,11 @@ actor MenuBarAccessibility {
             return MenuBarVisibilityInspection(frame: nil, centerHit: false, hasEntry: true)
         }
         guard let rect = entryFrame(entry) else {
+            if allowUnresolvedOrigin, let raw = revealedOriginFrame(entry) {
+                let hit = sourceMatchesHitTest(entry.element,
+                    at: CGPoint(x: raw.midX, y: raw.midY), context: "native-reveal-origin")
+                return MenuBarVisibilityInspection(frame: raw, centerHit: hit, hasEntry: true)
+            }
             let raw = verifiedRawOriginVisibility(entry, diagnostic: true)
             return raw.centerHit ? raw : (verifiedSystemModuleVisibility(entry) ?? raw)
         }
@@ -2360,6 +2371,32 @@ actor MenuBarAccessibility {
             recordVisibleSystemModule(entry)
         }
         return MenuBarVisibilityInspection(frame: rect, centerHit: hit, hasEntry: true)
+    }
+
+    /// Return only the current originating application's small menu-bar frame
+    /// after a complete source census. This deliberately ignores any retained
+    /// MenuBarAgent host rectangle, including a host binding that is still
+    /// structurally present but points at a stale neighboring item.
+    private func revealedOriginFrame(_ entry: Entry) -> CGRect? {
+        guard entry.hostPresentation == nil || entry.hostGeometryUnresolved,
+              let bundle = entry.owner.bundleIdentifier,
+              bundle != Bundle.main.bundleIdentifier,
+              !bundle.lowercased().hasPrefix("com.apple."),
+              liveOwnerMatches(entry) else { return nil }
+        do {
+            let sources = try positionSourceItems(for: entry, id: entry.snapshot.id)
+            guard sources.filter({ CFEqual($0, entry.element) }).count == 1 else { return nil }
+            var budget = MirrorReadBudget()
+            let role = mirrorText(entry.element, kAXRoleAttribute, budget: &budget)
+            guard role == kAXMenuBarItemRole || role == kAXButtonRole,
+                let first = mirrorFrame(entry.element, budget: &budget),
+                validHostFrame(first, identifier: entry.accessibilityIdentifier),
+                let second = mirrorFrame(entry.element, budget: &budget),
+                second == first, budget.isValid, liveOwnerMatches(entry) else { return nil }
+            return first
+        } catch {
+            return nil
+        }
     }
 
     /// A stale remote-host projection cannot invalidate an independent direct

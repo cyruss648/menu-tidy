@@ -1,6 +1,22 @@
 import Foundation
 
 public enum MenuBarCaptureGeometry {
+    /// Select the display that owns a menu-bar item. AX and ScreenCaptureKit
+    /// report global coordinates, so the first AppKit screen is not a safe
+    /// default when the item is on a secondary display.
+    public static func displayBounds(containing frame: CGRect, candidates: [CGRect]) -> CGRect? {
+        guard [frame.origin.x, frame.origin.y, frame.width, frame.height].allSatisfy(\.isFinite),
+              frame.width > 0, frame.height > 0 else { return nil }
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        if let containing = candidates.first(where: { $0.contains(center) }) { return containing }
+        return candidates
+            .filter { $0.intersection(frame).isNull == false }
+            .max { lhs, rhs in
+                lhs.intersection(frame).width * lhs.intersection(frame).height <
+                    rhs.intersection(frame).width * rhs.intersection(frame).height
+            }
+    }
+
     /// AX host containers may extend one point below the actual menu band.
     /// Keep identity verification on the original frame; capture only the band.
     public static func captureRectangle(for frame: CGRect, band: CGRect, display: CGRect) -> CGRect? {

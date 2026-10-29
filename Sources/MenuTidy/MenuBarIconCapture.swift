@@ -250,6 +250,7 @@ final class MenuBarIconCapture {
                 images[id] = result
                 if let item = snapshotsByID[id],
                    let owner = NSRunningApplication(processIdentifier: item.processIdentifier), !owner.isTerminated,
+                   owner.bundleIdentifier == item.bundleIdentifier,
                    let launchTime = MenuBarProcessIdentity.launchTime(for: owner), launchTime.isFinite, launchTime > 0 {
                     pendingCache[id] = CachedIcon(image: result, ownerPID: item.processIdentifier,
                         ownerLaunchTime: launchTime, date: Date(),
@@ -303,6 +304,7 @@ final class MenuBarIconCapture {
                 guard Self.isVisibleMenuBarRectangle(captureRect),
                       matches,
                       let owner = NSRunningApplication(processIdentifier: item.processIdentifier), !owner.isTerminated,
+                      owner.bundleIdentifier == item.bundleIdentifier,
                       let launchTime = MenuBarProcessIdentity.launchTime(for: owner), launchTime.isFinite, launchTime > 0 else { continue }
                 let result = MenuBarIconImage.make(from: image, size: captureRect.size)
                 pendingCache[item.id] = CachedIcon(image: result, ownerPID: item.processIdentifier,
@@ -367,6 +369,7 @@ final class MenuBarIconCapture {
             guard cachedIcons[item.id] == nil,
                   let key = Self.persistentCacheKey(for: item, presentationCounts: presentationCounts),
                   let owner = NSRunningApplication(processIdentifier: item.processIdentifier), !owner.isTerminated,
+                  owner.bundleIdentifier == item.bundleIdentifier,
                   let launchTime = MenuBarProcessIdentity.launchTime(for: owner), launchTime.isFinite, launchTime > 0,
                   let loaded = persistentCache.load(key: key, bundleIdentifier: item.bundleIdentifier,
                       logicalSize: item.frame.size, environmentSignature: environmentSignature) else { continue }
@@ -482,7 +485,8 @@ final class MenuBarIconCapture {
 
     private static func ownerIsRunning(_ cached: CachedIcon) -> Bool {
         guard let owner = NSRunningApplication(processIdentifier: cached.ownerPID), !owner.isTerminated else { return false }
-        return MenuBarProcessIdentity.launchTime(for: owner) == cached.ownerLaunchTime
+        return owner.bundleIdentifier == cached.bundleIdentifier &&
+            MenuBarProcessIdentity.launchTime(for: owner) == cached.ownerLaunchTime
     }
 
     private static func imageMatchesRectangle(_ image: CGImage, size: CGSize) -> Bool {
@@ -501,10 +505,20 @@ final class MenuBarIconCapture {
     }
 
     private static func visibleCaptureRectangle(_ frame: CGRect) -> CGRect? {
-        guard isSmallFrame(frame), let screen = NSScreen.screens.first,
-              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
-        let bounds = CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
-        let height = min(64, max(28, screen.safeAreaInsets.top, NSStatusBar.system.thickness))
+        guard isSmallFrame(frame) else { return nil }
+        let displayCandidates = NSScreen.screens.compactMap { screen -> (bounds: CGRect, safeAreaTop: CGFloat)? in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+            let bounds = CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+            return bounds.width > 0 && bounds.height > 0 ? (bounds, screen.safeAreaInsets.top) : nil
+        }
+        guard let selected = MenuBarCaptureGeometry.displayBounds(containing: frame,
+                                                                  candidates: displayCandidates.map(\.bounds)) else {
+            Self.logger.debug("iconSnapshot rejectedDisplay frame=\(NSStringFromRect(frame), privacy: .public)")
+            return nil
+        }
+        let safeAreaTop = displayCandidates.first(where: { $0.bounds == selected })?.safeAreaTop ?? 0
+        let height = min(64, max(28, safeAreaTop, NSStatusBar.system.thickness))
+        let bounds = selected
         let band = CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: height)
         return MenuBarCaptureGeometry.captureRectangle(for: frame, band: band, display: bounds)
     }

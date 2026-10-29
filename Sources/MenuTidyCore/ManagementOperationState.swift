@@ -23,7 +23,12 @@ public enum ManagementOperationKind: Sendable {
     public func timeLimit(itemCount: Int) -> TimeInterval {
         switch self {
         case .refresh: 6
-        case .refreshImages: 30
+        // Native macOS 27 hides application status items one target at a time
+        // during an image refresh. Each target needs an assessment update, an
+        // AX rescan, a direct screenshot, and a restoring update. Keep the
+        // operation bounded, but allow a normal inventory of a full tray to
+        // finish instead of expiring halfway through the target list.
+        case .refreshImages: 90
         case .apply: min(20, max(12, 8 + Double(max(0, itemCount)) * 1.5))
         }
     }
