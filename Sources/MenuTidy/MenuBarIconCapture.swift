@@ -5,7 +5,8 @@ import MenuTidyCore
 @preconcurrency import ScreenCaptureKit
 
 /// Prefers independent status-item windows, with explicit visible-icon snapshots
-/// as an in-memory compatibility path. Never captures a full display or app.
+/// as a verified in-memory and disposable on-disk compatibility path. Never
+/// captures a full display or app.
 @MainActor
 final class MenuBarIconCapture {
     enum CaptureError: LocalizedError {
@@ -38,6 +39,9 @@ final class MenuBarIconCapture {
         let ownerPID: pid_t
         let ownerLaunchTime: TimeInterval
         let date: Date
+        let persistentKey: String?
+        let bundleIdentifier: String?
+        let logicalSize: CGSize
     }
 
     struct CacheCheckpoint {
@@ -56,6 +60,7 @@ final class MenuBarIconCapture {
     }
 
     private static let logger = Logger(subsystem: "dev.hdh.MenuTidy", category: "IconCapture")
+    private let persistentCache: MenuBarIconPersistentCache
     private var bindings: [String: Binding] = [:]
     private var cachedIcons: [String: CachedIcon] = [:]
     private var cacheEnvironment: String?
@@ -65,6 +70,10 @@ final class MenuBarIconCapture {
     private var generation = 0
     private(set) var usesCachedImages = false
     private(set) var lastCacheDate: Date?
+
+    init(cacheDirectory: URL? = nil) {
+        persistentCache = MenuBarIconPersistentCache(directory: cacheDirectory)
+    }
 
     /// Keep the last verified image until the caller's post-capture AX checks
     /// accept its replacement. Checkpoints never leave memory or cross owners.
@@ -96,6 +105,7 @@ final class MenuBarIconCapture {
     /// screenshot or treating a potential live window binding as an image.
     func availableCachedImageIDs(matching snapshots: [MenuBarItemSnapshot]? = nil) throws -> Set<String> {
         try validateCaptureState()
+        if let snapshots { restorePersistentImages(matching: snapshots) }
         cachedIcons = cachedIcons.filter { Self.ownerIsRunning($0.value) }
         updateLastCacheDate()
         guard let snapshots else { return Set(cachedIcons.keys) }
@@ -120,6 +130,7 @@ final class MenuBarIconCapture {
     func refreshBindings(snapshots: [MenuBarItemSnapshot]) async throws {
         guard #available(macOS 14.0, *) else { throw CaptureError.unsupportedSystem }
         try validateCaptureState()
+        restorePersistentImages(matching: snapshots)
         generation += 1
         let currentGeneration = generation
         bindings.removeAll()
@@ -170,7 +181,7 @@ final class MenuBarIconCapture {
         }
     }
 
-    func capture(ids: [String]) async throws -> [String: NSImage] {
+    func capture(ids: [String], snapshots: [MenuBarItemSnapshot]) async throws -> [String: NSImage] {
         guard #available(macOS 14.0, *) else { throw CaptureError.unsupportedSystem }
         try validateCaptureState()
         cachedIcons = cachedIcons.filter { Self.ownerIsRunning($0.value) }
@@ -198,6 +209,9 @@ final class MenuBarIconCapture {
         }
         try validateCaptureState(generation: currentGeneration)
         var images: [String: NSImage] = [:]
+        var pendingCache: [String: CachedIcon] = [:]
+        let snapshotsByID = Dictionary(snapshots.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let presentationCounts = Self.presentationCounts(for: snapshots)
         var failed = 0
         for (id, binding) in selected {
             try validateCaptureState(generation: currentGeneration)
@@ -232,13 +246,25 @@ final class MenuBarIconCapture {
                     failed += 1
                     continue
                 }
-                images[id] = MenuBarIconImage.make(from: image, size: bounds.size)
+                let result = MenuBarIconImage.make(from: image, size: bounds.size)
+                images[id] = result
+                if let item = snapshotsByID[id],
+                   let owner = NSRunningApplication(processIdentifier: item.processIdentifier), !owner.isTerminated,
+                   let launchTime = MenuBarProcessIdentity.launchTime(for: owner), launchTime.isFinite, launchTime > 0 {
+                    pendingCache[id] = CachedIcon(image: result, ownerPID: item.processIdentifier,
+                        ownerLaunchTime: launchTime, date: Date(),
+                        persistentKey: Self.persistentCacheKey(for: item, presentationCounts: presentationCounts),
+                        bundleIdentifier: item.bundleIdentifier, logicalSize: bounds.size)
+                }
             } catch {
                 try validateCaptureFailure(error, generation: currentGeneration)
                 bindings.removeValue(forKey: id)
                 failed += 1
             }
         }
+        try validateCaptureState(generation: currentGeneration)
+        cachedIcons.merge(pendingCache) { _, new in new }
+        persist(pendingCache.values)
         return try completeCapture(liveImages: images, requested: requested, selectedCount: selected.count,
             failed: failed, generation: currentGeneration)
     }
@@ -251,6 +277,7 @@ final class MenuBarIconCapture {
         try validateCaptureState()
         let currentGeneration = generation
         let counts = Dictionary(grouping: snapshots, by: \.id).mapValues(\.count)
+        let presentationCounts = Self.presentationCounts(for: snapshots)
         var images: [String: NSImage] = [:]
         var pendingCache: [String: CachedIcon] = [:]
         var candidateOrdinal = 0
@@ -279,7 +306,9 @@ final class MenuBarIconCapture {
                       let launchTime = MenuBarProcessIdentity.launchTime(for: owner), launchTime.isFinite, launchTime > 0 else { continue }
                 let result = MenuBarIconImage.make(from: image, size: captureRect.size)
                 pendingCache[item.id] = CachedIcon(image: result, ownerPID: item.processIdentifier,
-                    ownerLaunchTime: launchTime, date: Date())
+                    ownerLaunchTime: launchTime, date: Date(),
+                    persistentKey: Self.persistentCacheKey(for: item, presentationCounts: presentationCounts),
+                    bundleIdentifier: item.bundleIdentifier, logicalSize: captureRect.size)
                 images[item.id] = result
             } catch {
                 try validateCaptureFailure(error, generation: currentGeneration)
@@ -304,8 +333,57 @@ final class MenuBarIconCapture {
         if cachedIcons.isEmpty { usesCachedImages = false }
     }
 
+    /// Persist only images that survived the caller's post-capture AX identity
+    /// check. A failed write never turns a successful live capture into an
+    /// operation failure; the memory cache remains authoritative for this run.
+    func persistVerifiedImages(ids: Set<String>, snapshots: [MenuBarItemSnapshot]) {
+        guard !ids.isEmpty else { return }
+        let presentationCounts = Self.presentationCounts(for: snapshots)
+        var values: [CachedIcon] = []
+        for item in snapshots where ids.contains(item.id) {
+            guard let cached = cachedIcons[item.id] else { continue }
+            let key = Self.persistentCacheKey(for: item, presentationCounts: presentationCounts)
+            if key != cached.persistentKey {
+                let adjusted = CachedIcon(image: cached.image, ownerPID: cached.ownerPID,
+                    ownerLaunchTime: cached.ownerLaunchTime, date: cached.date, persistentKey: key,
+                    bundleIdentifier: item.bundleIdentifier, logicalSize: cached.logicalSize)
+                cachedIcons[item.id] = adjusted
+                values.append(adjusted)
+            } else {
+                values.append(cached)
+            }
+        }
+        persist(values)
+    }
+
     private func updateLastCacheDate() {
         lastCacheDate = cachedIcons.values.map(\.date).max()
+    }
+
+    private func restorePersistentImages(matching snapshots: [MenuBarItemSnapshot]) {
+        guard let environmentSignature = cacheEnvironment else { return }
+        let presentationCounts = Self.presentationCounts(for: snapshots)
+        for item in snapshots where item.canMove && item.hasReliableGeometry && item.ownIdentifier == nil {
+            guard cachedIcons[item.id] == nil,
+                  let key = Self.persistentCacheKey(for: item, presentationCounts: presentationCounts),
+                  let owner = NSRunningApplication(processIdentifier: item.processIdentifier), !owner.isTerminated,
+                  let launchTime = MenuBarProcessIdentity.launchTime(for: owner), launchTime.isFinite, launchTime > 0,
+                  let loaded = persistentCache.load(key: key, bundleIdentifier: item.bundleIdentifier,
+                      logicalSize: item.frame.size, environmentSignature: environmentSignature) else { continue }
+            cachedIcons[item.id] = CachedIcon(image: loaded.image, ownerPID: item.processIdentifier,
+                ownerLaunchTime: launchTime, date: loaded.savedAt, persistentKey: key,
+                bundleIdentifier: item.bundleIdentifier, logicalSize: loaded.logicalSize)
+        }
+        updateLastCacheDate()
+    }
+
+    private func persist<S: Sequence>(_ values: S) where S.Element == CachedIcon {
+        guard let environmentSignature = cacheEnvironment else { return }
+        for cached in values {
+            guard let key = cached.persistentKey else { continue }
+            _ = persistentCache.save(image: cached.image, key: key, bundleIdentifier: cached.bundleIdentifier,
+                logicalSize: cached.logicalSize, environmentSignature: environmentSignature, savedAt: cached.date)
+        }
     }
 
     private func completeCapture(liveImages: [String: NSImage], requested: [String], selectedCount: Int,
@@ -358,6 +436,17 @@ final class MenuBarIconCapture {
         lastInventorySignature = nil
         environmentEpoch = UUID()
         generation += 1
+    }
+
+    private static func presentationCounts(for snapshots: [MenuBarItemSnapshot]) -> [String: Int] {
+        Dictionary(grouping: snapshots.compactMap { $0.presentationIdentity?.id }, by: { $0 }).mapValues(\.count)
+    }
+
+    private static func persistentCacheKey(for item: MenuBarItemSnapshot,
+                                           presentationCounts: [String: Int]) -> String? {
+        if item.persistentIdentity { return "persistent:\(item.id)" }
+        guard let presentationID = item.presentationIdentity?.id, presentationCounts[presentationID] == 1 else { return nil }
+        return "presentation:\(presentationID)"
     }
 
     private func logInventoryIfChanged(_ windows: [SCWindow]) {

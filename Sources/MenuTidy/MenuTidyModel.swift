@@ -4163,6 +4163,7 @@ final class MenuTidyModel: ObservableObject {
         Self.diagnosticLogger.notice("iconImages postCaptureVerified=\(verifiedIDs.count) discarded=\(invalid.count)")
         try Task.checkCancellation()
         guard !verifiedIDs.isEmpty else { throw MenuBarIconCapture.CaptureError.noCapturedImages }
+        iconCapture.persistVerifiedImages(ids: verifiedIDs, snapshots: confirmed)
         return verifiedIDs
     }
 
@@ -4202,7 +4203,7 @@ final class MenuTidyModel: ObservableObject {
                 try Task.checkCancellation()
                 while self.isPanelPresented && !Task.isCancelled {
                     let ids = self.panelItems.map(\.id)
-                    let images = try await self.iconCapture.capture(ids: ids)
+                    let images = try await self.iconCapture.capture(ids: ids, snapshots: self.snapshots)
                     try Task.checkCancellation()
                     let imagesChanged = self.setPanelImages(images)
                     let cacheStateChanged = self.panelLastCaptureDate != self.iconCapture.lastCacheDate ||
