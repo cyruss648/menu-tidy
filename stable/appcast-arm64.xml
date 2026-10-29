@@ -6,23 +6,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.6.17</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.17</link>
-      <pubDate>Thu, 29 Oct 2026 01:14:40 +0000</pubDate>
-      <sparkle:version>73</sparkle:version>
-      <sparkle:shortVersionString>0.6.17</sparkle:shortVersionString>
+      <title>Menu Tidy 0.6.18</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.6.18</link>
+      <pubDate>Thu, 29 Oct 2026 02:28:31 +0000</pubDate>
+      <sparkle:version>74</sparkle:version>
+      <sparkle:shortVersionString>0.6.18</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="plain-text">## [0.6.17] - 2026-10-29
+      <description sparkle:format="plain-text">## [0.6.18] - 2026-10-29
 
-修复 macOS 27 原生菜单栏显示断言在忘记应用或改变分类后残留的问题。
+为托盘图标图像增加跨重启持久化缓存，减少 Menu Tidy 重启后托盘图标暂时没有图像的问题。
 
-- 同步持久化分类与运行时 assessment ownership，移除已不再管理的应用。
-- 忘记应用成功保存后立即释放对应的原生 assertion，避免图标一直隐藏到 Menu Tidy 重启。
-- 没有隐藏目标时立即释放 assessment，其他隐藏应用和临时显示流程继续保持隔离。
-- 增加 ownership reconcile、断言释放和临时 reveal 的回归测试。
+- 将经过图标身份和可见性核验的原始托盘图像以 PNG 保存到用户的 `Application Support/Menu Tidy/Icon Images/v1`，同时保存图标身份、所属应用、尺寸、屏幕布局、外观和时间等校验信息。
+- 启动和打开托盘时先恢复仍能唯一对应到当前图标的缓存图像，再继续扫描和异步重新采集；实时采集成功后更新磁盘缓存。
+- 进程重启、PID 重用、所属应用变化、图标尺寸变化、屏幕或外观变化、缓存损坏及超过 90 天的记录都会拒绝或清理旧图像；无法唯一识别的临时图标不跨重启绑定。
+- 图像缓存与分类规则、草稿和原生托盘选择分开保存，缓存写入失败不会影响已有分类或当前运行中的图像显示。
+- 增加图像 PNG 重载、身份/尺寸/环境失效回归测试。
 
-验证：完整 gate 通过 511 项核心 Swift 测试、118 项应用集成测试、96 项 Python 回归及 warnings-as-errors 构建。macOS 27 Apple Silicon 已安装实机验证 Menu Tidy 权限、Clash Verge status item 和收起托盘恢复。沿用项目自签名发行身份，未经 Apple 公证；Intel 桌面、旧版 macOS 和其他系统模块需独立验收。
+验证：完整检查通过 511 项核心 Swift 测试、120 项应用集成测试、96 项 Python 回归及 warnings-as-errors 构建。该版本沿用项目自签名发行身份，未经 Apple 公证；真实第三方托盘图标和旧版 macOS、Intel 桌面仍需独立验收。
 
 ### 软件内更新与首次安装
 
@@ -34,8 +35,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.6.17-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.6.17-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.6.18-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.6.18-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -58,12 +59,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.17/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.17/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.17/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.6.18/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.6.18/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.6.18/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.17/Menu-Tidy-0.6.17-macos-arm64.zip" length="3893456" type="application/octet-stream" sparkle:edSignature="509ZOnD7rjf1idc7Q7QnhJFuvPvLExHmYGtZJK5wmJx73u/OOEk96BnlrTxEEfe3E5V2SquNQqm0FMn5EOJEDA=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.6.18/Menu-Tidy-0.6.18-macos-arm64.zip" length="3935889" type="application/octet-stream" sparkle:edSignature="TDtN3uBwXn7g1XrqZ4AheS6/aQ4XuRpJ8n0wIhV3aJLhFp0j0YlknSjKQm/nCW1x/LX/J0VKdmTiRG4957lAAg=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 6f1C3sDssF/FfvJDWwWQ98OD5CIwgVxZd/qtJg4srEWzzz61y6BpF/1HnlD6cAQ9w1hT8e8TslW/o55jXHr/AQ==
-length: 5842
+edSignature: e07dNHKGtEuxSjPoqsADNwHmxSTl163x5UU34trJz7+AYr36+Ce+tvkBfb4O8/gcZ596dDncwh4oA/yVzO8lDQ==
+length: 6229
 -->
