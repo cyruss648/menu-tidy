@@ -31,7 +31,8 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
             + TrayPanelLayout.chromeHeight
         let panel = IconPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.title = "Menu Tidy · 托盘"
+        let preferences = AppPreferences.shared
+        panel.title = preferences.localized("Menu Tidy · 托盘")
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -44,7 +45,9 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         let hostingView = NSHostingView(rootView: HiddenItemsPanelView(model: model,
             width: width, maximumGridHeight: maxGridHeight) { [weak self] height in
                 self?.scheduleResize(height: height, token: token, screen: screen)
-            })
+            }
+            .environment(\.locale, preferences.locale)
+            .preferredColorScheme(preferences.preferredColorScheme))
         // The controller owns the window size. Keep ideal-size measurement,
         // but prevent hosting's automatic min/max bounds from resizing it.
         hostingView.sizingOptions = [.intrinsicContentSize]

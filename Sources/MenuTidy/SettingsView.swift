@@ -5,9 +5,15 @@ import SwiftUI
 @MainActor
 final class SettingsViewState: ObservableObject {
     enum Page: String, CaseIterable, Identifiable {
-        case items = "托盘图标"
-        case settings = "权限与设置"
+        case items
+        case settings
         var id: String { rawValue }
+        var titleKey: LocalizedStringKey {
+            switch self {
+            case .items: "托盘图标"
+            case .settings: "权限与设置"
+            }
+        }
     }
     @Published var page: Page = .items
     @Published var traySearchText = ""
@@ -25,12 +31,13 @@ struct SettingsView: View {
     @ObservedObject var model: MenuTidyModel
     @ObservedObject var updates: UpdateController
     @ObservedObject var presentation: SettingsViewState
+    @ObservedObject var preferences: AppPreferences
     @State private var itemToForget: ManagedItemRow?
     @State private var draftToAssociate: PendingDraftRecord?
     @State private var associationTargetID = ""
     @State private var associationIssue: String?
 
-    private let accent = Color(red: 0.14, green: 0.55, blue: 0.50)
+    private let accent = Color(red: 0.33, green: 0.27, blue: 0.78)
     private typealias Page = SettingsViewState.Page
     private var isBusy: Bool { model.isRefreshing || model.isApplying || model.isActivatingPanelItem || model.isRecoveringPositions }
     private var groupingControlsDisabled: Bool { isBusy || model.isArranging }
@@ -84,7 +91,7 @@ struct SettingsView: View {
             header
             HStack {
                 Picker("页面", selection: $presentation.page) {
-                    ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(Page.allCases) { Text($0.titleKey).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -104,6 +111,8 @@ struct SettingsView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .tint(accent)
+        .environment(\.locale, preferences.locale)
+        .preferredColorScheme(preferences.preferredColorScheme)
         .frame(minWidth: 820, idealWidth: 960, maxWidth: .infinity,
                minHeight: 680, idealHeight: 740, maxHeight: .infinity)
         .sheet(item: $draftToAssociate) { draft in draftAssociationSheet(draft) }
@@ -124,27 +133,31 @@ struct SettingsView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: "line.3.horizontal.decrease")
-                .font(.system(size: 24, weight: .medium))
-                .foregroundStyle(accent)
-                .frame(width: 46, height: 46)
-                .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 13))
+            Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage())
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 52, height: 52)
+                .shadow(color: accent.opacity(0.24), radius: 10, y: 5)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(model.isUIPreview ? "Menu Tidy · 交互预览" : "Menu Tidy")
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
                 Text("常用图标留在菜单栏，其余收进箭头下方的托盘。")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
             Text(statusText)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(accent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(accent.opacity(0.10), in: Capsule())
             Button { model.toggleVisibility() } label: {
                 Label(model.isPanelPresented ? "收起托盘" : "打开托盘",
                       systemImage: model.isPanelPresented ? "chevron.up" : "chevron.down")
             }
+            .buttonStyle(.borderedProminent)
             .disabled(model.isRecoveringPositions || model.isArranging)
             .help("打开独立托盘后，点击其中的图标使用对应应用。后台更新列表时也可打开。")
         }
@@ -154,14 +167,15 @@ struct SettingsView: View {
     }
 
     private var statusText: String {
-        if model.operationCancellationRequested { return "正在安全停止…" }
-        if model.isRecoveringPositions { return model.usesNativeVisibility ? "正在恢复图标显示…" : "正在恢复排序…" }
-        if model.isApplying { return "正在调整图标…" }
-        if model.isRefreshing && model.isArranging { return "正在确认拖拽分组…" }
-        if model.isRefreshing { return "正在读取图标…" }
-        if model.isActivatingPanelItem { return "正在操作图标…" }
-        if model.isArranging { return "拖拽整理中" }
-        return model.isPanelPresented ? "托盘已打开" : "托盘已收起"
+        let copy = preferences.localized
+        if model.operationCancellationRequested { return copy("正在安全停止…") }
+        if model.isRecoveringPositions { return copy(model.usesNativeVisibility ? "正在恢复图标显示…" : "正在恢复排序…") }
+        if model.isApplying { return copy("正在调整图标…") }
+        if model.isRefreshing && model.isArranging { return copy("正在确认拖拽分组…") }
+        if model.isRefreshing { return copy("正在读取图标…") }
+        if model.isActivatingPanelItem { return copy("正在操作图标…") }
+        if model.isArranging { return copy("拖拽整理中") }
+        return copy(model.isPanelPresented ? "托盘已打开" : "托盘已收起")
     }
 
     /// Keep progress outside the scrolling list so that a long list never hides
@@ -895,6 +909,7 @@ struct SettingsView: View {
                 if model.nativeSystemVisibilityAccessNeeded { nativeSystemVisibilityAccessCard }
                 if showsPositionAccessCard { menuBarPositionAccessCard(compact: false) }
                 screenCapturePermissionCard
+                appearanceCard
                 VStack(alignment: .leading, spacing: 10) {
                     Text("使用偏好").font(.system(size: 13, weight: .semibold))
                     preferencesCard
@@ -913,6 +928,59 @@ struct SettingsView: View {
             }
             .padding(20)
         }
+    }
+
+    private var appearanceCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: "paintbrush.pointed.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(accent)
+                    .frame(width: 28, height: 28)
+                    .background(accent.opacity(0.11), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("外观与语言").font(.system(size: 14, weight: .semibold))
+                    Text("主题和界面语言会立即应用，并在下次启动后保留。")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            HStack(spacing: 12) {
+                appearanceOption(title: "主题", detail: "控制窗口、托盘和设置页的明暗模式") {
+                    Picker("主题", selection: $preferences.theme) {
+                        ForEach(AppPreferences.Theme.allCases) { theme in
+                            Label(theme.titleKey, systemImage: theme.symbol).tag(theme)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 150)
+                }
+                appearanceOption(title: "语言", detail: "目前支持简体中文和 English") {
+                    Picker("语言", selection: $preferences.language) {
+                        ForEach(AppPreferences.Language.allCases) { language in
+                            Text(language.titleKey).tag(language)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 150)
+                }
+            }
+        }
+        .padding(16)
+        .modifier(SettingsCardStyle())
+    }
+
+    private func appearanceOption<Control: View>(title: LocalizedStringKey, detail: LocalizedStringKey,
+                                                  @ViewBuilder control: () -> Control) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.system(size: 12, weight: .semibold))
+            Text(detail).font(.system(size: 10)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            control()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func permissionCard(compact: Bool) -> some View {
@@ -1281,10 +1349,11 @@ struct SettingsView: View {
 private struct SettingsCardStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(Color.primary.opacity(0.065), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.075), lineWidth: 1)
             }
+            .shadow(color: Color.black.opacity(0.05), radius: 10, y: 4)
     }
 }

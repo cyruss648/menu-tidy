@@ -53,8 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     // A minimized or hidden window is still open and must keep its Dock entry.
     private var settingsWindowIsOpen = false
     private let settingsPresentation = SettingsViewState()
+    private let appPreferences = AppPreferences.shared
     private var settingsReleaseTask: Task<Void, Never>?
     private var terminationTask: Task<Void, Never>?
+    private var preferencesObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         logLifecycle("didFinishLaunching")
@@ -71,6 +73,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model = MenuTidyModel()
         updates = UpdateController(model: model, enabled: !CommandLine.arguments.contains("--demo-items") && !model.isUIPreview)
         configureMainMenu()
+        preferencesObserver = NotificationCenter.default.addObserver(
+            forName: AppPreferences.didChangeNotification, object: appPreferences, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.configureMainMenu()
+                self?.applyWindowAppearance()
+            }
+        }
         model.onShowSettings = { [weak self] in self?.showSettings() }
         model.onMemoryPressure = { [weak self] in self?.releaseClosedSettingsContent() }
         model.start()
@@ -88,15 +98,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 740),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.minSize = NSSize(width: 820, height: 660)
-            window.title = model.isUIPreview ? "Menu Tidy · 独立交互预览（模拟数据）" : "Menu Tidy · 菜单栏整理"
+            window.title = model.isUIPreview
+                ? appPreferences.localized("Menu Tidy · 独立交互预览（模拟数据）")
+                : appPreferences.localized("Menu Tidy · 菜单栏整理")
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SettingsView(model: model, updates: updates, presentation: settingsPresentation))
+            window.contentView = NSHostingView(rootView: SettingsView(model: model, updates: updates,
+                presentation: settingsPresentation, preferences: appPreferences))
             window.delegate = self
             window.center()
             window.setFrameAutosaveName("MenuTidySettingsV2")
             settingsWindow = window
         }
+        applyWindowAppearance()
         settingsWindowIsOpen = true
         model.settingsVisible = true
         if NSApp.activationPolicy() != .regular {
@@ -190,42 +204,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         logLifecycle("applicationWillTerminate")
         settingsReleaseTask?.cancel()
         settingsReleaseTask = nil
+        preferencesObserver.map(NotificationCenter.default.removeObserver)
+        preferencesObserver = nil
         model?.stop()
     }
 
     private func configureMainMenu() {
+        let copy = appPreferences.localized
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem()
-        let applicationMenu = NSMenu(title: "Menu Tidy")
-        let settingsItem = NSMenuItem(title: "管理窗口…", action: #selector(showManagementWindow(_:)), keyEquivalent: ",")
+        let applicationMenu = NSMenu(title: copy("Menu Tidy"))
+        let settingsItem = NSMenuItem(title: copy("管理窗口…"), action: #selector(showManagementWindow(_:)), keyEquivalent: ",")
         settingsItem.target = self
         applicationMenu.addItem(settingsItem)
-        let updateItem = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates(_:)), keyEquivalent: "")
+        let updateItem = NSMenuItem(title: copy("检查更新…"), action: #selector(checkForUpdates(_:)), keyEquivalent: "")
         updateItem.target = self
         applicationMenu.addItem(updateItem)
         applicationMenu.addItem(.separator())
-        let hideItem = NSMenuItem(title: "隐藏 Menu Tidy", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideItem = NSMenuItem(title: copy("隐藏 Menu Tidy"), action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         hideItem.target = NSApp
         applicationMenu.addItem(hideItem)
-        let hideOthersItem = NSMenuItem(title: "隐藏其他", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        let hideOthersItem = NSMenuItem(title: copy("隐藏其他"), action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
         hideOthersItem.keyEquivalentModifierMask = [.command, .option]
         hideOthersItem.target = NSApp
         applicationMenu.addItem(hideOthersItem)
         applicationMenu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "退出 Menu Tidy", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: copy("退出 Menu Tidy"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quitItem.target = NSApp
         applicationMenu.addItem(quitItem)
         applicationItem.submenu = applicationMenu
         mainMenu.addItem(applicationItem)
 
         let windowItem = NSMenuItem()
-        let windowMenu = NSMenu(title: "窗口")
-        windowMenu.addItem(NSMenuItem(title: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
-        windowMenu.addItem(NSMenuItem(title: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        let windowMenu = NSMenu(title: copy("窗口"))
+        windowMenu.addItem(NSMenuItem(title: copy("最小化"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
+        windowMenu.addItem(NSMenuItem(title: copy("关闭窗口"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
         windowItem.submenu = windowMenu
         mainMenu.addItem(windowItem)
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
+    }
+
+    private func applyWindowAppearance() {
+        guard let settingsWindow else { return }
+        settingsWindow.title = model.isUIPreview
+            ? appPreferences.localized("Menu Tidy · 独立交互预览（模拟数据）")
+            : appPreferences.localized("Menu Tidy · 菜单栏整理")
+        if let name = appPreferences.theme.nsAppearanceName {
+            settingsWindow.appearance = NSAppearance(named: name)
+        } else {
+            settingsWindow.appearance = nil
+        }
     }
 
     @objc private func showManagementWindow(_ sender: Any?) {

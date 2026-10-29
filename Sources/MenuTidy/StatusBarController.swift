@@ -13,6 +13,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let alwaysDivider: NSStatusItem
     private var demoItems: [NSStatusItem] = []
     private var screenObserver: NSObjectProtocol?
+    private var preferencesObserver: NSObjectProtocol?
     private var lastScreenLayout: MenuBarScreenLayout?
     private var isCollapsed = false
     private var isArranging = false
@@ -34,6 +35,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         alwaysDivider = NSStatusBar.system.statusItem(withLength: MenuBarLayout.expandedLength)
         alwaysDivider.autosaveName = demoMode ? "DemoAlwaysDivider" : "MenuTidyAlwaysDivider"
         super.init()
+        preferencesObserver = NotificationCenter.default.addObserver(
+            forName: AppPreferences.didChangeNotification, object: AppPreferences.shared, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.apply(collapsed: self.isCollapsed, arranging: self.isArranging)
+            }
+        }
         control.behavior = []
         divider.behavior = []
         alwaysDivider.behavior = []
@@ -48,14 +57,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             button.title = ""
             button.target = self
             button.action = #selector(dividerClicked)
-            button.setAccessibilityLabel("Menu Tidy 收起区定位项")
+            button.setAccessibilityLabel(AppPreferences.shared.localized("Menu Tidy 收起区定位项"))
             button.setAccessibilityIdentifier("menu-tidy-divider")
         }
         if let button = alwaysDivider.button {
             button.title = ""
             button.target = self
             button.action = #selector(dividerClicked)
-            button.setAccessibilityLabel("Menu Tidy 常隐区定位项")
+            button.setAccessibilityLabel(AppPreferences.shared.localized("Menu Tidy 常隐区定位项"))
             button.setAccessibilityIdentifier("menu-tidy-always-divider")
         }
         if demoMode {
@@ -140,6 +149,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     func apply(collapsed: Bool, arranging: Bool) {
+        let copy = AppPreferences.shared.localized
         isCollapsed = collapsed
         isArranging = arranging
         restoreControlVisibility()
@@ -156,8 +166,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             temporarilyRevealingAll: model?.temporarilyRevealingAll ?? false)
         areGroupBoundariesExpanded = showsGroupBoundaries && !sections.collapseRegular && !sections.collapseAlways
         let font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        let regularTitle = "← 收起"
-        let alwaysTitle = "← 常隐"
+        let regularTitle = copy("← 收起")
+        let alwaysTitle = copy("← 常隐")
         func markerWidth(_ title: String) -> CGFloat {
             max(44, (title as NSString).size(withAttributes: [.font: font]).width + 12)
         }
@@ -171,41 +181,41 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         // Blank layout spacers are not undisclosed entry points. Only the
         // labelled markers in explicit arrangement mode accept clicks.
         divider.button?.isEnabled = arranging
-        divider.button?.toolTip = arranging ? "收起区边界：按住 ⌘ 拖动图标；点击完成拖拽并收起。" : nil
+        divider.button?.toolTip = arranging ? copy("收起区边界：按住 ⌘ 拖动图标；点击完成拖拽并收起。") : nil
         alwaysDivider.length = arranging ? markerWidth(alwaysTitle) :
             (sections.collapseAlways && !usesIndependentTray ? collapsedLength() : MenuBarLayout.expandedLength)
         alwaysDivider.button?.font = font
         alwaysDivider.button?.title = arranging ? alwaysTitle : ""
         alwaysDivider.button?.isEnabled = arranging
-        alwaysDivider.button?.toolTip = arranging ? "常隐区边界：按住 ⌘ 拖动图标；点击完成拖拽并收起。" : nil
+        alwaysDivider.button?.toolTip = arranging ? copy("常隐区边界：按住 ⌘ 拖动图标；点击完成拖拽并收起。") : nil
 
         let stateDescription: String
         if model?.isApplying == true {
-            stateDescription = "正在应用分组"
+            stateDescription = copy("正在应用分组")
         } else if model?.isRefreshing == true {
-            stateDescription = "正在读取图标"
+            stateDescription = copy("正在读取图标")
 
         } else if model?.isActivatingPanelItem == true {
-            stateDescription = "正在请求图标操作"
+            stateDescription = copy("正在请求图标操作")
         } else if arranging {
-            stateDescription = model?.managementError == nil ? "正在拖拽分组" : "拖拽结果待确认，右键查看原因"
+            stateDescription = model?.managementError == nil ? copy("正在拖拽分组") : copy("拖拽结果待确认，右键查看原因")
         } else if usesIndependentTray {
-            stateDescription = model?.temporarilyRevealingAll == true ? "临时显示全部图标" :
-                (model?.isPanelPresented == true ? "托盘已展开" : "托盘已收起")
+            stateDescription = model?.temporarilyRevealingAll == true ? copy("临时显示全部图标") :
+                (model?.isPanelPresented == true ? copy("托盘已展开") : copy("托盘已收起"))
         } else if model?.isPanelPresented == true {
-            stateDescription = "图标栏已展开"
+            stateDescription = copy("图标栏已展开")
         } else if model?.temporarilyRevealingAll == true {
-            stateDescription = "临时显示全部图标"
+            stateDescription = copy("临时显示全部图标")
         } else {
-            stateDescription = collapsed ? "已收起" : "已展开"
+            stateDescription = collapsed ? copy("已收起") : copy("已展开")
         }
-        let actionDescription = arranging ? "点击完成拖拽并收起" :
-            (model?.isPanelPresented == true ? "点击收起托盘" : "点击展开托盘")
-        let controlDescription = "Menu Tidy 托盘 · \(stateDescription)"
+        let actionDescription = arranging ? copy("点击完成拖拽并收起") :
+            (model?.isPanelPresented == true ? copy("点击收起托盘") : copy("点击展开托盘"))
+        let controlDescription = "\(copy("Menu Tidy 托盘")) · \(stateDescription)"
         let symbol = arranging ? "arrow.left.and.right" : (model?.isPanelPresented == true ? "chevron.up" : "chevron.down")
         control.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: controlDescription)
         control.button?.image?.isTemplate = true
-        control.button?.toolTip = "\(controlDescription) · \(actionDescription) · 右键打开管理菜单"
+        control.button?.toolTip = "\(controlDescription) · \(actionDescription) · \(copy("右键打开管理菜单"))"
         control.button?.setAccessibilityLabel("\(controlDescription)；\(actionDescription)")
     }
 
@@ -386,14 +396,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     private func showMenu() {
+        let copy = AppPreferences.shared.localized
         let menu = NSMenu()
         menu.delegate = self
         let busy = model?.isApplying == true || model?.isRefreshing == true || model?.isActivatingPanelItem == true
         let usesPanelVisibility = usesIndependentTray && !isArranging
         if isArranging {
-            addItem(menu, title: "完成拖拽并收起", action: #selector(finishArrangement), enabled: !busy)
-            addItem(menu, title: "退出拖拽，保持全部展开", action: #selector(leaveArrangement), enabled: !busy)
-            let guide = NSMenuItem(title: "按住 ⌘ 拖动；左常隐、中收起、右常驻", action: nil, keyEquivalent: "")
+            addItem(menu, title: copy("完成拖拽并收起"), action: #selector(finishArrangement), enabled: !busy)
+            addItem(menu, title: copy("退出拖拽，保持全部展开"), action: #selector(leaveArrangement), enabled: !busy)
+            let guide = NSMenuItem(title: copy("按住 ⌘ 拖动；左常隐、中收起、右常驻"), action: nil, keyEquivalent: "")
             guide.isEnabled = false
             menu.addItem(guide)
             if let message = model?.managementError {
@@ -403,17 +414,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 menu.addItem(error)
             }
         } else {
-            addItem(menu, title: model?.isPanelPresented == true ? "收起托盘" : "打开托盘", action: #selector(toggle))
+            addItem(menu, title: copy(model?.isPanelPresented == true ? "收起托盘" : "打开托盘"), action: #selector(toggle))
         }
         if !usesPanelVisibility {
-            addItem(menu, title: "收起现有菜单栏分组", action: #selector(collapseNativeGroups), enabled: !busy && !isArranging)
+            addItem(menu, title: copy("收起现有菜单栏分组"), action: #selector(collapseNativeGroups), enabled: !busy && !isArranging)
         }
-        addItem(menu, title: "选择常驻与托盘图标…", action: #selector(settings))
+        addItem(menu, title: copy("选择常驻与托盘图标…"), action: #selector(settings))
         menu.addItem(.separator())
-        addItem(menu, title: "设置…", action: #selector(settings), key: ",")
-        addItem(menu, title: "检查更新…", action: #selector(checkForUpdates),
+        addItem(menu, title: copy("设置…"), action: #selector(settings), key: ",")
+        addItem(menu, title: copy("检查更新…"), action: #selector(checkForUpdates),
                 enabled: (NSApp.delegate as? AppDelegate)?.updates?.canCheckForUpdates == true)
-        addItem(menu, title: "退出 Menu Tidy", action: #selector(quit), key: "q")
+        addItem(menu, title: copy("退出 Menu Tidy"), action: #selector(quit), key: "q")
         if let button = control.button {
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY), in: button)
         }
@@ -445,6 +456,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func stop() {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
+        if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
+        preferencesObserver = nil
         clearPositionHidingBlocker()
         alwaysDivider.length = MenuBarLayout.expandedLength
         // Preserve only our own placement hints: removal can clear them on some OSes.
