@@ -2040,6 +2040,11 @@ final class MenuTidyModel: ObservableObject {
                 let persistentRules = ItemRuleBook(rules: updatedRules.rules.filter { !$0.key.hasPrefix("session:") })
                 let encodedRules = try JSONEncoder().encode(persistentRules)
                 try saveTrayIntent(drafts: updatedDrafts, nativeChoices: updatedChoices)
+                // `saveTrayIntent` commits the new application choice. Release
+                // any process-owned macOS 27 assessment for the forgotten
+                // bundle at the same successful commit boundary so the icon
+                // cannot stay hidden until Menu Tidy restarts.
+                syncNativeAssessmentIntent()
                 rules = updatedRules
                 defaults.set(encodedRules, forKey: "itemRules.v1")
                 for forgottenID in forgottenIDs {

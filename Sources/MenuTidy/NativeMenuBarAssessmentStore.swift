@@ -3,6 +3,24 @@ import Darwin
 import Foundation
 import OSLog
 
+/// The process-local ownership state that backs the macOS assessment.
+///
+/// Keeping this transition independent from the private framework makes it
+/// possible to verify that a removed persistent choice cannot leave a stale
+/// bundle in the managed set. The actual assertion lifecycle remains owned by
+/// `NativeMenuBarAssessmentStore`.
+struct NativeMenuBarAssessmentOwnership: Equatable {
+    var ownedBundles: Set<String>
+    var hiddenBundles: Set<String>
+    var revealedBundles: Set<String>
+
+    mutating func reconcile(desiredHiddenBundles: Set<String>) {
+        revealedBundles.formIntersection(desiredHiddenBundles)
+        hiddenBundles = desiredHiddenBundles.subtracting(revealedBundles)
+        ownedBundles = desiredHiddenBundles.union(revealedBundles)
+    }
+}
+
 /// Controls third-party menu bar applications through macOS 27's private
 /// MenuBarClientCore assessment allow-list. The assertion is process-owned:
 /// releasing it restores the menu bar without touching the user's persistent
@@ -69,9 +87,27 @@ final class NativeMenuBarAssessmentStore {
     func syncDesiredHiddenBundles(_ bundles: Set<String>) {
         guard canActivate else { return }
         let filtered = bundles.filter(Self.isApplicationBundle)
-        hiddenBundles = filtered
-        ownedBundles.formUnion(filtered)
-        revealedBundles.subtract(filtered)
+        var next = NativeMenuBarAssessmentOwnership(ownedBundles: ownedBundles,
+            hiddenBundles: hiddenBundles, revealedBundles: revealedBundles)
+        let previous = next
+        next.reconcile(desiredHiddenBundles: filtered)
+        hiddenBundles = next.hiddenBundles
+        ownedBundles = next.ownedBundles
+        revealedBundles = next.revealedBundles
+
+        if filtered.isEmpty {
+            // A removed or visible choice must release the process-owned
+            // assertion immediately. Leaving it alive makes the application
+            // remain hidden until Menu Tidy exits or is restarted.
+            invalidate()
+            return
+        }
+        guard next != previous else { return }
+        if assertion != nil {
+            // The current assertion no longer represents the persisted set.
+            // Replace it while keeping sibling hidden bundles covered.
+            scheduleAssertion()
+        }
     }
 
     func isManaged(bundle: String) -> Bool { ownedBundles.contains(bundle) }

@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.6.17] - 2026-10-29
+
+修复 macOS 27 原生菜单栏显示断言在忘记应用或改变分类后残留的问题。
+
+- 同步持久化分类与运行时 assessment ownership，移除已不再管理的应用。
+- 忘记应用成功保存后立即释放对应的原生 assertion，避免图标一直隐藏到 Menu Tidy 重启。
+- 没有隐藏目标时立即释放 assessment，其他隐藏应用和临时显示流程继续保持隔离。
+- 增加 ownership reconcile、断言释放和临时 reveal 的回归测试。
+
+验证：完整 gate 通过 511 项核心 Swift 测试、118 项应用集成测试、96 项 Python 回归及 warnings-as-errors 构建。macOS 27 Apple Silicon 已安装实机验证 Menu Tidy 权限、Clash Verge status item 和收起托盘恢复。沿用项目自签名发行身份，未经 Apple 公证；Intel 桌面、旧版 macOS 和其他系统模块需独立验收。
+
 ## [0.6.16] - 2026-10-27
 
 修复 macOS 27 上应用菜单栏图标无法按“收起后隐藏”收进托盘的问题。正式版构建号为 72，保留现有分类、规则、草稿和系统图标恢复记录。

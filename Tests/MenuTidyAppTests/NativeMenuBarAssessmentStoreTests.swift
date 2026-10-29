@@ -3,6 +3,48 @@ import XCTest
 
 final class NativeMenuBarAssessmentStoreTests: XCTestCase {
     @MainActor
+    func testOwnershipReconcileDropsBundlesRemovedFromPersistentIntent() {
+        var state = NativeMenuBarAssessmentOwnership(
+            ownedBundles: ["org.example.Clash", "org.example.Other"],
+            hiddenBundles: ["org.example.Clash", "org.example.Other"],
+            revealedBundles: ["org.example.Clash"])
+
+        state.reconcile(desiredHiddenBundles: ["org.example.Other"])
+
+        XCTAssertEqual(state.ownedBundles, ["org.example.Other"])
+        XCTAssertEqual(state.hiddenBundles, ["org.example.Other"])
+        XCTAssertTrue(state.revealedBundles.isEmpty)
+    }
+
+    @MainActor
+    func testOwnershipReconcileWithNoPersistentIntentReleasesAllBundles() {
+        var state = NativeMenuBarAssessmentOwnership(
+            ownedBundles: ["org.example.Clash"],
+            hiddenBundles: ["org.example.Clash"],
+            revealedBundles: [])
+
+        state.reconcile(desiredHiddenBundles: [])
+
+        XCTAssertTrue(state.ownedBundles.isEmpty)
+        XCTAssertTrue(state.hiddenBundles.isEmpty)
+        XCTAssertTrue(state.revealedBundles.isEmpty)
+    }
+
+    @MainActor
+    func testOwnershipReconcileKeepsTemporaryRevealForStillHiddenChoice() {
+        var state = NativeMenuBarAssessmentOwnership(
+            ownedBundles: ["org.example.Clash", "org.example.Other"],
+            hiddenBundles: ["org.example.Clash", "org.example.Other"],
+            revealedBundles: ["org.example.Clash"])
+
+        state.reconcile(desiredHiddenBundles: ["org.example.Clash", "org.example.Other"])
+
+        XCTAssertEqual(state.ownedBundles, ["org.example.Clash", "org.example.Other"])
+        XCTAssertEqual(state.hiddenBundles, ["org.example.Other"])
+        XCTAssertEqual(state.revealedBundles, ["org.example.Clash"])
+    }
+
+    @MainActor
     func testAssessmentAllowListRetainsMenuTidyAndSystemOwners() {
         let allowed = NativeMenuBarAssessmentStore.allowedBundleIdentifiers(
             ownBundle: "dev.hdh.MenuTidy",
