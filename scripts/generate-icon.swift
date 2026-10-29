@@ -49,39 +49,35 @@ func renderIcon(size: Int) throws -> Data {
                             xRadius: 184, yRadius: 184)
     NSGraphicsContext.saveGraphicsState()
     let shadow = NSShadow()
-    shadow.shadowColor = NSColor.black.withAlphaComponent(0.20)
-    shadow.shadowBlurRadius = 25
-    shadow.shadowOffset = NSSize(width: 0, height: -12)
+    shadow.shadowColor = NSColor.black.withAlphaComponent(0.16)
+    shadow.shadowBlurRadius = 22
+    shadow.shadowOffset = NSSize(width: 0, height: -9)
     shadow.set()
-    NSColor(srgbRed: 0.08, green: 0.08, blue: 0.20, alpha: 1).setFill()
+    NSColor(srgbRed: 0.91, green: 0.89, blue: 0.84, alpha: 1).setFill()
     tile.fill()
     NSGraphicsContext.restoreGraphicsState()
 
-    let topColor = NSColor(srgbRed: 0.38, green: 0.31, blue: 0.83, alpha: 1)
-    let bottomColor = NSColor(srgbRed: 0.10, green: 0.16, blue: 0.43, alpha: 1)
-    NSGradient(starting: bottomColor, ending: topColor)!.draw(in: tile, angle: 90)
-
     let edge = NSBezierPath(roundedRect: NSRect(x: 97, y: 97, width: 830, height: 830),
                             xRadius: 183, yRadius: 183)
-    NSColor.white.withAlphaComponent(0.18).setStroke()
-    edge.lineWidth = 3
+    NSColor(srgbRed: 0.18, green: 0.20, blue: 0.20, alpha: 0.72).setStroke()
+    edge.lineWidth = 4
     edge.stroke()
 
     // A tidy stack: three rounded layers merge into a compact tray mark. The
-    // small violet notch gives the glyph a distinctive silhouette at 16px.
+    // charcoal and teal palette stays legible at small menu-bar sizes.
     let layers = [
         NSRect(x: 236, y: 604, width: 458, height: 78),
         NSRect(x: 236, y: 472, width: 390, height: 78),
         NSRect(x: 236, y: 340, width: 322, height: 78),
     ]
-    NSColor.white.withAlphaComponent(0.96).setFill()
+    NSColor(srgbRed: 0.19, green: 0.21, blue: 0.22, alpha: 1).setFill()
     for layer in layers {
         NSBezierPath(roundedRect: layer, xRadius: 39, yRadius: 39).fill()
     }
 
     let tray = NSBezierPath(roundedRect: NSRect(x: 626, y: 314, width: 142, height: 410),
                             xRadius: 71, yRadius: 71)
-    NSColor(srgbRed: 0.99, green: 0.56, blue: 0.38, alpha: 1).setFill()
+    NSColor(srgbRed: 0.16, green: 0.47, blue: 0.48, alpha: 1).setFill()
     tray.fill()
     let notch = NSBezierPath()
     notch.lineWidth = 28
@@ -89,7 +85,7 @@ func renderIcon(size: Int) throws -> Data {
     notch.move(to: NSPoint(x: 664, y: 518))
     notch.line(to: NSPoint(x: 708, y: 562))
     notch.line(to: NSPoint(x: 752, y: 518))
-    NSColor(srgbRed: 0.12, green: 0.14, blue: 0.38, alpha: 1).setStroke()
+    NSColor(srgbRed: 0.19, green: 0.21, blue: 0.22, alpha: 1).setStroke()
     notch.stroke()
 
     guard let data = bitmap.representation(using: .png, properties: [:]) else {

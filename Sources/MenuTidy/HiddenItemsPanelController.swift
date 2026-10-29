@@ -222,8 +222,7 @@ private struct HiddenItemsPanelView: View {
     @State private var lastInteraction: TrayPanelAction?
 
     private var surface: Color {
-        let white = colorScheme == .dark ? 0.16 : 0.97
-        return Color(red: white, green: white, blue: white)
+        MenuTidyPalette.card(for: colorScheme)
     }
 
     private var displayedError: TrayPanelError? {
@@ -310,6 +309,7 @@ private struct HiddenItemsPanelView: View {
             Color.clear.preference(key: TrayPanelHeightKey.self, value: geometry.size.height)
         })
         .onPreferenceChange(TrayPanelHeightKey.self, perform: onHeightChange)
+        .tint(MenuTidyPalette.accent(for: colorScheme))
     }
 
     private var iconGrid: some View {

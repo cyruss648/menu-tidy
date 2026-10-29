@@ -36,8 +36,9 @@ struct SettingsView: View {
     @State private var draftToAssociate: PendingDraftRecord?
     @State private var associationTargetID = ""
     @State private var associationIssue: String?
+    @Environment(\.colorScheme) private var colorScheme
 
-    private let accent = Color(red: 0.33, green: 0.27, blue: 0.78)
+    private var accent: Color { MenuTidyPalette.accent(for: colorScheme) }
     private typealias Page = SettingsViewState.Page
     private var isBusy: Bool { model.isRefreshing || model.isApplying || model.isActivatingPanelItem || model.isRecoveringPositions }
     private var groupingControlsDisabled: Bool { isBusy || model.isArranging }
@@ -109,7 +110,7 @@ struct SettingsView: View {
             if isBusy { operationStatus }
             if presentation.page == .items { managementPage } else { settingsPage }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(MenuTidyPalette.canvas(for: colorScheme))
         .tint(accent)
         .environment(\.locale, preferences.locale)
         .preferredColorScheme(preferences.preferredColorScheme)
@@ -137,7 +138,7 @@ struct SettingsView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 52, height: 52)
-                .shadow(color: accent.opacity(0.24), radius: 10, y: 5)
+                .shadow(color: MenuTidyPalette.shadow(for: colorScheme), radius: 8, y: 3)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(model.isUIPreview ? "Menu Tidy · 交互预览" : "Menu Tidy")
@@ -152,7 +153,7 @@ struct SettingsView: View {
                 .foregroundStyle(accent)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(accent.opacity(0.10), in: Capsule())
+                .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             Button { model.toggleVisibility() } label: {
                 Label(model.isPanelPresented ? "收起托盘" : "打开托盘",
                       systemImage: model.isPanelPresented ? "chevron.up" : "chevron.down")
@@ -220,7 +221,7 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
-        .background(accent.opacity(0.07))
+        .background(MenuTidyPalette.accentWash(for: colorScheme, amount: 0.055))
     }
 
     private var operationDetail: String {
@@ -327,7 +328,7 @@ struct SettingsView: View {
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+            .background(MenuTidyPalette.controlSurface(for: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             Picker("筛选图标", selection: $presentation.trayFilter) {
                 Text("全部图标").tag("all")
                 ForEach(ItemVisibility.allCases) { Text($0.title).tag($0.id) }
@@ -565,7 +566,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
             .padding(.horizontal, 10)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+            .background(MenuTidyPalette.controlSurface(for: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("从左到右：始终隐藏、常隐标记、收起后隐藏、收起标记、常驻显示、Menu Tidy 入口。")
             Text("「常隐」左侧始终隐藏；两个标记之间收起后隐藏；「收起」右侧常驻显示。标记仅在整理时显示。")
@@ -588,7 +589,7 @@ struct SettingsView: View {
             }
         }
         .padding(12)
-        .background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+        .background(MenuTidyPalette.accentWash(for: colorScheme, amount: 0.065), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func arrangementZone(_ title: String, color: Color) -> some View {
@@ -602,7 +603,7 @@ struct SettingsView: View {
         Text(title)
             .font(.system(size: 10, weight: .semibold))
             .padding(.horizontal, 7).padding(.vertical, 4)
-            .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+            .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 
     private func groupSummary(_ group: ItemVisibility) -> some View {
@@ -634,11 +635,15 @@ struct SettingsView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-            .background(presentation.trayFilter == group.id ? accent.opacity(0.08) : Color(nsColor: .controlBackgroundColor),
-                        in: RoundedRectangle(cornerRadius: 11))
+            .background(presentation.trayFilter == group.id
+                ? accent.opacity(0.08)
+                : MenuTidyPalette.controlSurface(for: colorScheme),
+                in: RoundedRectangle(cornerRadius: 11, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 11)
-                    .strokeBorder(presentation.trayFilter == group.id ? accent.opacity(0.6) : Color.primary.opacity(0.06), lineWidth: 1)
+                    .strokeBorder(presentation.trayFilter == group.id
+                        ? accent.opacity(0.55)
+                        : MenuTidyPalette.border(for: colorScheme), lineWidth: 1)
             }
         }
         .buttonStyle(.plain)
@@ -796,7 +801,8 @@ struct SettingsView: View {
             Button("收起现有分组") { model.collapseNativeGroups() }.disabled(groupingControlsDisabled)
         }
         .padding(12)
-        .background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+        .background(MenuTidyPalette.accentWash(for: colorScheme, amount: 0.065),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private var managementNotices: some View {
@@ -1347,13 +1353,15 @@ struct SettingsView: View {
 }
 
 private struct SettingsCardStyle: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
     func body(content: Content) -> some View {
         content
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(MenuTidyPalette.card(for: colorScheme), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.075), lineWidth: 1)
+                    .strokeBorder(MenuTidyPalette.border(for: colorScheme), lineWidth: 1)
             }
-            .shadow(color: Color.black.opacity(0.05), radius: 10, y: 4)
+            .shadow(color: MenuTidyPalette.shadow(for: colorScheme), radius: 7, y: 3)
     }
 }
