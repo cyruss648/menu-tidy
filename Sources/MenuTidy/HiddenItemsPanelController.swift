@@ -321,8 +321,8 @@ private struct HiddenItemsPanelView: View {
                 spacing: TrayPanelLayout.spacing), count: TrayPanelLayout.columns),
                 alignment: .leading, spacing: TrayPanelLayout.spacing) {
                 ForEach(model.panelItems, id: \.presentationID) { item in
-                    HiddenPanelIconButton(name: item.name, image: model.panelImages[item.id],
-                        fallbackImage: item.icon,
+                    HiddenPanelIconButton(name: item.name, applicationIcon: item.icon,
+                        menuBarImage: model.panelImages[item.id],
                         isWorking: model.activePanelItemID == item.id || model.pendingPanelItemID == item.id || model.trayPlacementIsPending(id: item.id),
                         hasError: model.trayItemErrors[item.id] != nil ||
                             (!model.trayPlacementIsPending(id: item.id) && model.trayPlacementMessage(id: item.id) != nil),
@@ -437,8 +437,8 @@ private struct HiddenItemsPanelView: View {
 
 private struct HiddenPanelIconButton: View {
     let name: String
-    let image: NSImage?
-    let fallbackImage: NSImage?
+    let applicationIcon: NSImage?
+    let menuBarImage: NSImage?
     let isWorking: Bool
     let hasError: Bool
     let isDisabled: Bool
@@ -447,8 +447,10 @@ private struct HiddenPanelIconButton: View {
     let action: () -> Void
     @State private var isHovered = false
 
+    private var displayedImage: NSImage? { applicationIcon ?? menuBarImage }
+
     private var help: String {
-        let source = image != nil ? "图标快照" : (fallbackImage != nil ? "应用图标" : "名称标识")
+        let source = applicationIcon != nil ? "应用图标" : (menuBarImage != nil ? "菜单栏快照" : "名称标识")
         return "\(name) · \(source)\n\(placementMessage ?? "点击打开菜单，右键可设为常驻菜单栏")"
     }
 
@@ -456,7 +458,7 @@ private struct HiddenPanelIconButton: View {
         Button(action: action) {
             ZStack {
                 Group {
-                    if let displayedImage = image ?? fallbackImage {
+                    if let displayedImage {
                         Image(nsImage: displayedImage)
                             .renderingMode(displayedImage.isTemplate ? .template : .original)
                             .resizable()
@@ -477,7 +479,7 @@ private struct HiddenPanelIconButton: View {
                             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
                     }
                 }
-                .frame(width: image == nil ? 26 : 22, height: image == nil ? 26 : 22)
+                .frame(width: displayedImage == nil ? 26 : 22, height: displayedImage == nil ? 26 : 22)
                 .opacity(isWorking ? 0.22 : 1)
                 if isWorking {
                     ProgressView()

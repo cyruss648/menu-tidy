@@ -260,7 +260,7 @@ struct SettingsView: View {
                     trayItemList
                     HStack(alignment: .top, spacing: 7) {
                         Image(systemName: "info.circle").accessibilityHidden(true)
-                        Text("更改选择会立即处理；同一应用的图标共用一行显示设置，系统模块分别显示。缺少原始图像时，托盘显示应用图标。")
+                        Text("更改选择会立即处理；同一应用的图标共用一行显示设置，系统模块分别显示。托盘优先显示应用图标，应用图标不可用时使用原始图像或名称标识。")
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 4)
                         if !model.screenCaptureGranted {
@@ -1185,7 +1185,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(model.screenCaptureGranted ? "原始图标外观已启用" : "增强托盘图标外观（可选）")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("不开启也能使用托盘，届时显示应用身份图标与名称。开启后可显示原始菜单栏图标；这项权限不会增加应用操作的兼容性。")
+                    Text("不开启也能使用托盘，优先显示应用身份图标；应用图标不可用时显示名称。开启后可在应用图标不可用时使用原始菜单栏图标回退；这项权限不会增加应用操作的兼容性。")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Text("只采集已确认的图标窗口或小块区域，不上传、不保存到磁盘，也不采集声音。原始图标是最近的快照，隐藏期间可能不会及时反映状态变化。")
