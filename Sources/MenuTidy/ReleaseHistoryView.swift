@@ -11,18 +11,21 @@ struct ReleaseHistoryView: View {
     let currentVersion: String
     @Environment(\.dismiss) private var dismiss
     private let entries: [HistoryEntry] = HistoryEntry.bundled()
+    private let preferences = AppPreferences.shared
+    private func copy(_ key: String) -> String { preferences.localized(key) }
+    private func format(_ key: String, _ arguments: CVarArg...) -> String { preferences.localizedFormat(key, arguments) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("更新记录", systemImage: "clock.arrow.circlepath")
+                    Label(copy("更新记录"), systemImage: "clock.arrow.circlepath")
                         .font(.title2.weight(.semibold))
-                    Text("当前版本 \(currentVersion) · 随应用附带，可离线阅读")
+                    Text(format("当前版本 %@ · 随应用附带，可离线阅读", currentVersion))
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("完成") { dismiss() }
+                Button(copy("完成")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
             .padding(24)
@@ -30,7 +33,7 @@ struct ReleaseHistoryView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if entries.isEmpty {
-                        Label("此安装包未附带更新记录，请查看 GitHub 上的完整日志。",
+                        Label(copy("此安装包未附带更新记录，请查看 GitHub 上的完整日志。"),
                               systemImage: "doc.text")
                             .foregroundStyle(.secondary).padding()
                     }
@@ -42,11 +45,11 @@ struct ReleaseHistoryView: View {
             }
             Divider()
             HStack {
-                Text("最新发布与完整历史记录可在 GitHub 查看。")
+                Text(copy("最新发布与完整历史记录可在 GitHub 查看。"))
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Link("完整日志 ↗", destination: ProjectLinks.changelog)
-                Link("GitHub 发布 ↗", destination: ProjectLinks.releases)
+                Link(copy("完整日志 ↗"), destination: ProjectLinks.changelog)
+                Link(copy("GitHub 发布 ↗"), destination: ProjectLinks.releases)
             }
             .font(.callout)
             .padding(20)

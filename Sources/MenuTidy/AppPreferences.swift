@@ -38,6 +38,19 @@ final class AppPreferences: ObservableObject {
             }
         }
 
+        /// A nil window appearance follows the system, but SwiftUI can keep
+        /// the last explicit scheme in an already-created hosting view.
+        /// Resolving it here gives that view a concrete value to observe.
+        @MainActor var resolvedColorScheme: ColorScheme {
+            switch self {
+            case .light: return ColorScheme.light
+            case .dark: return ColorScheme.dark
+            case .system:
+                let appearance = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
+                return appearance == .darkAqua ? ColorScheme.dark : ColorScheme.light
+            }
+        }
+
         var nsAppearanceName: NSAppearance.Name? {
             switch self {
             case .system: nil
@@ -89,11 +102,18 @@ final class AppPreferences: ObservableObject {
 
     var locale: Locale { language.locale }
     var preferredColorScheme: ColorScheme? { theme.preferredColorScheme }
+    var resolvedColorScheme: ColorScheme { theme.resolvedColorScheme }
 
     /// AppKit menus do not receive SwiftUI's locale environment, so they use
     /// the same bundle lookup explicitly.
     func localized(_ key: String) -> String {
-        Bundle.main.localizedString(forKey: key, value: key, table: "Localizable")
+        guard let path = Bundle.main.path(forResource: language.rawValue, ofType: "lproj"),
+              let bundle = Bundle(path: path) else { return key }
+        return bundle.localizedString(forKey: key, value: key, table: "Localizable")
+    }
+
+    func localizedFormat(_ key: String, _ arguments: CVarArg...) -> String {
+        String(format: localized(key), locale: locale, arguments: arguments)
     }
 
     private func notifyChange() {

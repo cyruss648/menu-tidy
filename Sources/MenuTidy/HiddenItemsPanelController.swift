@@ -47,7 +47,7 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
                 self?.scheduleResize(height: height, token: token, screen: screen)
             }
             .environment(\.locale, preferences.locale)
-            .preferredColorScheme(preferences.preferredColorScheme))
+            .preferredColorScheme(preferences.resolvedColorScheme))
         // The controller owns the window size. Keep ideal-size measurement,
         // but prevent hosting's automatic min/max bounds from resizing it.
         hostingView.sizingOptions = [.intrinsicContentSize]
@@ -217,6 +217,9 @@ private struct HiddenItemsPanelView: View {
     let maximumGridHeight: CGFloat
     let onHeightChange: (CGFloat) -> Void
     @Environment(\.colorScheme) private var colorScheme
+    private let preferences = AppPreferences.shared
+    private func copy(_ key: String) -> String { preferences.localized(key) }
+    private func format(_ key: String, _ arguments: CVarArg...) -> String { preferences.localizedFormat(key, arguments) }
     @State private var hoveredItemID: String?
     @State private var lastInteractedItemID: String?
     @State private var lastInteraction: TrayPanelAction?
@@ -267,9 +270,9 @@ private struct HiddenItemsPanelView: View {
                     Image(systemName: "tray")
                         .font(.system(size: 22))
                         .foregroundStyle(.secondary)
-                    Text("托盘中还没有图标")
+                    Text(copy("托盘中还没有图标"))
                         .font(.system(size: 12, weight: .medium))
-                    Text("在设置中选择要收进托盘的图标。")
+                    Text(copy("在设置中选择要收进托盘的图标。"))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -286,7 +289,7 @@ private struct HiddenItemsPanelView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             } else if let id = lastInteractedItemID, model.trayPlacementIsPending(id: id) {
-                let message = model.trayPlacementMessage(id: id) ?? "正在调整图标位置…"
+                let message = model.trayPlacementMessage(id: id) ?? copy("正在调整图标位置…")
                 Text(message)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -335,15 +338,15 @@ private struct HiddenItemsPanelView: View {
                             Button(model.panelPrimaryActionTitle(id: item.id)) { openItem(id: item.id) }
                                 .disabled(model.panelItemActionsDisabled)
                             if model.canOpenPanelApplication(id: item.id) {
-                                if model.panelPrimaryActionTitle(id: item.id) != "打开应用" {
-                                    Button("打开应用") { openItem(id: item.id, action: .application) }
+                                if model.panelPrimaryActionTitle(id: item.id) != copy("打开应用") {
+                                    Button(copy("打开应用")) { openItem(id: item.id, action: .application) }
                                         .disabled(model.panelItemActionsDisabled)
                                 }
-                                Button("尝试原生图标操作") { openItem(id: item.id, action: .nativeActivation) }
+                                Button(copy("尝试原生图标操作")) { openItem(id: item.id, action: .nativeActivation) }
                                     .disabled(model.panelItemActionsDisabled)
                             }
                             Divider()
-                            Button("常驻菜单栏") {
+                            Button(copy("常驻菜单栏")) {
                                 lastInteractedItemID = item.id
                                 lastInteraction = .placement
                                 model.requestTrayPlacement(id: item.id, inTray: false)
@@ -386,7 +389,7 @@ private struct HiddenItemsPanelView: View {
             }
             Spacer(minLength: 0)
             if let id = error.itemID, let action = error.retryAction {
-                Button(action == .placement ? model.trayPlacementRetryTitle(id: id) : "重试") {
+                Button(action == .placement ? model.trayPlacementRetryTitle(id: id) : copy("重试")) {
                     switch action {
                     case .placement:
                         lastInteractedItemID = id
@@ -399,7 +402,7 @@ private struct HiddenItemsPanelView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.tint)
                 .disabled(model.panelInteractionBusy)
-                .accessibilityLabel("重试此图标的操作")
+                .accessibilityLabel(copy("重试此图标的操作"))
             }
         }
         .font(.system(size: 11))
@@ -413,11 +416,11 @@ private struct HiddenItemsPanelView: View {
     private var footer: some View {
         HStack(spacing: 8) {
             Text(hoveredItemID.flatMap { id in model.panelItems.first(where: { $0.id == id })?.name }
-                ?? "\(model.panelItems.count) 个图标")
+                ?? format("%lld 个图标", Int64(model.panelItems.count)))
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 4)
-            Text("Esc 收起")
+            Text(copy("Esc 收起"))
                 .fixedSize()
                 .accessibilityHidden(true)
             Button { model.openTraySettings() } label: {
@@ -426,8 +429,8 @@ private struct HiddenItemsPanelView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("托盘设置")
-            .accessibilityLabel("托盘设置")
+            .help(copy("托盘设置"))
+            .accessibilityLabel(copy("托盘设置"))
         }
         .font(.system(size: 11))
         .foregroundStyle(.secondary)
@@ -450,8 +453,9 @@ private struct HiddenPanelIconButton: View {
     private var displayedImage: NSImage? { applicationIcon ?? menuBarImage }
 
     private var help: String {
-        let source = applicationIcon != nil ? "应用图标" : (menuBarImage != nil ? "菜单栏快照" : "名称标识")
-        return "\(name) · \(source)\n\(placementMessage ?? "点击打开菜单，右键可设为常驻菜单栏")"
+        let preferences = AppPreferences.shared
+        let source = applicationIcon != nil ? preferences.localized("应用图标") : (menuBarImage != nil ? preferences.localized("菜单栏快照") : preferences.localized("名称标识"))
+        return preferences.localizedFormat("%@ · %@\n%@", name, source, placementMessage ?? preferences.localized("点击打开菜单，右键可设为常驻菜单栏"))
     }
 
     var body: some View {
@@ -484,7 +488,7 @@ private struct HiddenPanelIconButton: View {
                 if isWorking {
                     ProgressView()
                         .controlSize(.small)
-                        .accessibilityLabel("正在处理 \(name)")
+                        .accessibilityLabel(AppPreferences.shared.localizedFormat("正在处理 %@", name))
                 }
             }
             .frame(width: TrayPanelLayout.cellSize, height: TrayPanelLayout.cellSize)
@@ -505,6 +509,6 @@ private struct HiddenPanelIconButton: View {
         .onHover { isHovered = $0; onHover($0) }
         .help(help)
         .accessibilityLabel(name)
-        .accessibilityValue(isWorking ? "正在处理" : (hasError ? "上次操作未完成，可重试" : "托盘图标"))
+        .accessibilityValue(isWorking ? AppPreferences.shared.localized("正在处理") : (hasError ? AppPreferences.shared.localized("上次操作未完成，可重试") : AppPreferences.shared.localized("托盘图标")))
     }
 }

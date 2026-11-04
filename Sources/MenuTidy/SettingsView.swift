@@ -39,6 +39,10 @@ struct SettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var accent: Color { MenuTidyPalette.accent(for: colorScheme) }
+    private func copy(_ key: String) -> String { preferences.localized(key) }
+    private func format(_ key: String, _ arguments: CVarArg...) -> String {
+        preferences.localizedFormat(key, arguments)
+    }
     private typealias Page = SettingsViewState.Page
     private var isBusy: Bool { model.isRefreshing || model.isApplying || model.isActivatingPanelItem || model.isRecoveringPositions }
     private var groupingControlsDisabled: Bool { isBusy || model.isArranging }
@@ -54,20 +58,20 @@ struct SettingsView: View {
             ? model.nativeVisibilityAccessAvailable : (!requiresPositionAccess || model.menuBarPositionAccessAvailable))
     }
     private var groupingPermissionStatus: String {
-        if !model.accessibilityGranted { return "需要辅助功能权限" }
+        if !model.accessibilityGranted { return copy("需要辅助功能权限") }
         if model.usesNativeVisibility {
-            return model.nativeVisibilityAccessAvailable ? "辅助功能与菜单栏显示设置已授权" : "还需授权菜单栏显示设置"
+            return model.nativeVisibilityAccessAvailable ? copy("辅助功能与菜单栏显示设置已授权") : copy("还需授权菜单栏显示设置")
         }
-        if requiresPositionAccess && !model.menuBarPositionAccessAvailable { return "后台分组还需目录授权" }
-        return requiresPositionAccess ? "辅助功能与排序目录已授权" : "辅助功能已授权"
+        if requiresPositionAccess && !model.menuBarPositionAccessAvailable { return copy("后台分组还需目录授权") }
+        return requiresPositionAccess ? copy("辅助功能与排序目录已授权") : copy("辅助功能已授权")
     }
     private var usesPanelVisibility: Bool {
         (model.usesNativeVisibility || model.usesPositionHiding) && !model.isArranging
     }
     private var groupingPermissionHelp: String {
         model.usesNativeVisibility
-            ? "辅助功能用于读取图标并打开原生菜单；菜单栏显示设置用于控制图标是否显示。屏幕录制可选，用于显示原始图标外观。"
-            : "辅助功能与排序目录用于调整原生图标。屏幕录制为可选增强，用于显示原始菜单栏图像；未开启时托盘显示应用身份图标。"
+            ? copy("辅助功能用于读取图标并打开原生菜单；菜单栏显示设置用于控制图标是否显示。屏幕录制可选，用于显示原始图标外观。")
+            : copy("辅助功能与排序目录用于调整原生图标。屏幕录制为可选增强，用于显示原始菜单栏图像；未开启时托盘显示应用身份图标。")
     }
     private var currentTrayItems: [ManagedItemRow] { model.managementItems }
     private var unavailableItems: [ManagedItemRow] { model.items.filter { !$0.isAvailable } }
@@ -91,7 +95,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             header
             HStack {
-                Picker("页面", selection: $presentation.page) {
+                Picker(copy("页面"), selection: $presentation.page) {
                 ForEach(Page.allCases) { Text($0.titleKey).tag($0) }
                 }
                 .pickerStyle(.segmented)
@@ -113,20 +117,21 @@ struct SettingsView: View {
         .background(MenuTidyPalette.canvas(for: colorScheme))
         .tint(accent)
         .environment(\.locale, preferences.locale)
-        .preferredColorScheme(preferences.preferredColorScheme)
+        .preferredColorScheme(preferences.resolvedColorScheme)
+        .id(preferences.theme.rawValue + "-" + preferences.language.rawValue)
         .frame(minWidth: 820, idealWidth: 960, maxWidth: .infinity,
                minHeight: 680, idealHeight: 740, maxHeight: .infinity)
         .sheet(item: $draftToAssociate) { draft in draftAssociationSheet(draft) }
-        .alert("忘记此应用的显示设置？", isPresented: Binding(
+        .alert(copy("忘记此应用的显示设置？"), isPresented: Binding(
             get: { itemToForget != nil }, set: { if !$0 { itemToForget = nil } }
         )) {
-            Button("忘记此应用", role: .destructive) {
+            Button(copy("忘记此应用"), role: .destructive) {
                 if let item = itemToForget { model.forgetItem(id: item.id) }
                 itemToForget = nil
             }
-            Button("取消", role: .cancel) { itemToForget = nil }
+            Button(copy("取消"), role: .cancel) { itemToForget = nil }
         } message: {
-            Text("将删除“\(itemToForget?.name ?? "此应用")”全部离线显示规则和待应用草稿。应用下次启动时，不再沿用这些选择；其他应用的记录保留。")
+            Text(format("将删除“%@”全部离线显示规则和待应用草稿。应用下次启动时，不再沿用这些选择；其他应用的记录保留。", itemToForget?.name ?? copy("此应用")))
         }
         .onChange(of: model.managementError) { _ in presentation.managementErrorDetailsExpanded = false }
         .onChange(of: model.positionRecoveryMessage) { _ in presentation.recoveryDetailsExpanded = false }
@@ -141,9 +146,9 @@ struct SettingsView: View {
                 .shadow(color: MenuTidyPalette.shadow(for: colorScheme), radius: 8, y: 3)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.isUIPreview ? "Menu Tidy · 交互预览" : "Menu Tidy")
+                Text(model.isUIPreview ? copy("Menu Tidy · 交互预览") : "Menu Tidy")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
-                Text("常用图标留在菜单栏，其余收进箭头下方的托盘。")
+                Text(copy("常用图标留在菜单栏，其余收进箭头下方的托盘。"))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -155,12 +160,12 @@ struct SettingsView: View {
                 .padding(.vertical, 6)
                 .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             Button { model.toggleVisibility() } label: {
-                Label(model.isPanelPresented ? "收起托盘" : "打开托盘",
+                Label(model.isPanelPresented ? copy("收起托盘") : copy("打开托盘"),
                       systemImage: model.isPanelPresented ? "chevron.up" : "chevron.down")
             }
             .buttonStyle(.borderedProminent)
             .disabled(model.isRecoveringPositions || model.isArranging)
-            .help("打开独立托盘后，点击其中的图标使用对应应用。后台更新列表时也可打开。")
+            .help(copy("打开独立托盘后，点击其中的图标使用对应应用。后台更新列表时也可打开。"))
         }
         .padding(.horizontal, 24)
         .padding(.top, 22)
@@ -184,9 +189,9 @@ struct SettingsView: View {
     private var operationStatus: some View {
         HStack(alignment: .center, spacing: 12) {
             ProgressView().controlSize(.small)
-                .accessibilityLabel("操作进行中")
+                .accessibilityLabel(copy("操作进行中"))
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.operationCancellationRequested ? "正在停止并恢复临时改动" : statusText)
+                Text(model.operationCancellationRequested ? copy("正在停止并恢复临时改动") : statusText)
                     .font(.system(size: 12, weight: .semibold))
                 Text(operationDetail)
                     .font(.system(size: 11))
@@ -198,25 +203,25 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             if model.operationStartedAt != nil {
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    Text("已用 \(Int(model.operationElapsedSeconds)) 秒")
+                    Text(format("已用 %lld 秒", Int64(model.operationElapsedSeconds)))
                         .font(.system(size: 11, design: .monospaced))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
-                        .accessibilityLabel("已用时 \(Int(model.operationElapsedSeconds)) 秒")
+                        .accessibilityLabel(format("已用时 %lld 秒", Int64(model.operationElapsedSeconds)))
                 }
             }
             if model.canCancelCurrentOperation || model.operationCancellationRequested {
-                Button(model.operationCancellationRequested ? "正在停止…" : "停止") {
+                Button(model.operationCancellationRequested ? copy("正在停止…") : copy("停止")) {
                     model.cancelCurrentOperation()
                 }
                 .disabled(!model.canCancelCurrentOperation || model.operationCancellationRequested)
                 .keyboardShortcut(.cancelAction)
-                .help("停止后续处理，先恢复本次临时改动；未完成的选择会保留。快捷键 Esc。")
-                .accessibilityLabel("停止当前操作")
+                .help(copy("停止后续处理，先恢复本次临时改动；未完成的选择会保留。快捷键 Esc。"))
+                .accessibilityLabel(copy("停止当前操作"))
             } else if model.isActivatingPanelItem {
-                Button("停止") { model.cancelPanelItemActivation() }
+                Button(copy("停止")) { model.cancelPanelItemActivation() }
                     .keyboardShortcut(.cancelAction)
-                    .accessibilityLabel("停止图标操作")
+                    .accessibilityLabel(copy("停止图标操作"))
             }
         }
         .padding(.horizontal, 20)
@@ -226,13 +231,13 @@ struct SettingsView: View {
 
     private var operationDetail: String {
         if model.operationCancellationRequested {
-            return "正在结束当前步骤并恢复临时改动，请稍候。未完成的选择会保留。"
+            return copy("正在结束当前步骤并恢复临时改动，请稍候。未完成的选择会保留。")
         }
         if let progress = model.panelItemProgress, model.isActivatingPanelItem { return progress }
-        if model.isRecoveringPositions { return "恢复完成后会重新确认菜单栏状态。" }
+        if model.isRecoveringPositions { return copy("恢复完成后会重新确认菜单栏状态。") }
         if let progress = model.managementMessage { return progress }
-        if model.isRefreshing { return "正在读取最新状态；列表中的选择会保留。" }
-        return model.usesNativeVisibility ? "正在确认图标的显示状态。" : "先检查当前状态，再调整并验证位置。"
+        if model.isRefreshing { return copy("正在读取最新状态；列表中的选择会保留。") }
+        return model.usesNativeVisibility ? copy("正在确认图标的显示状态。") : copy("先检查当前状态，再调整并验证位置。")
     }
 
     private var managementPage: some View {
@@ -254,17 +259,17 @@ struct SettingsView: View {
                     }
                     trayListToolbar
                     if currentTrayItems.contains(where: { model.trayPlacementNeedsIdentification(id: $0.id) }) {
-                        Label("需要确认身份的图标，请逐项“识别并连接”；批量操作会跳过这些项目。", systemImage: "person.crop.circle.badge.questionmark")
+                        Label(copy("需要确认身份的图标，请逐项“识别并连接”；批量操作会跳过这些项目。"), systemImage: "person.crop.circle.badge.questionmark")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                     trayItemList
                     HStack(alignment: .top, spacing: 7) {
                         Image(systemName: "info.circle").accessibilityHidden(true)
-                        Text("更改选择会立即处理；同一应用的图标共用一行显示设置，系统模块分别显示。托盘优先显示应用图标，应用图标不可用时使用原始图像或名称标识。")
+                        Text(copy("更改选择会立即处理；同一应用的图标共用一行显示设置，系统模块分别显示。托盘优先显示应用图标，应用图标不可用时使用原始图像或名称标识。"))
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 4)
                         if !model.screenCaptureGranted {
-                            Button("增强图标外观") { presentation.page = .settings }.buttonStyle(.link)
+                            Button(copy("增强图标外观")) { presentation.page = .settings }.buttonStyle(.link)
                         }
                     }
                     .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -286,83 +291,83 @@ struct SettingsView: View {
     private var managementActions: some View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("图标显示方式").font(.system(size: 15, weight: .semibold))
+                Text(copy("图标显示方式")).font(.system(size: 15, weight: .semibold))
                 Text(managementSummary)
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button("重试失败项\(model.trayRetryCount > 0 ? " · \(model.trayRetryCount)" : "")") {
+            Button(model.trayRetryCount > 0 ? format("重试失败项 · %lld", Int64(model.trayRetryCount)) : copy("重试失败项")) {
                 model.retryFailedTrayPlacements()
             }
             .disabled(!model.trayPlacementBatchActionsAllowed || model.trayRetryCount == 0)
-            .help("仅重试当前可处理的失败项，保留各自的三项选择；归属待修复项不参与批量重试；需要单独识别的图标请使用行内按钮。范围不受搜索与筛选影响。")
-            Button("应用全部待处理\(model.trayPendingApplicationCount > 0 ? " · \(model.trayPendingApplicationCount)" : "")") {
+            .help(copy("仅重试当前可处理的失败项，保留各自的三项选择；归属待修复项不参与批量重试；需要单独识别的图标请使用行内按钮。范围不受搜索与筛选影响。"))
+            Button(model.trayPendingApplicationCount > 0 ? format("应用全部待处理 · %lld", Int64(model.trayPendingApplicationCount)) : copy("应用全部待处理")) {
                 model.applyPendingTrayPlacements()
             }
             .buttonStyle(.borderedProminent)
             .disabled(!model.trayPlacementBatchActionsAllowed || model.trayPendingApplicationCount == 0)
-            .help("继续处理所有可直接应用的未完成选择，包括失败项。已确认、离线、归属待修复和需要单独识别的图标不重复处理。范围不受搜索与筛选影响。")
+            .help(copy("继续处理所有可直接应用的未完成选择，包括失败项。已确认、离线、归属待修复和需要单独识别的图标不重复处理。范围不受搜索与筛选影响。"))
         }
     }
 
     private var managementSummary: String {
         if let reason = model.trayPlacementBlockedReason { return reason }
         if model.trayPlacementOutstandingCount > 0 {
-            return "\(model.trayPlacementOutstandingCount) 项尚未完成 · 选择已保留，批量处理可直接应用的项目"
+            return format("%lld 项尚未完成 · 选择已保留，批量处理可直接应用的项目", Int64(model.trayPlacementOutstandingCount))
         }
-        return "三项选择，即改即用 · 未完成时可统一应用或重试"
+        return copy("三项选择，即改即用 · 未完成时可统一应用或重试")
     }
 
     private var trayListToolbar: some View {
         HStack(spacing: 10) {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
-                TextField("搜索应用或图标", text: $presentation.traySearchText)
-                    .textFieldStyle(.plain).accessibilityLabel("搜索应用或图标")
+                TextField(copy("搜索应用或图标"), text: $presentation.traySearchText)
+                    .textFieldStyle(.plain).accessibilityLabel(copy("搜索应用或图标"))
                 if !presentation.traySearchText.isEmpty {
                     Button { presentation.traySearchText = "" } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain).accessibilityLabel("清除搜索")
+                    .buttonStyle(.plain).accessibilityLabel(copy("清除搜索"))
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
             .background(MenuTidyPalette.controlSurface(for: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            Picker("筛选图标", selection: $presentation.trayFilter) {
-                Text("全部图标").tag("all")
-                ForEach(ItemVisibility.allCases) { Text($0.title).tag($0.id) }
-                Text("需要处理 · \(attentionCount)").tag("attention")
+            Picker(copy("筛选图标"), selection: $presentation.trayFilter) {
+                Text(copy("全部图标")).tag("all")
+                ForEach(ItemVisibility.allCases) { Text(copy($0.title)).tag($0.id) }
+                Text(format("需要处理 · %lld", Int64(attentionCount))).tag("attention")
             }
             .labelsHidden().frame(width: 144)
             Button { model.refreshMenuItems() } label: {
-                Label("刷新", systemImage: "arrow.clockwise")
+                Label(copy("刷新"), systemImage: "arrow.clockwise")
             }
             .disabled(groupingControlsDisabled || !model.accessibilityGranted)
             .keyboardShortcut("r", modifiers: .command)
-            .help("重新读取图标与状态，保留所有选择。刷新不会反复重试失败项。快捷键 ⌘R。")
+            .help(copy("重新读取图标与状态，保留所有选择。刷新不会反复重试失败项。快捷键 ⌘R。"))
             Menu {
-                Button("临时显示全部") { model.revealAllTemporarily() }
+                Button(copy("临时显示全部")) { model.revealAllTemporarily() }
                     .disabled(groupingControlsDisabled || model.positionRecoveryMessage != nil)
-                Button("更新原始图标图像") { model.refreshMenuItems(prepareOverflow: true) }
+                Button(copy("更新原始图标图像")) { model.refreshMenuItems(prepareOverflow: true) }
                     .disabled(groupingControlsDisabled || !groupingPermissionsGranted || !model.screenCaptureGranted
                               || model.positionRecoveryMessage != nil)
                 Divider()
-                Button("权限与设置…") { presentation.page = .settings }
+                Button(copy("权限与设置…")) { presentation.page = .settings }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
             .menuStyle(.borderlessButton).fixedSize()
-            .accessibilityLabel("更多图标操作")
+            .accessibilityLabel(copy("更多图标操作"))
         }
     }
 
     private var trayItemList: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("应用 / 图标 · \(filteredTrayItems.count)")
+                Text(format("应用 / 图标 · %lld", Int64(filteredTrayItems.count)))
                 Spacer()
-                Text("更改后立即处理").frame(width: 294, alignment: .center)
+                Text(copy("更改后立即处理")).frame(width: 294, alignment: .center)
             }
             .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
             .padding(.horizontal, 16).padding(.vertical, 10)
@@ -373,9 +378,9 @@ struct SettingsView: View {
                         .font(.system(size: 25)).foregroundStyle(.secondary)
                     Text(trayEmptyTitle).font(.system(size: 13, weight: .medium))
                     if !presentation.traySearchText.isEmpty || presentation.trayFilter != "all" {
-                        Button("显示全部图标") { presentation.traySearchText = ""; presentation.trayFilter = "all" }.buttonStyle(.link)
+                        Button(copy("显示全部图标")) { presentation.traySearchText = ""; presentation.trayFilter = "all" }.buttonStyle(.link)
                     } else {
-                        Text(model.accessibilityGranted ? "确认对应应用已运行，再点击上方“刷新”。" : "完成上方授权后即可读取和管理图标。")
+                        Text(model.accessibilityGranted ? copy("确认对应应用已运行，再点击上方“刷新”。") : copy("完成上方授权后即可读取和管理图标。"))
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
@@ -393,17 +398,17 @@ struct SettingsView: View {
     }
 
     private var trayEmptyTitle: String {
-        if !model.accessibilityGranted { return "授权后开始整理" }
-        if model.isRefreshing && currentTrayItems.isEmpty { return "正在读取菜单栏图标…" }
-        if presentation.trayFilter == "attention" && presentation.traySearchText.isEmpty { return "当前没有需要处理的图标" }
-        return currentTrayItems.isEmpty ? "暂未发现菜单栏图标" : "没有匹配的图标"
+        if !model.accessibilityGranted { return copy("授权后开始整理") }
+        if model.isRefreshing && currentTrayItems.isEmpty { return copy("正在读取菜单栏图标…") }
+        if presentation.trayFilter == "attention" && presentation.traySearchText.isEmpty { return copy("当前没有需要处理的图标") }
+        return currentTrayItems.isEmpty ? copy("暂未发现菜单栏图标") : copy("没有匹配的图标")
     }
 
     private func trayItemRow(_ item: ManagedItemRow) -> some View {
         let pending = model.trayPlacementIsPending(id: item.id)
         let message = model.trayPlacementFailure(id: item.id)
         let needsConfirmation = item.isPending && !pending && message == nil
-        let retryTitle = message == nil ? "应用" : model.trayPlacementRetryTitle(id: item.id)
+        let retryTitle = message == nil ? copy("应用") : model.trayPlacementRetryTitle(id: item.id)
         return HStack(spacing: 12) {
             itemIcon(item)
             VStack(alignment: .leading, spacing: 5) {
@@ -411,30 +416,30 @@ struct SettingsView: View {
                     Text(item.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
                     if pending {
                         ProgressView().controlSize(.small)
-                        rowBadge("处理中", color: accent)
+                        rowBadge(copy("处理中"), color: accent)
                     } else if !item.canMove {
-                        rowBadge("系统保留", color: .secondary)
+                        rowBadge(copy("系统保留"), color: .secondary)
                     } else if message != nil {
-                        rowBadge(model.trayPlacementNeedsOwnershipRepair(id: item.id) ? "归属待修复" : "需处理", color: .orange)
+                        rowBadge(model.trayPlacementNeedsOwnershipRepair(id: item.id) ? copy("归属待修复") : copy("需处理"), color: .orange)
                     } else if needsConfirmation {
-                        rowBadge("待应用", color: .secondary)
+                        rowBadge(copy("待应用"), color: .secondary)
                     }
                 }
                 if let message, !pending {
                     Text(model.trayPlacementNeedsOwnershipRepair(id: item.id) ? message : issueSummary(message))
                         .font(.system(size: 11)).foregroundStyle(.orange)
                         .lineLimit(model.trayPlacementNeedsOwnershipRepair(id: item.id) ? 4 : 2).help(message)
-                        .accessibilityLabel("需要处理：\(message)")
+                        .accessibilityLabel(format("需要处理：%@", message))
                 } else if pending {
-                    Text("正在按顺序处理，可继续更改选择。")
+                    Text(copy("正在按顺序处理，可继续更改选择。"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 } else if item.hasMixedGroups {
-                    Text("已有图标分类不一致，请明确选择此应用的显示方式。")
+                    Text(copy("已有图标分类不一致，请明确选择此应用的显示方式。"))
                         .font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2)
                 } else {
-                    Text(needsConfirmation ? "选择已保留，等待应用并确认。" :
-                            (!item.canMove ? "由系统管理，保持显示。" :
-                                (item.ownerName.isEmpty || item.ownerName == item.name ? "更改后自动处理" : item.ownerName)))
+                    Text(needsConfirmation ? copy("选择已保留，等待应用并确认。") :
+                            (!item.canMove ? copy("由系统管理，保持显示。") :
+                                (item.ownerName.isEmpty || item.ownerName == item.name ? copy("更改后自动处理") : item.ownerName)))
                         .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
@@ -443,17 +448,17 @@ struct SettingsView: View {
                 Button(retryTitle) { model.retryTrayPlacement(id: item.id) }
                     .controlSize(.small).disabled(trayControlsDisabled)
                     .accessibilityLabel("\(retryTitle)\(item.name)")
-                    .help(message ?? "应用并确认此前保存的选择。")
+                    .help(message ?? copy("应用并确认此前保存的选择。"))
             }
-            Picker("\(item.name)的显示方式", selection: Binding(
+            Picker(format("%@的显示方式", item.name), selection: Binding(
                 get: { model.trayPlacementGroup(id: item.id) },
                 set: { model.requestTrayPlacement(id: item.id, group: $0) }
             )) {
-                ForEach(ItemVisibility.allCases) { Text($0.title).tag($0) }
+                ForEach(ItemVisibility.allCases) { Text(copy($0.title)).tag($0) }
             }
             .pickerStyle(.segmented).labelsHidden().frame(width: 294)
             .disabled(trayControlsDisabled || !item.canMove || !item.isAvailable)
-            .help(item.canMove ? "选择后立即保存并处理。处理中继续更改，将以最新选择为准。" : item.detail)
+            .help(item.canMove ? copy("选择后立即保存并处理。处理中继续更改，将以最新选择为准。") : copy(item.detail))
         }
         .padding(.horizontal, 16).padding(.vertical, 13)
         .background(message != nil && !pending ? Color.orange.opacity(0.035) : .clear)
@@ -462,40 +467,40 @@ struct SettingsView: View {
     private var savedRecords: some View {
         Group {
             if !unavailableItems.isEmpty || !model.offlineDrafts.isEmpty || !model.discardedOfflineDrafts.isEmpty {
-                DisclosureGroup("离线与保留记录 · \(unavailableItems.count + model.offlineDrafts.count)", isExpanded: $presentation.savedRecordsExpanded) {
+                DisclosureGroup(format("离线与保留记录 · %lld", Int64(unavailableItems.count + model.offlineDrafts.count)), isExpanded: $presentation.savedRecordsExpanded) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("应用未运行或图标身份尚未确认的记录保留在这里，不参加批量操作。")
+                        Text(copy("应用未运行或图标身份尚未确认的记录保留在这里，不参加批量操作。"))
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                         ForEach(unavailableItems) { item in
                             HStack(spacing: 10) {
                                 itemIcon(item)
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(item.name).font(.system(size: 12, weight: .medium))
-                                    Text("应用未运行或图标不可用 · \(item.group.title)")
+                                    Text(format("应用未运行或图标不可用 · %@", copy(item.group.title)))
                                         .font(.system(size: 11)).foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Button(model.forgetItemAffectsApplication(id: item.id) ? "忘记此应用…" : "忘记此图标规则") {
+                                Button(model.forgetItemAffectsApplication(id: item.id) ? copy("忘记此应用…") : copy("忘记此图标规则")) {
                                     if model.forgetItemAffectsApplication(id: item.id) { itemToForget = item }
                                     else { model.forgetItem(id: item.id) }
                                 }
                                 .controlSize(.small)
                                 .disabled(groupingControlsDisabled || !model.canForgetItem(id: item.id))
-                                .accessibilityLabel("忘记\(item.name)的规则")
+                                .accessibilityLabel(format("忘记%@的规则", item.name))
                                 .help(model.forgetItemAffectsApplication(id: item.id)
-                                    ? "仅在此应用没有可用图标时操作；删除它的离线显示规则和草稿，保留其他应用记录。"
-                                    : "忘记此图标的已保存规则，保留其他图标与离线草稿。")
+                                    ? copy("仅在此应用没有可用图标时操作；删除它的离线显示规则和草稿，保留其他应用记录。")
+                                    : copy("忘记此图标的已保存规则，保留其他图标与离线草稿。"))
                             }
                         }
                         if !model.discardedOfflineDrafts.isEmpty {
                             HStack {
-                                Text("已删除 \(model.discardedOfflineDrafts.count) 条待关联草稿")
+                                Text(format("已删除 %lld 条待关联草稿", Int64(model.discardedOfflineDrafts.count)))
                                     .foregroundStyle(.secondary)
                                 Spacer()
-                                Button("撤销删除", action: model.undoOfflineDraftDeletion)
+                                Button(copy("撤销删除"), action: model.undoOfflineDraftDeletion)
                                     .controlSize(.small)
                                     .disabled(!model.canUndoOfflineDraftDeletion)
-                                    .help("恢复本次打开应用期间最后一批删除的草稿；不覆盖新的选择")
+                                    .help(copy("恢复本次打开应用期间最后一批删除的草稿；不覆盖新的选择"))
                             }
                         }
                         if !model.offlineDrafts.isEmpty {
@@ -503,13 +508,13 @@ struct SettingsView: View {
                                 offlineDraftList.padding(.top, 8)
                             } label: {
                                 HStack {
-                                    Text("待关联草稿 · \(model.offlineDrafts.count)")
+                                    Text(format("待关联草稿 · %lld", Int64(model.offlineDrafts.count)))
                                     Spacer()
-                                    Button("一键删除草稿", action: model.discardOfflineDrafts)
+                                    Button(copy("一键删除草稿"), action: model.discardOfflineDrafts)
                                         .controlSize(.small)
                                         .disabled(!model.canDiscardOfflineDrafts)
-                                        .accessibilityLabel("删除全部待关联草稿")
-                                        .help("删除当前全部待关联草稿；已保存的分类与当前图标显示不变")
+                                        .accessibilityLabel(copy("删除全部待关联草稿"))
+                                        .help(copy("删除当前全部待关联草稿；已保存的分类与当前图标显示不变"))
                                 }
                             }
                         }
@@ -527,18 +532,18 @@ struct SettingsView: View {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 19)).foregroundStyle(accent).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text("也可以在菜单栏中拖拽整理")
+                Text(copy("也可以在菜单栏中拖拽整理"))
                     .font(.system(size: 12, weight: .medium))
-                Text("进入整理模式后按住 ⌘ 拖动图标，完成时确认分组。列表选择会立即处理。")
+                Text(copy("进入整理模式后按住 ⌘ 拖动图标，完成时确认分组。列表选择会立即处理。"))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            Button("在菜单栏拖拽分组") { model.beginArrangement() }
+            Button(copy("在菜单栏拖拽分组")) { model.beginArrangement() }
                 .disabled(isBusy || !model.accessibilityGranted)
                 .help(model.accessibilityGranted
-                    ? "显示菜单栏分组标记；拖动完成后验证分组并收起。"
-                    : "请先在权限页开启辅助功能权限，以便读取并保存拖动后的分组。")
+                    ? copy("显示菜单栏分组标记；拖动完成后验证分组并收起。")
+                    : copy("请先在权限页开启辅助功能权限，以便读取并保存拖动后的分组。"))
         }
         .padding(12)
         .modifier(SettingsCardStyle())
@@ -549,18 +554,18 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 Image(systemName: "cursorarrow.motionlines")
                     .foregroundStyle(accent).accessibilityHidden(true)
-                Text(model.isRefreshing ? "正在确认拖拽后的分组" : "按住 ⌘，在菜单栏中拖动图标")
+                Text(model.isRefreshing ? copy("正在确认拖拽后的分组") : copy("按住 ⌘，在菜单栏中拖动图标"))
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
-                Text("整理模式")
+                Text(copy("整理模式"))
                     .font(.system(size: 10, weight: .medium)).foregroundStyle(accent)
             }
             HStack(spacing: 8) {
-                arrangementZone("始终隐藏", color: .orange)
-                arrangementMarker("常隐")
-                arrangementZone("收起后隐藏", color: .secondary)
-                arrangementMarker("收起")
-                arrangementZone("常驻显示", color: accent)
+                arrangementZone(copy("始终隐藏"), color: .orange)
+                arrangementMarker(copy("常隐"))
+                arrangementZone(copy("收起后隐藏"), color: .secondary)
+                arrangementMarker(copy("收起"))
+                arrangementZone(copy("常驻显示"), color: accent)
                 Image(systemName: "ellipsis").foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
@@ -568,24 +573,24 @@ struct SettingsView: View {
             .padding(.horizontal, 10)
             .background(MenuTidyPalette.controlSurface(for: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("从左到右：始终隐藏、常隐标记、收起后隐藏、收起标记、常驻显示、Menu Tidy 入口。")
-            Text("「常隐」左侧始终隐藏；两个标记之间收起后隐藏；「收起」右侧常驻显示。标记仅在整理时显示。")
+            .accessibilityLabel(copy("从左到右：始终隐藏、常隐标记、收起后隐藏、收起标记、常驻显示、Menu Tidy 入口。"))
+            Text(copy("「常隐」左侧始终隐藏；两个标记之间收起后隐藏；「收起」右侧常驻显示。标记仅在整理时显示。"))
                 .font(.system(size: 10)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
-                Text("也可点击菜单栏「···」或其右键菜单完成。")
+                Text(copy("也可点击菜单栏「···」或其右键菜单完成。"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
-                Button("保持展开并退出") { model.leaveArrangementExpanded() }
+                Button(copy("保持展开并退出")) { model.leaveArrangementExpanded() }
                     .disabled(isBusy)
-                    .help("保留已拖动的图标位置，退出整理模式并保持全部分组展开。")
+                    .help(copy("保留已拖动的图标位置，退出整理模式并保持全部分组展开。"))
                 Button { model.finishArrangement() } label: {
-                    Text(model.isRefreshing ? "正在确认…" : "完成并收起")
+                    Text(model.isRefreshing ? copy("正在确认…") : copy("完成并收起"))
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(isBusy)
-                .help("只保存连续两次可信扫描确认的分组，再收起。位置未知时不会猜测分类。")
+                .help(copy("只保存连续两次可信扫描确认的分组，再收起。位置未知时不会猜测分类。"))
             }
         }
         .padding(12)
@@ -616,20 +621,20 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 7) {
                     Image(systemName: groupSymbol(group)).foregroundStyle(groupColor(group))
-                    Text(group.title).font(.system(size: 12, weight: .semibold))
+                    Text(copy(group.title)).font(.system(size: 12, weight: .semibold))
                     Spacer(minLength: 4)
                     VStack(alignment: .trailing, spacing: 2) {
                         Text("\(count)")
                             .font(.system(size: 17, weight: .semibold, design: .rounded))
                             .monospacedDigit()
-                        Text("当前选择").font(.system(size: 9)).foregroundStyle(.secondary)
+                        Text(copy("当前选择")).font(.system(size: 9)).foregroundStyle(.secondary)
                     }
                 }
                 Text(groupDescription(group))
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(pendingCount > 0 ? "\(pendingCount) 项尚待确认" : "无待处理选择")
+                Text(pendingCount > 0 ? format("%lld 项尚待确认", Int64(pendingCount)) : copy("无待处理选择"))
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(pendingCount > 0 ? .orange : .secondary)
             }
@@ -647,9 +652,9 @@ struct SettingsView: View {
             }
         }
         .buttonStyle(.plain)
-        .help("按当前选择筛选\(group.title)的图标，数量包含尚未应用的草稿；再次点击显示全部。")
-        .accessibilityLabel("\(group.title)，当前选择 \(count) 个图标" + (pendingCount > 0 ? "，其中 \(pendingCount) 项尚待确认" : "，无待处理选择"))
-        .accessibilityValue(presentation.trayFilter == group.id ? "已筛选" : "未筛选")
+        .help(format("按当前选择筛选%@的图标，数量包含尚未应用的草稿；再次点击显示全部。", copy(group.title)))
+        .accessibilityLabel(pendingCount > 0 ? format("%@，当前选择 %lld 个图标，其中 %lld 项尚待确认", copy(group.title), Int64(count), Int64(pendingCount)) : format("%@，当前选择 %lld 个图标，无待处理选择", copy(group.title), Int64(count)))
+        .accessibilityValue(presentation.trayFilter == group.id ? copy("已筛选") : copy("未筛选"))
     }
 
     private func groupSymbol(_ group: ItemVisibility) -> String {
@@ -669,9 +674,9 @@ struct SettingsView: View {
     }
     private func groupDescription(_ group: ItemVisibility) -> String {
         switch group {
-        case .visible: "保持在菜单栏，随时可用。"
-        case .collapsible: "收进托盘，点击菜单栏箭头查看。"
-        case .alwaysHidden: "普通展开不显示，可临时显示全部。"
+        case .visible: copy("保持在菜单栏，随时可用。")
+        case .collapsible: copy("收进托盘，点击菜单栏箭头查看。")
+        case .alwaysHidden: copy("普通展开不显示，可临时显示全部。")
         }
     }
 
@@ -692,9 +697,9 @@ struct SettingsView: View {
     private var offlineDraftList: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("保留的离线草稿 · \(model.offlineDrafts.count)")
+                Text(format("保留的离线草稿 · %lld", Int64(model.offlineDrafts.count)))
                     .font(.system(size: 12, weight: .medium))
-                Text("这些旧选择暂时无法关联当前图标，不参与自动处理。删除草稿不会改变已保存的分类或当前图标显示。")
+                Text(copy("这些旧选择暂时无法关联当前图标，不参与自动处理。删除草稿不会改变已保存的分类或当前图标显示。"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
             .padding(14)
@@ -704,31 +709,31 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
                             Text(draft.rule.name).font(.system(size: 12, weight: .medium))
-                            rowBadge("离线草稿", color: .orange)
+                            rowBadge(copy("离线草稿"), color: .orange)
                         }
                         Text(draft.requiresReassociationAfterRestart
-                            ? "原图标身份暂时无法确认，请明确关联当前图标。"
-                            : "等待原图标重新出现；不会按名称自动关联。")
+                            ? copy("原图标身份暂时无法确认，请明确关联当前图标。")
+                            : copy("等待原图标重新出现；不会按名称自动关联。"))
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
-                    Text(draft.rule.visibility.title).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(copy(draft.rule.visibility.title)).font(.system(size: 11)).foregroundStyle(.secondary)
                     if draft.requiresReassociationAfterRestart {
-                        Button("关联图标…") {
+                        Button(copy("关联图标…")) {
                             associationTargetID = ""
                             associationIssue = nil
                             draftToAssociate = draft
                         }
                         .disabled(groupingControlsDisabled)
-                        .accessibilityLabel("关联\(draft.rule.name)的草稿")
+                        .accessibilityLabel(format("关联%@的草稿", draft.rule.name))
                     }
                     Button { model.discardDraft(id: draft.id) } label: {
                         Image(systemName: "trash").foregroundStyle(.secondary)
                     }
                     .buttonStyle(.borderless)
                     .disabled(groupingControlsDisabled)
-                    .help("删除此草稿；已应用规则不变")
-                    .accessibilityLabel("删除\(draft.rule.name)的草稿")
+                    .help(copy("删除此草稿；已应用规则不变"))
+                    .accessibilityLabel(format("删除%@的草稿", draft.rule.name))
                 }
                 .padding(14)
             }
@@ -743,20 +748,20 @@ struct SettingsView: View {
 
     private func draftAssociationSheet(_ draft: PendingDraftRecord) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("关联待应用草稿").font(.system(size: 17, weight: .semibold))
-            Text("将「\(draft.rule.name)」的「\(draft.rule.visibility.title)」选择关联到下面的当前图标。关联后仍需应用，不会立即移动或隐藏。")
+            Text(copy("关联待应用草稿")).font(.system(size: 17, weight: .semibold))
+            Text(format("将「%@」的「%@」选择关联到下面的当前图标。关联后仍需应用，不会立即移动或隐藏。", draft.rule.name, copy(draft.rule.visibility.title)))
                 .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
-            Picker("当前图标", selection: $associationTargetID) {
-                Text("请选择图标").tag("")
+            Picker(copy("当前图标"), selection: $associationTargetID) {
+                Text(copy("请选择图标")).tag("")
                 ForEach(associationTargets) { item in
-                    Text("\(item.name) · \(item.ownerName)" + (model.pendingDraftID(for: item.id) == nil ? "" : "（已有草稿）"))
+                    Text(format("%@ · %@", item.name, item.ownerName) + (model.pendingDraftID(for: item.id) == nil ? "" : copy("（已有草稿）")))
                         .tag(item.id)
                 }
             }
             .pickerStyle(.menu)
             .disabled(groupingControlsDisabled)
             if associationTargets.isEmpty {
-                Text("当前没有可关联的图标。请返回列表刷新后重试。")
+                Text(copy("当前没有可关联的图标。请返回列表刷新后重试。"))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             if let issue = associationIssue {
@@ -765,12 +770,12 @@ struct SettingsView: View {
             }
             HStack {
                 Spacer()
-                Button("取消") { draftToAssociate = nil }.keyboardShortcut(.cancelAction)
-                Button("关联并保留为待应用") {
+                Button(copy("取消")) { draftToAssociate = nil }.keyboardShortcut(.cancelAction)
+                Button(copy("关联并保留为待应用")) {
                     if model.reassociateDraft(id: draft.id, to: associationTargetID) {
                         draftToAssociate = nil
                     } else {
-                        associationIssue = model.managementError ?? "当前图标不可用，未修改草稿。请返回列表刷新后重试。"
+                        associationIssue = model.managementError ?? copy("当前图标不可用，未修改草稿。请返回列表刷新后重试。")
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -792,13 +797,13 @@ struct SettingsView: View {
         HStack(spacing: 10) {
             Image(systemName: "eye").foregroundStyle(accent).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text("原生菜单栏分组已展开").font(.system(size: 12, weight: .medium))
-                Text("包含「始终隐藏」。系统空间不足时仍需系统溢出入口；结束后恢复此前的展开／收起状态。")
+                Text(copy("原生菜单栏分组已展开")).font(.system(size: 12, weight: .medium))
+                Text(copy("包含「始终隐藏」。系统空间不足时仍需系统溢出入口；结束后恢复此前的展开／收起状态。"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("结束临时显示") { model.endTemporaryReveal() }.disabled(groupingControlsDisabled)
-            Button("收起现有分组") { model.collapseNativeGroups() }.disabled(groupingControlsDisabled)
+            Button(copy("结束临时显示")) { model.endTemporaryReveal() }.disabled(groupingControlsDisabled)
+            Button(copy("收起现有分组")) { model.collapseNativeGroups() }.disabled(groupingControlsDisabled)
         }
         .padding(12)
         .background(MenuTidyPalette.accentWash(for: colorScheme, amount: 0.065),
@@ -818,11 +823,11 @@ struct SettingsView: View {
             if let recovery = model.positionRecoveryMessage {
                 VStack(alignment: .leading, spacing: 8) {
                     detailedIssueNotice(recovery, symbol: "arrow.uturn.backward.circle",
-                                        title: "查看图标恢复详情", isExpanded: $presentation.recoveryDetailsExpanded)
+                                        title: copy("查看图标恢复详情"), isExpanded: $presentation.recoveryDetailsExpanded)
                     HStack {
-                        Button(model.usesNativeVisibility ? "重试恢复图标" : "重试恢复原排序") { model.retryPositionRecovery() }
-                        Button("恢复隐藏项并保留外部改动") { model.keepCurrentPositionLayout() }
-                            .help("恢复仍由 Menu Tidy 管理的图标状态；保留其他操作改过的设置。待应用分类不会标为成功。")
+                        Button(model.usesNativeVisibility ? copy("重试恢复图标") : copy("重试恢复原排序")) { model.retryPositionRecovery() }
+                        Button(copy("恢复隐藏项并保留外部改动")) { model.keepCurrentPositionLayout() }
+                            .help(copy("恢复仍由 Menu Tidy 管理的图标状态；保留其他操作改过的设置。待应用分类不会标为成功。"))
                     }
                     .disabled(groupingControlsDisabled)
                 }
@@ -837,13 +842,13 @@ struct SettingsView: View {
             }
             if let error = model.managementError {
                 detailedIssueNotice(error, symbol: "exclamationmark.triangle.fill",
-                                    title: "查看完整原因", isExpanded: $presentation.managementErrorDetailsExpanded)
+                                    title: copy("查看完整原因"), isExpanded: $presentation.managementErrorDetailsExpanded)
             }
             if let warning = model.iconImageWarning {
                 VStack(alignment: .leading, spacing: 5) {
                     issueNotice(warning, symbol: "photo")
                     if let details = model.iconImageWarningDetails {
-                        DisclosureGroup("查看图像获取详情", isExpanded: $presentation.imageWarningDetailsExpanded) {
+                        DisclosureGroup(copy("查看图像获取详情"), isExpanded: $presentation.imageWarningDetailsExpanded) {
                             Text(details)
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
@@ -857,10 +862,10 @@ struct SettingsView: View {
                 }
             }
             if let error = model.panelActivationError {
-                issueNotice("图标操作：\(error)", symbol: "cursorarrow.click", isError: true)
+                issueNotice(format("图标操作：%@", error), symbol: "cursorarrow.click", isError: true)
             }
             if let error = model.panelError {
-                issueNotice("图标栏：\(error)", symbol: "rectangle.on.rectangle.slash", isError: true)
+                issueNotice(format("图标栏：%@", error), symbol: "rectangle.on.rectangle.slash", isError: true)
             }
             ForEach(Array(environmentNotices.enumerated()), id: \.offset) { _, issue in
                 issueNotice(issue, symbol: "exclamationmark.triangle")
@@ -917,7 +922,7 @@ struct SettingsView: View {
                 screenCapturePermissionCard
                 appearanceCard
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("使用偏好").font(.system(size: 13, weight: .semibold))
+                    Text(copy("使用偏好")).font(.system(size: 13, weight: .semibold))
                     preferencesCard
                 }
                 UpdateSettingsView(updates: updates)
@@ -926,7 +931,7 @@ struct SettingsView: View {
                 if let issue = model.loginIssue {
                     VStack(alignment: .leading, spacing: 6) {
                         issueNotice(issue, symbol: "person.crop.circle.badge.exclamationmark")
-                        Button("打开系统登录项设置") { model.showSystemLoginSettings() }
+                        Button(copy("打开系统登录项设置")) { model.showSystemLoginSettings() }
                             .buttonStyle(.link).padding(.leading, 24)
                     }
                 }
@@ -945,15 +950,15 @@ struct SettingsView: View {
                     .frame(width: 28, height: 28)
                     .background(accent.opacity(0.11), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("外观与语言").font(.system(size: 14, weight: .semibold))
-                    Text("主题和界面语言会立即应用，并在下次启动后保留。")
+                    Text(copy("外观与语言")).font(.system(size: 14, weight: .semibold))
+                    Text(copy("主题和界面语言会立即应用，并在下次启动后保留。"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
             HStack(spacing: 12) {
-                appearanceOption(title: "主题", detail: "控制窗口、托盘和设置页的明暗模式") {
-                    Picker("主题", selection: $preferences.theme) {
+                appearanceOption(title: copy("主题"), detail: copy("控制窗口、托盘和设置页的明暗模式")) {
+                    Picker(copy("主题"), selection: $preferences.theme) {
                         ForEach(AppPreferences.Theme.allCases) { theme in
                             Label(theme.titleKey, systemImage: theme.symbol).tag(theme)
                         }
@@ -961,8 +966,8 @@ struct SettingsView: View {
                     .pickerStyle(.menu)
                     .frame(width: 150)
                 }
-                appearanceOption(title: "语言", detail: "目前支持简体中文和 English") {
-                    Picker("语言", selection: $preferences.language) {
+                appearanceOption(title: copy("语言"), detail: copy("目前支持简体中文和 English")) {
+                    Picker(copy("语言"), selection: $preferences.language) {
                         ForEach(AppPreferences.Language.allCases) { language in
                             Text(language.titleKey).tag(language)
                         }
@@ -976,7 +981,7 @@ struct SettingsView: View {
         .modifier(SettingsCardStyle())
     }
 
-    private func appearanceOption<Control: View>(title: LocalizedStringKey, detail: LocalizedStringKey,
+    private func appearanceOption<Control: View>(title: String, detail: String,
                                                   @ViewBuilder control: () -> Control) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.system(size: 12, weight: .semibold))
@@ -996,11 +1001,11 @@ struct SettingsView: View {
                     .font(.system(size: 21)).foregroundStyle(accent)
                     .frame(width: 26).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(model.accessibilityGranted ? "辅助功能已开启" : "先允许 Menu Tidy 整理菜单栏")
+                    Text(model.accessibilityGranted ? copy("辅助功能已开启") : copy("先允许 Menu Tidy 整理菜单栏"))
                         .font(.system(size: 13, weight: .semibold))
                     Text(model.usesNativeVisibility
-                        ? "辅助功能用于读取菜单栏图标并打开对应的原生菜单。图标的显示与隐藏另需下方菜单栏设置文件授权；屏幕录制只用于增强原始图标外观，未开启时托盘仍可使用应用身份图标。"
-                        : "辅助功能用于读取图标、确认位置，以及请求系统支持的图标操作。调整原生位置另需排序目录授权；屏幕录制仅用于增强原始图标外观，未开启时托盘仍可使用应用身份图标。")
+                        ? copy("辅助功能用于读取菜单栏图标并打开对应的原生菜单。图标的显示与隐藏另需下方菜单栏设置文件授权；屏幕录制只用于增强原始图标外观，未开启时托盘仍可使用应用身份图标。")
+                        : copy("辅助功能用于读取图标、确认位置，以及请求系统支持的图标操作。调整原生位置另需排序目录授权；屏幕录制仅用于增强原始图标外观，未开启时托盘仍可使用应用身份图标。"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1008,23 +1013,23 @@ struct SettingsView: View {
             }
             if !model.accessibilityGranted {
                 HStack(alignment: .top, spacing: 16) {
-                    permissionStep("1", title: "打开授权页面", detail: "申请权限或打开系统设置。")
-                    permissionStep("2", title: "开启 Menu Tidy", detail: "在系统设置的「\(model.permissionSettingsName)」中开启。")
-                    permissionStep("3", title: "返回应用", detail: "自动检测权限，再刷新图标列表。")
+                    permissionStep("1", title: copy("打开授权页面"), detail: copy("申请权限或打开系统设置。"))
+                    permissionStep("2", title: copy("开启 Menu Tidy"), detail: format("在系统设置的「%@」中开启。", model.permissionSettingsName))
+                    permissionStep("3", title: copy("返回应用"), detail: copy("自动检测权限，再刷新图标列表。"))
                 }
-                Text("系统开关需要你亲自确认，应用不能代替或绕过授权。")
+                Text(copy("系统开关需要你亲自确认，应用不能代替或绕过授权。"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
             HStack(spacing: 10) {
                 if !model.accessibilityGranted {
-                    Button("申请辅助功能权限") { model.requestAccessibility() }
+                    Button(copy("申请辅助功能权限")) { model.requestAccessibility() }
                         .buttonStyle(.borderedProminent)
                 }
-                Button("打开系统设置") { model.openAccessibilitySettings() }
-                Button("重新检测") { model.recheckPermissions() }
+                Button(copy("打开系统设置")) { model.openAccessibilitySettings() }
+                Button(copy("重新检测")) { model.recheckPermissions() }
                 Spacer(minLength: 0)
                 if compact {
-                    Button("权限说明与设置") { presentation.page = .settings }.buttonStyle(.link)
+                    Button(copy("权限说明与设置")) { presentation.page = .settings }.buttonStyle(.link)
                 }
             }
 
@@ -1034,7 +1039,7 @@ struct SettingsView: View {
 
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("当前运行的应用")
+                    Text(copy("当前运行的应用"))
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                     Text(model.applicationPath)
@@ -1045,7 +1050,7 @@ struct SettingsView: View {
                         .help(model.applicationPath)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Button("在访达中显示应用") { model.revealApplication() }
+                Button(copy("在访达中显示应用")) { model.revealApplication() }
                     .buttonStyle(.link)
                     .font(.system(size: 11))
                     .fixedSize()
@@ -1053,11 +1058,11 @@ struct SettingsView: View {
             .padding(10)
             .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
 
-            DisclosureGroup("已开启仍未识别？", isExpanded: $presentation.permissionHelpExpanded) {
+            DisclosureGroup(copy("已开启仍未识别？"), isExpanded: $presentation.permissionHelpExpanded) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("应用更新或重新签名后，系统中旧的授权记录可能失效，即使开关仍显示为开启。")
-                    Text("请在系统设置中移除旧的 Menu Tidy 记录，重新添加上方显示的当前应用并开启权限，然后返回点击「重新检测」。")
-                    Text("移除、添加和开启权限都需要你在系统设置中确认，应用不能自动绕过系统授权。")
+                    Text(copy("应用更新或重新签名后，系统中旧的授权记录可能失效，即使开关仍显示为开启。"))
+                    Text(copy("请在系统设置中移除旧的 Menu Tidy 记录，重新添加上方显示的当前应用并开启权限，然后返回点击「重新检测」。"))
+                    Text(copy("移除、添加和开启权限都需要你在系统设置中确认，应用不能自动绕过系统授权。"))
                         .foregroundStyle(.secondary)
                 }
                 .font(.system(size: 11))
@@ -1078,25 +1083,25 @@ struct SettingsView: View {
                     .font(.system(size: compact ? 18 : 21)).foregroundStyle(accent)
                     .frame(width: 26).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(model.nativeVisibilityAccessAvailable ? "菜单栏显示设置已授权" : "允许调整菜单栏显示设置")
+                    Text(model.nativeVisibilityAccessAvailable ? copy("菜单栏显示设置已授权") : copy("允许调整菜单栏显示设置"))
                         .font(.system(size: compact ? 12 : 13, weight: .semibold))
-                    Text("在系统选择窗口中确认已定位的菜单栏设置文件。授权后，选择常驻或收进托盘即可处理；点击托盘图标仍可打开应用的原生菜单。")
+                    Text(copy("在系统选择窗口中确认已定位的菜单栏设置文件。授权后，选择常驻或收进托盘即可处理；点击托盘图标仍可打开应用的原生菜单。"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             if !compact {
-                Text("仅授权这一个菜单栏设置文件。已保存的图标选择会保留，完成授权后可继续处理。")
+                Text(copy("仅授权这一个菜单栏设置文件。已保存的图标选择会保留，完成授权后可继续处理。"))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 10) {
-                Button(model.nativeVisibilityAccessAvailable ? "重新选择设置文件…" : "授权菜单栏显示设置…") {
+                Button(model.nativeVisibilityAccessAvailable ? copy("重新选择设置文件…") : copy("授权菜单栏显示设置…")) {
                     model.requestNativeVisibilityAccess()
                 }
-                Button("重新检测文件访问") { model.recheckNativeVisibilityAccess() }
+                Button(copy("重新检测文件访问")) { model.recheckNativeVisibilityAccess() }
                 Spacer(minLength: 0)
-                if compact { Button("权限说明") { presentation.page = .settings }.buttonStyle(.link) }
+                if compact { Button(copy("权限说明")) { presentation.page = .settings }.buttonStyle(.link) }
             }
             .disabled(groupingControlsDisabled)
             if let message = model.nativeVisibilityAccessMessage {
@@ -1109,11 +1114,11 @@ struct SettingsView: View {
 
     private var nativeSystemVisibilityAccessCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("允许管理系统图标").font(.system(size: 13, weight: .semibold))
-            Text("隔空投送和输入法切换图标使用各自的系统显示设置。只需在选择窗口中授权已定位的设置文件，完成后可重试连接。")
+            Text(copy("允许管理系统图标")).font(.system(size: 13, weight: .semibold))
+            Text(copy("隔空投送和输入法切换图标使用各自的系统显示设置。只需在选择窗口中授权已定位的设置文件，完成后可重试连接。"))
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("授权系统图标显示设置…") { model.requestNativeSystemVisibilityAccess() }
+            Button(copy("授权系统图标显示设置…")) { model.requestNativeSystemVisibilityAccess() }
                 .disabled(groupingControlsDisabled)
             if let message = model.nativeSystemVisibilityAccessMessage {
                 issueNotice(message, symbol: "info.circle", tint: .orange)
@@ -1131,14 +1136,14 @@ struct SettingsView: View {
                     .foregroundStyle(accent)
                     .frame(width: 26).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(model.usesNativeVisibility ? "恢复旧版菜单栏位置" :
-                        (model.menuBarPositionAccessAvailable ? "菜单栏排序目录可访问" : "后台分组还需单独授权排序目录"))
+                    Text(model.usesNativeVisibility ? copy("恢复旧版菜单栏位置") :
+                        (model.menuBarPositionAccessAvailable ? copy("菜单栏排序目录可访问") : copy("后台分组还需单独授权排序目录")))
                         .font(.system(size: compact ? 12 : 13, weight: .semibold))
                     Text(model.usesNativeVisibility
-                        ? "旧版本留下的位置记录尚待恢复。这里的目录授权仅用于完成这次恢复；日常托盘显示使用上方的菜单栏设置文件。"
+                        ? copy("旧版本留下的位置记录尚待恢复。这里的目录授权仅用于完成这次恢复；日常托盘显示使用上方的菜单栏设置文件。")
                         : (compact
-                            ? "辅助功能授权不包含排序目录。点击下方按钮，在系统选择窗口中确认目录；仍可使用 ⌘ 拖拽分组。"
-                            : "后台分组需要读取和更新系统菜单栏排序记录。请通过系统目录选择窗口，仅授权菜单栏的 Preferences 目录；辅助功能权限不会自动提供这项访问。"))
+                            ? copy("辅助功能授权不包含排序目录。点击下方按钮，在系统选择窗口中确认目录；仍可使用 ⌘ 拖拽分组。")
+                            : copy("后台分组需要读取和更新系统菜单栏排序记录。请通过系统目录选择窗口，仅授权菜单栏的 Preferences 目录；辅助功能权限不会自动提供这项访问。")))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1150,20 +1155,20 @@ struct SettingsView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(model.usesNativeVisibility
-                    ? "恢复时保留其他操作对菜单栏所做的修改。完成后，这项旧版目录权限不再是日常托盘使用的前提。"
-                    : "只访问菜单栏排序目录，不需要「完整磁盘访问权限」。目录可访问后，仍需逐项确认身份和实际位置，才能保存为已应用。")
+                    ? copy("恢复时保留其他操作对菜单栏所做的修改。完成后，这项旧版目录权限不再是日常托盘使用的前提。")
+                    : copy("只访问菜单栏排序目录，不需要「完整磁盘访问权限」。目录可访问后，仍需逐项确认身份和实际位置，才能保存为已应用。"))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 10) {
-                Button(model.menuBarPositionAccessAvailable ? "重新选择排序目录…" : "授权排序目录…") {
+                Button(model.menuBarPositionAccessAvailable ? copy("重新选择排序目录…") : copy("授权排序目录…")) {
                     model.requestMenuBarPositionAccess()
                 }
-                .help("打开系统目录选择窗口，由你确认仅访问菜单栏排序目录。")
-                Button("重新检测目录访问") { model.recheckMenuBarPositionAccess() }
+                .help(copy("打开系统目录选择窗口，由你确认仅访问菜单栏排序目录。"))
+                Button(copy("重新检测目录访问")) { model.recheckMenuBarPositionAccess() }
                 Spacer(minLength: 0)
                 if compact {
-                    Button("权限说明") { presentation.page = .settings }.buttonStyle(.link)
+                    Button(copy("权限说明")) { presentation.page = .settings }.buttonStyle(.link)
                 }
             }
             .disabled(groupingControlsDisabled)
@@ -1183,46 +1188,46 @@ struct SettingsView: View {
                     .font(.system(size: 21)).foregroundStyle(accent)
                     .frame(width: 26).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(model.screenCaptureGranted ? "原始图标外观已启用" : "增强托盘图标外观（可选）")
+                    Text(model.screenCaptureGranted ? copy("原始图标外观已启用") : copy("增强托盘图标外观（可选）"))
                         .font(.system(size: 13, weight: .semibold))
-                    Text("不开启也能使用托盘，优先显示应用身份图标；应用图标不可用时显示名称。开启后可在应用图标不可用时使用原始菜单栏图标回退；这项权限不会增加应用操作的兼容性。")
+                    Text(copy("不开启也能使用托盘，优先显示应用身份图标；应用图标不可用时显示名称。开启后可在应用图标不可用时使用原始菜单栏图标回退；这项权限不会增加应用操作的兼容性。"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("只采集已确认的图标窗口或小块区域，不上传、不保存到磁盘，也不采集声音。原始图标是最近的快照，隐藏期间可能不会及时反映状态变化。")
+                    Text(copy("只采集已确认的图标窗口或小块区域，不上传、不保存到磁盘，也不采集声音。原始图标是最近的快照，隐藏期间可能不会及时反映状态变化。"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             if !model.screenCaptureGranted {
                 HStack(alignment: .top, spacing: 16) {
-                    permissionStep("1", title: "申请权限", detail: "点击下方按钮，按 macOS 提示操作。")
-                    permissionStep("2", title: "开启当前应用", detail: "在系统设置的屏幕录制或屏幕与系统音频录制页面开启 Menu Tidy。")
-                    permissionStep("3", title: "返回并检测", detail: "完成系统确认后返回，点击「重新检测」。")
+                    permissionStep("1", title: copy("申请权限"), detail: copy("点击下方按钮，按 macOS 提示操作。"))
+                    permissionStep("2", title: copy("开启当前应用"), detail: copy("在系统设置的屏幕录制或屏幕与系统音频录制页面开启 Menu Tidy。"))
+                    permissionStep("3", title: copy("返回并检测"), detail: copy("完成系统确认后返回，点击「重新检测」。"))
                 }
-                Text("系统授权需要你亲自确认。即使系统页面名称包含音频，Menu Tidy 也不采集声音。")
+                Text(copy("系统授权需要你亲自确认。即使系统页面名称包含音频，Menu Tidy 也不采集声音。"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 10) {
                 if !model.screenCaptureGranted {
-                    Button("申请屏幕录制权限") { model.requestScreenCapture() }
+                    Button(copy("申请屏幕录制权限")) { model.requestScreenCapture() }
                         .buttonStyle(.borderedProminent)
                 }
-                Button("打开系统设置") { model.openScreenCaptureSettings() }
-                    .help("打开屏幕录制权限设置，选择当前安装的 Menu Tidy。")
-                Button("重新检测") { model.refreshPermissions() }
+                Button(copy("打开系统设置")) { model.openScreenCaptureSettings() }
+                    .help(copy("打开屏幕录制权限设置，选择当前安装的 Menu Tidy。"))
+                Button(copy("重新检测")) { model.refreshPermissions() }
                 Spacer(minLength: 0)
             }
             .disabled(isBusy)
             VStack(alignment: .leading, spacing: 7) {
-                Text("若 macOS 提示需要重新启动应用，请先退出 Menu Tidy，再从当前安装位置重新打开；已保存的设置会保留。授权尚未生效时，托盘仍可显示应用身份图标。")
+                Text(copy("若 macOS 提示需要重新启动应用，请先退出 Menu Tidy，再从当前安装位置重新打开；已保存的设置会保留。授权尚未生效时，托盘仍可显示应用身份图标。"))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if !model.screenCaptureGranted {
-                    Button("退出 Menu Tidy") { model.quit() }
+                    Button(copy("退出 Menu Tidy")) { model.quit() }
                         .buttonStyle(.link)
                         .disabled(isBusy)
-                        .help("退出后请从应用程序文件夹重新打开 Menu Tidy。")
+                        .help(copy("退出后请从应用程序文件夹重新打开 Menu Tidy。"))
                 }
             }
             .padding(10)
@@ -1250,18 +1255,18 @@ struct SettingsView: View {
 
     private var preferencesCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            preferenceRow(title: "展开后自动收起", subtitle: "仅影响「收起后隐藏」分组，默认关闭。") {
+            preferenceRow(title: copy("展开后自动收起"), subtitle: copy("仅影响「收起后隐藏」分组，默认关闭。")) {
                 HStack(spacing: 9) {
-                    Picker("自动收起等待时间", selection: $model.autoCollapseDelay) {
-                        ForEach([5, 10, 15, 30, 60], id: \.self) { Text("\($0) 秒").tag(Double($0)) }
+                    Picker(copy("自动收起等待时间"), selection: $model.autoCollapseDelay) {
+                        ForEach([5, 10, 15, 30, 60], id: \.self) { seconds in Text(format("%lld 秒", Int64(seconds))).tag(Double(seconds)) }
                     }
                     .labelsHidden().frame(width: 85).disabled(!model.autoCollapseEnabled)
-                    Toggle("展开后自动收起", isOn: $model.autoCollapseEnabled)
+                    Toggle(copy("展开后自动收起"), isOn: $model.autoCollapseEnabled)
                         .labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }
             }
             Divider()
-            preferenceRow(title: "键盘快捷键", subtitle: usesPanelVisibility ? "随时打开或收起独立托盘。" : "随时展开或收起，不展开「始终隐藏」图标。") {
+            preferenceRow(title: copy("键盘快捷键"), subtitle: usesPanelVisibility ? copy("随时打开或收起独立托盘。") : copy("随时展开或收起，不展开「始终隐藏」图标。")) {
                 HStack(spacing: 12) {
                     Text("⌃ ⌥ M")
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -1269,41 +1274,41 @@ struct SettingsView: View {
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 5))
                         .accessibilityLabel("Control Option M")
-                    Toggle("启用 Control Option M 快捷键", isOn: $model.shortcutEnabled)
+                    Toggle(copy("启用 Control Option M 快捷键"), isOn: $model.shortcutEnabled)
                         .labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }
             }
             if !model.usesPositionHiding && !model.usesNativeVisibility {
                 Divider()
-                preferenceRow(title: "启动时收起图标", subtitle: model.hasCompletedSetup ? "打开 Menu Tidy 时保持菜单栏整洁。" : "完成一次托盘设置后可启用。") {
-                    Toggle("启动时收起图标", isOn: $model.startCollapsed)
+                preferenceRow(title: copy("启动时收起图标"), subtitle: model.hasCompletedSetup ? copy("打开 Menu Tidy 时保持菜单栏整洁。") : copy("完成一次托盘设置后可启用。")) {
+                    Toggle(copy("启动时收起图标"), isOn: $model.startCollapsed)
                         .labelsHidden().toggleStyle(.switch).controlSize(.small)
                         .disabled(!model.hasCompletedSetup)
                 }
             }
             Divider()
-            preferenceRow(title: "启动后自动应用待处理", subtitle: "启动约 30 秒后刷新图标并应用一次，未完成的选择继续保留。") {
-                Toggle("启动后自动应用待处理", isOn: $model.startupApplyPendingEnabled)
+            preferenceRow(title: copy("启动后自动应用待处理"), subtitle: copy("启动约 30 秒后刷新图标并应用一次，未完成的选择继续保留。")) {
+                Toggle(copy("启动后自动应用待处理"), isOn: $model.startupApplyPendingEnabled)
                     .labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
             Divider()
-            preferenceRow(title: "后台自动应用待处理", subtitle: "定时刷新并应用未完成的选择；锁屏时暂停，解锁后刷新并补偿。忙碌或托盘打开时顺延，失败项下个周期再试。") {
+            preferenceRow(title: copy("后台自动应用待处理"), subtitle: copy("定时刷新并应用未完成的选择；锁屏时暂停，解锁后刷新并补偿。忙碌或托盘打开时顺延，失败项下个周期再试。")) {
                 HStack(spacing: 10) {
                     if model.periodicApplyPendingEnabled {
-                        Picker("自动应用间隔", selection: $model.periodicApplyPendingInterval) {
+                        Picker(copy("自动应用间隔"), selection: $model.periodicApplyPendingInterval) {
                             ForEach(PendingApplicationInterval.choices, id: \.self) { seconds in
-                                Text("每 \(Int(seconds / 60)) 分钟").tag(seconds)
+                                Text(format("每 %lld 分钟", Int64(seconds / 60))).tag(seconds)
                             }
                         }
                         .labelsHidden().pickerStyle(.menu).frame(width: 120)
                     }
-                    Toggle("后台自动应用待处理", isOn: $model.periodicApplyPendingEnabled)
+                    Toggle(copy("后台自动应用待处理"), isOn: $model.periodicApplyPendingEnabled)
                         .labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }
             }
             Divider()
-            preferenceRow(title: "登录时启动", subtitle: "登录 Mac 后自动开启 Menu Tidy。") {
-                Toggle("登录时启动", isOn: Binding(
+            preferenceRow(title: copy("登录时启动"), subtitle: copy("登录 Mac 后自动开启 Menu Tidy。")) {
+                Toggle(copy("登录时启动"), isOn: Binding(
                     get: { model.launchAtLoginEnabled }, set: { model.setLaunchAtLogin($0) }
                 ))
                 .labelsHidden().toggleStyle(.switch).controlSize(.small)
@@ -1339,14 +1344,14 @@ struct SettingsView: View {
     private var footer: some View {
         HStack(alignment: .bottom, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
-                Label("图标栏画面只在内存中显示，不上传、不存盘、不采集声音", systemImage: "lock.shield")
+                Label(copy("图标栏画面只在内存中显示，不上传、不存盘、不采集声音"), systemImage: "lock.shield")
                     .font(.system(size: 10, weight: .medium))
-                Text("点击菜单栏箭头打开独立托盘，右键打开设置。没有原始图像时显示应用身份图标；原生菜单栏的可见容量仍受屏幕宽度限制。")
+                Text(copy("点击菜单栏箭头打开独立托盘，右键打开设置。没有原始图像时显示应用身份图标；原生菜单栏的可见容量仍受屏幕宽度限制。"))
                     .font(.system(size: 10)).fixedSize(horizontal: false, vertical: true).lineSpacing(2)
             }
             .foregroundStyle(.secondary)
             Spacer(minLength: 0)
-            Button("退出 Menu Tidy") { model.quit() }
+            Button(copy("退出 Menu Tidy")) { model.quit() }
                 .buttonStyle(.link).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize()
         }
     }

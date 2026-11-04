@@ -81,6 +81,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 self?.applyWindowAppearance()
             }
         }
+        DistributedNotificationCenter.default.addObserver(
+            self, selector: #selector(systemAppearanceChanged),
+            name: Notification.Name("AppleInterfaceThemeChangedNotification"), object: nil)
         model.onShowSettings = { [weak self] in self?.showSettings() }
         model.onMemoryPressure = { [weak self] in self?.releaseClosedSettingsContent() }
         model.start()
@@ -206,6 +209,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         settingsReleaseTask = nil
         preferencesObserver.map(NotificationCenter.default.removeObserver)
         preferencesObserver = nil
+        DistributedNotificationCenter.default.removeObserver(
+            self, name: Notification.Name("AppleInterfaceThemeChangedNotification"), object: nil)
         model?.stop()
     }
 
@@ -245,16 +250,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.windowsMenu = windowMenu
     }
 
+    @objc private func systemAppearanceChanged() {
+        guard appPreferences.theme == .system else { return }
+        applyWindowAppearance()
+    }
+
     private func applyWindowAppearance() {
         guard let settingsWindow else { return }
         settingsWindow.title = model.isUIPreview
             ? appPreferences.localized("Menu Tidy · 独立交互预览（模拟数据）")
             : appPreferences.localized("Menu Tidy · 菜单栏整理")
-        if let name = appPreferences.theme.nsAppearanceName {
-            settingsWindow.appearance = NSAppearance(named: name)
-        } else {
-            settingsWindow.appearance = nil
+        let name = appPreferences.theme.nsAppearanceName ?? systemAppearanceName()
+        settingsWindow.appearance = NSAppearance(named: name)
+        // Replace the hosting root so SwiftUI observes the newly resolved scheme.
+        if let updates {
+            settingsWindow.contentView = NSHostingView(rootView: SettingsView(model: model, updates: updates,
+                presentation: settingsPresentation, preferences: appPreferences))
         }
+    }
+
+    private func systemAppearanceName() -> NSAppearance.Name {
+        let matched = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
+        return matched == .darkAqua ? .darkAqua : .aqua
     }
 
     @objc private func showManagementWindow(_ sender: Any?) {

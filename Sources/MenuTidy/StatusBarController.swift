@@ -141,7 +141,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
               isShortStatusFrame(controlFrame), isShortStatusFrame(dividerFrame),
               controlFrame.midY == dividerFrame.midY else { return true }
         if dividerFrame.midX >= controlFrame.midX {
-            model?.layoutIssue = "菜单栏分组位置需要恢复。请右键点击 Menu Tidy「···」，打开「管理菜单栏图标」检查并应用分组。重新打开应用也可以恢复显示。"
+            model?.layoutIssue = AppPreferences.shared.localized("菜单栏分组位置需要恢复。请右键点击 Menu Tidy「···」，打开「管理菜单栏图标」检查并应用分组。重新打开应用也可以恢复显示。")
             return false
         }
         model?.layoutIssue = nil
