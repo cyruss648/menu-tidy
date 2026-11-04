@@ -6,19 +6,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.7.4</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.4</link>
-      <pubDate>Wed, 04 Nov 2026 03:28:28 +0000</pubDate>
-      <sparkle:version>80</sparkle:version>
-      <sparkle:shortVersionString>0.7.4</sparkle:shortVersionString>
+      <title>Menu Tidy 0.7.5</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.5</link>
+      <pubDate>Wed, 04 Nov 2026 04:16:20 +0000</pubDate>
+      <sparkle:version>81</sparkle:version>
+      <sparkle:shortVersionString>0.7.5</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="plain-text">## [0.7.4] - 2026-11-04
+      <description sparkle:format="plain-text">## [0.7.5] - 2026-11-04
 
-自动检查更新改为可配置间隔，默认每 30 分钟。
+修复主题从浅色切回跟随系统后仍保持浅色，并补齐英文界面翻译。
 
-- 设置中可选择 5 分钟、10 分钟、30 分钟、1 小时、6 小时或 24 小时；选择会保留，关闭自动检查后仍可手动检查。
-- 短于 1 小时的间隔由 Menu Tidy 自行计时，避免 Sparkle 内置调度最短 1 小时的限制。
+- 跟随系统现在解析当前系统外观，并在系统外观变化时同步窗口与 SwiftUI 内容。
+- 设置、托盘、更新和菜单中的主要界面文案会按所选语言显示；英文资源覆盖这些界面文案。
 
 验证：`./scripts/check.sh --full` 通过 96 项 Python 测试、515 项核心 Swift 测试、123 项应用集成测试和 warnings-as-errors 构建。该版本沿用项目自签名发行身份，未经 Apple 公证。
 
@@ -32,8 +32,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.7.4-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.7.4-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.7.5-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.7.5-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -56,12 +56,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.4/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.4/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.4/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.5/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.5/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.5/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.4/Menu-Tidy-0.7.4-macos-arm64.zip" length="3752802" type="application/octet-stream" sparkle:edSignature="cauDCKRG/CtOtBphX+aYH2sOS+EHAeiEUWjR2kgos3y7LLs/oCroYPUdrtJQn0kAAPN9rnTnxvwffI1aN3JPCQ=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.5/Menu-Tidy-0.7.5-macos-arm64.zip" length="3778544" type="application/octet-stream" sparkle:edSignature="36A1LiCAghmVw7r6dBKjDFFlnewfAgjob0hQZbYwv7EyfDy9QfZSTAy2vasGbpzSjtZSzD5BSAjmdHYYdEkWCw=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: NzmSokkqsmK3UtSBaxNhFf00BvehJ/oaolhhgMTGeZ+hO+AmzMPgJoZf64gaA/Lv5mpfu4eI9h0btwr+r6TABw==
-length: 5510
+edSignature: QLfxXcYlpCh1aXKaIa2FNargbdxvIFyLacWSzMCP315tyz7FE7V6uELZy6LcEfnfc1vh3Ruy4+EPTHqp0s+nAw==
+length: 5508
 -->
