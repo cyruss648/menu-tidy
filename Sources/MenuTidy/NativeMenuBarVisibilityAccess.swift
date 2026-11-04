@@ -1,4 +1,5 @@
 import AppKit
+import MenuTidyCore
 
 /// Persists only a user-selected Control Center preference-file grant.
 @MainActor
@@ -26,9 +27,9 @@ final class NativeMenuBarVisibilityAccess {
         let panel = NSOpenPanel()
         self.panel = panel
         defer { self.panel = nil }
-        panel.title = "允许管理菜单栏图标"
-        panel.message = "请选择已定位的 group.com.apple.controlcenter.plist 文件。Menu Tidy 使用其中的应用显示开关，将图标收进独立托盘。"
-        panel.prompt = "允许访问"
+        panel.title = AppPreferences.shared.localized(LocalizedMessage("允许管理菜单栏图标"))
+        panel.message = AppPreferences.shared.localized(LocalizedMessage("请选择已定位的 group.com.apple.controlcenter.plist 文件。Menu Tidy 使用其中的应用显示开关，将图标收进独立托盘。"))
+        panel.prompt = AppPreferences.shared.localized(LocalizedMessage("允许访问"))
         panel.directoryURL = preferenceFile.deletingLastPathComponent()
         panel.nameFieldStringValue = preferenceFile.lastPathComponent
         panel.canChooseFiles = true
@@ -85,12 +86,12 @@ final class NativeMenuBarVisibilityAccess {
         }
     }
 
-    private enum AccessFailure: LocalizedError {
+    private enum AccessFailure: LocalizedMessageError {
         case wrongFile, cannotRemember
-        var errorDescription: String? {
+        var localizedMessage: LocalizedMessage {
             switch self {
-            case .wrongFile: "请选择自动定位的 group.com.apple.controlcenter.plist 文件，其他文件不能提供菜单栏图标访问。"
-            case .cannotRemember: "未能保存这次菜单栏文件授权，请重试。图标设置已保留。"
+            case .wrongFile: LocalizedMessage("请选择自动定位的 group.com.apple.controlcenter.plist 文件，其他文件不能提供菜单栏图标访问。")
+            case .cannotRemember: LocalizedMessage("未能保存这次菜单栏文件授权，请重试。图标设置已保留。")
             }
         }
     }

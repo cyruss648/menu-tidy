@@ -1,3 +1,4 @@
+import MenuTidyCore
 import SwiftUI
 
 /// Explicit browser destinations; opening history itself never contacts GitHub.
@@ -10,10 +11,10 @@ enum ProjectLinks {
 struct ReleaseHistoryView: View {
     let currentVersion: String
     @Environment(\.dismiss) private var dismiss
-    private let entries: [HistoryEntry] = HistoryEntry.bundled()
-    private let preferences = AppPreferences.shared
-    private func copy(_ key: String) -> String { preferences.localized(key) }
-    private func format(_ key: String, _ arguments: CVarArg...) -> String { preferences.localizedFormat(key, arguments) }
+    @ObservedObject private var preferences = AppPreferences.shared
+    private var entries: [HistoryEntry] { HistoryEntry.bundled(language: preferences.language) }
+    private func copy(_ key: LocalizedMessage) -> String { preferences.localized(key) }
+    private func format(_ key: StaticString, _ arguments: CVarArg...) -> String { preferences.localizedFormat(key, arguments: arguments) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -62,8 +63,11 @@ private struct HistoryEntry {
     let title: String
     let lines: [String]
 
-    static func bundled() -> [Self] {
-        guard let url = Bundle.main.url(forResource: "CHANGELOG", withExtension: "md"),
+    static func bundled(language: AppPreferences.Language) -> [Self] {
+        let url = language == .english
+            ? Bundle.main.resourceURL?.appendingPathComponent("en.lproj/CHANGELOG.md")
+            : Bundle.main.url(forResource: "CHANGELOG", withExtension: "md")
+        guard let url,
               let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         return text.components(separatedBy: "\n## [").dropFirst().compactMap { section in
             let lines = section.components(separatedBy: "\n")

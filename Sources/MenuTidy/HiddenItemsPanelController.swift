@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import MenuTidyCore
 import SwiftUI
 
 /// An independent tray whose contents are available before optional image capture.
@@ -11,6 +12,7 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
     private var presentationToken: UUID?
     private var resizeTask: Task<Void, Never>?
     private var modelObservation: AnyCancellable?
+    private var preferencesObservation: AnyCancellable?
     private var isSuspendedForNativePresentation = false
     private var applicationObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -33,6 +35,7 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         let preferences = AppPreferences.shared
         panel.title = preferences.localized("Menu Tidy · 托盘")
+        panel.appearance = preferences.theme.nsAppearanceName.flatMap(NSAppearance.init(named:))
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -45,9 +48,7 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         let hostingView = NSHostingView(rootView: HiddenItemsPanelView(model: model,
             width: width, maximumGridHeight: maxGridHeight) { [weak self] height in
                 self?.scheduleResize(height: height, token: token, screen: screen)
-            }
-            .environment(\.locale, preferences.locale)
-            .preferredColorScheme(preferences.resolvedColorScheme))
+            })
         // The controller owns the window size. Keep ideal-size measurement,
         // but prevent hosting's automatic min/max bounds from resizing it.
         hostingView.sizingOptions = [.intrinsicContentSize]
@@ -65,6 +66,14 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         // pass. Measure after published changes, once their new values exist.
         modelObservation = model.objectWillChange.sink { [weak self] _ in
             self?.scheduleResize(token: token, screen: screen)
+        }
+        preferencesObservation = preferences.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.presentationToken == token else { return }
+                self.panel?.title = preferences.localized("Menu Tidy · 托盘")
+                self.panel?.appearance = preferences.theme.nsAppearanceName.flatMap(NSAppearance.init(named:))
+                self.scheduleResize(token: token, screen: screen)
+            }
         }
         panel.makeKeyAndOrderFront(nil)
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
@@ -164,6 +173,8 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         workspaceObservers.removeAll()
         modelObservation?.cancel()
         modelObservation = nil
+        preferencesObservation?.cancel()
+        preferencesObservation = nil
         resizeTask?.cancel()
         resizeTask = nil
         presentationToken = nil
@@ -217,9 +228,9 @@ private struct HiddenItemsPanelView: View {
     let maximumGridHeight: CGFloat
     let onHeightChange: (CGFloat) -> Void
     @Environment(\.colorScheme) private var colorScheme
-    private let preferences = AppPreferences.shared
-    private func copy(_ key: String) -> String { preferences.localized(key) }
-    private func format(_ key: String, _ arguments: CVarArg...) -> String { preferences.localizedFormat(key, arguments) }
+    @ObservedObject private var preferences = AppPreferences.shared
+    private func copy(_ key: LocalizedMessage) -> String { preferences.localized(key) }
+    private func format(_ key: StaticString, _ arguments: CVarArg...) -> String { preferences.localizedFormat(key, arguments: arguments) }
     @State private var hoveredItemID: String?
     @State private var lastInteractedItemID: String?
     @State private var lastInteraction: TrayPanelAction?
@@ -233,31 +244,31 @@ private struct HiddenItemsPanelView: View {
             // Pending placement may have removed its tile optimistically.
             // Keep the operation's result tied to its identity and action.
             if model.trayPlacementIsPending(id: id) { return nil }
-            if model.trayPlacementNeedsIdentification(id: id), let message = model.trayPlacementMessage(id: id) {
+            if model.trayPlacementNeedsIdentification(id: id), let message = model.trayPlacementMessage(id: id).map(copy) {
                 return TrayPanelError(itemID: id, message: message, retryAction: .placement)
             }
-            if lastInteraction == .placement, let message = model.trayPlacementMessage(id: id) {
+            if lastInteraction == .placement, let message = model.trayPlacementMessage(id: id).map(copy) {
                 return TrayPanelError(itemID: id, message: message, retryAction: .placement)
             }
             if let lastInteraction, lastInteraction != .placement,
-               let message = model.trayItemErrors[id] ?? model.panelActivationError {
+               let message = model.trayItemErrors[id].map(copy) ?? model.panelActivationError.map(copy) {
                 return TrayPanelError(itemID: id, message: message, retryAction: lastInteraction)
             }
         }
         for item in model.panelItems {
             if model.trayPlacementNeedsIdentification(id: item.id),
-               !model.trayPlacementIsPending(id: item.id), let message = model.trayPlacementMessage(id: item.id) {
+               !model.trayPlacementIsPending(id: item.id), let message = model.trayPlacementMessage(id: item.id).map(copy) {
                 return TrayPanelError(itemID: item.id, message: message, retryAction: .placement)
             }
-            if let message = model.trayItemErrors[item.id] {
+            if let message = model.trayItemErrors[item.id].map(copy) {
                 return TrayPanelError(itemID: item.id, message: message, retryAction: .activation)
             }
             if !model.trayPlacementIsPending(id: item.id),
-               let message = model.trayPlacementMessage(id: item.id) {
+               let message = model.trayPlacementMessage(id: item.id).map(copy) {
                 return TrayPanelError(itemID: item.id, message: message, retryAction: .placement)
             }
         }
-        if let message = model.panelError {
+        if let message = model.panelError.map(copy) {
             return TrayPanelError(itemID: nil, message: message, retryAction: nil)
         }
         return nil
@@ -283,13 +294,13 @@ private struct HiddenItemsPanelView: View {
             }
             if let error = displayedError {
                 errorNotice(error)
-            } else if let progress = model.panelRecoveryProgress {
+            } else if let progress = model.panelRecoveryProgress.map(copy) {
                 Text(progress)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             } else if let id = lastInteractedItemID, model.trayPlacementIsPending(id: id) {
-                let message = model.trayPlacementMessage(id: id) ?? copy("正在调整图标位置…")
+                let message = model.trayPlacementMessage(id: id).map(copy) ?? copy("正在调整图标位置…")
                 Text(message)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -313,6 +324,8 @@ private struct HiddenItemsPanelView: View {
         })
         .onPreferenceChange(TrayPanelHeightKey.self, perform: onHeightChange)
         .tint(MenuTidyPalette.accent(for: colorScheme))
+        .environment(\.locale, preferences.locale)
+        .preferredColorScheme(preferences.resolvedColorScheme)
     }
 
     private var iconGrid: some View {
@@ -330,15 +343,15 @@ private struct HiddenItemsPanelView: View {
                         hasError: model.trayItemErrors[item.id] != nil ||
                             (!model.trayPlacementIsPending(id: item.id) && model.trayPlacementMessage(id: item.id) != nil),
                         isDisabled: model.panelItemActionsDisabled,
-                        placementMessage: model.trayPlacementMessage(id: item.id),
+                        placementMessage: model.trayPlacementMessage(id: item.id).map(copy),
                         onHover: { hoveredItemID = $0 ? item.id : (hoveredItemID == item.id ? nil : hoveredItemID) }) {
                             openItem(id: item.id)
                         }
                         .contextMenu {
-                            Button(model.panelPrimaryActionTitle(id: item.id)) { openItem(id: item.id) }
+                            Button(copy(model.panelPrimaryActionTitle(id: item.id))) { openItem(id: item.id) }
                                 .disabled(model.panelItemActionsDisabled)
                             if model.canOpenPanelApplication(id: item.id) {
-                                if model.panelPrimaryActionTitle(id: item.id) != copy("打开应用") {
+                                if copy(model.panelPrimaryActionTitle(id: item.id)) != copy("打开应用") {
                                     Button(copy("打开应用")) { openItem(id: item.id, action: .application) }
                                         .disabled(model.panelItemActionsDisabled)
                                 }
@@ -389,7 +402,7 @@ private struct HiddenItemsPanelView: View {
             }
             Spacer(minLength: 0)
             if let id = error.itemID, let action = error.retryAction {
-                Button(action == .placement ? model.trayPlacementRetryTitle(id: id) : copy("重试")) {
+                Button(action == .placement ? copy(model.trayPlacementRetryTitle(id: id)) : copy("重试")) {
                     switch action {
                     case .placement:
                         lastInteractedItemID = id
@@ -449,11 +462,11 @@ private struct HiddenPanelIconButton: View {
     let onHover: (Bool) -> Void
     let action: () -> Void
     @State private var isHovered = false
+    @ObservedObject private var preferences = AppPreferences.shared
 
     private var displayedImage: NSImage? { applicationIcon ?? menuBarImage }
 
     private var help: String {
-        let preferences = AppPreferences.shared
         let source = applicationIcon != nil ? preferences.localized("应用图标") : (menuBarImage != nil ? preferences.localized("菜单栏快照") : preferences.localized("名称标识"))
         return preferences.localizedFormat("%@ · %@\n%@", name, source, placementMessage ?? preferences.localized("点击打开菜单，右键可设为常驻菜单栏"))
     }

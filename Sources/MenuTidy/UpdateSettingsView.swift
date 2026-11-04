@@ -49,11 +49,12 @@ struct UpdateSettingsView: View {
                 Divider()
                 HStack(alignment: .center, spacing: 16) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(updates.statusMessage)
+                        Text(copy(updates.statusMessage))
                             .font(.system(size: 11, weight: .medium))
                             .fixedSize(horizontal: false, vertical: true)
                         if let date = updates.lastUpdateCheckDate {
-                            Text(format("最近检查：%@", date.formatted(date: .abbreviated, time: .shortened)))
+                            Text(format("最近检查：%@", date.formatted(
+                                Date.FormatStyle(date: .abbreviated, time: .shortened).locale(preferences.locale))))
                                 .font(.system(size: 10)).foregroundStyle(.secondary)
                         } else {
                             Text(copy("尚无检查记录"))
@@ -73,7 +74,7 @@ struct UpdateSettingsView: View {
                         .disabled(!updates.canCheckForUpdates)
                 }
                 .padding(.vertical, 13)
-                if let issue = updates.issue {
+                if let issue = updates.issue.map(copy) {
                     Label(issue, systemImage: "exclamationmark.triangle")
                         .font(.system(size: 11)).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
@@ -109,9 +110,9 @@ struct UpdateSettingsView: View {
         }
     }
 
-    private func copy(_ key: String) -> String { preferences.localized(key) }
-    private func format(_ key: String, _ arguments: CVarArg...) -> String {
-        preferences.localizedFormat(key, arguments)
+    private func copy(_ key: LocalizedMessage) -> String { preferences.localized(key) }
+    private func format(_ key: StaticString, _ arguments: CVarArg...) -> String {
+        preferences.localizedFormat(key, arguments: arguments)
     }
 
     private func preferenceRow<Control: View>(title: String, detail: String,

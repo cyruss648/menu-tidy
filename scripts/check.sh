@@ -28,6 +28,8 @@ if [ "$mode" = '--full' ]; then
   python3 scripts/check-source.py
   printf '%s\n' 'RUN: Python source gate regression tests'
   python3 -B -m unittest discover -s scripts/tests -p 'test_*.py'
+else
+  python3 scripts/localization.py
 fi
 if [ "$(uname -s)" != 'Darwin' ]; then
   printf '%s\n' 'ERROR: Swift app checks require macOS and its SDK; use --static for portable source checks.' >&2

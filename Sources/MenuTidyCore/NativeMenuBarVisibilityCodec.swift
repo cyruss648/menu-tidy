@@ -4,16 +4,16 @@ import CoreFoundation
 /// Pure value codec. This type performs no preference writes or notifications.
 /// A mutation is not evidence that MenuBarAgent accepted a visibility change.
 public enum NativeMenuBarVisibilityCodec {
-    public enum Failure: Error, Equatable, LocalizedError {
+    public enum Failure: Error, Equatable, LocalizedMessageError {
         case oversized, malformed, duplicateLocation, missingTarget, unsafeTarget
 
-        public var errorDescription: String? {
+        public var localizedMessage: LocalizedMessage {
             switch self {
-            case .oversized: "系统菜单栏显示记录超出可处理范围，未修改设置。"
-            case .malformed: "系统菜单栏显示记录的格式无法确认，未修改设置。"
-            case .duplicateLocation: "系统菜单栏显示记录有重复项目，未修改设置。"
-            case .missingTarget: "此应用尚未出现在系统菜单栏显示记录中，请启动应用后重试。"
-            case .unsafeTarget: "系统记录中的图标归属不一致，隐藏尚未执行。请重新启动对应应用后点击“重新检查”；若仍失败，需要修复旧归属记录。重复批量重试无法解决。"
+            case .oversized: LocalizedMessage("系统菜单栏显示记录超出可处理范围，未修改设置。")
+            case .malformed: LocalizedMessage("系统菜单栏显示记录的格式无法确认，未修改设置。")
+            case .duplicateLocation: LocalizedMessage("系统菜单栏显示记录有重复项目，未修改设置。")
+            case .missingTarget: LocalizedMessage("此应用尚未出现在系统菜单栏显示记录中，请启动应用后重试。")
+            case .unsafeTarget: LocalizedMessage("系统记录中的图标归属不一致，隐藏尚未执行。请重新启动对应应用后点击“重新检查”；若仍失败，需要修复旧归属记录。重复批量重试无法解决。")
             }
         }
     }

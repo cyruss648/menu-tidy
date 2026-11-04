@@ -9,21 +9,21 @@ import MenuTidyCore
 /// captures a full display or app.
 @MainActor
 final class MenuBarIconCapture {
-    enum CaptureError: LocalizedError {
+    enum CaptureError: LocalizedMessageError {
         case unsupportedSystem, unsupportedSnapshotSystem, permissionRequired, noIndependentWindows, noCapturedImages
 
-        var errorDescription: String? {
+        var localizedMessage: LocalizedMessage {
             switch self {
             case .unsupportedSystem:
-                return "独立图标栏需要 macOS 14 或更新版本。"
+                return LocalizedMessage("独立图标栏需要 macOS 14 或更新版本。")
             case .unsupportedSnapshotSystem:
-                return "原始图标快照需要 macOS 15.2 或更新版本。"
+                return LocalizedMessage("原始图标快照需要 macOS 15.2 或更新版本。")
             case .permissionRequired:
-                return "请先允许 Menu Tidy 录制屏幕，以读取菜单栏图标的原始图像。"
+                return LocalizedMessage("请先允许 Menu Tidy 录制屏幕，以读取菜单栏图标的原始图像。")
             case .noIndependentWindows:
-                return "系统没有提供独立图标窗口，且尚无原始图标快照。请先在图标可见时采集，再打开独立图标栏。"
+                return LocalizedMessage("系统没有提供独立图标窗口，且尚无原始图标快照。请先在图标可见时采集，再打开独立图标栏。")
             case .noCapturedImages:
-                return "未能取得实时图像或已确认的图标快照，请在图标可见时重新采集。"
+                return LocalizedMessage("未能取得实时图像或已确认的图标快照，请在图标可见时重新采集。")
             }
         }
     }

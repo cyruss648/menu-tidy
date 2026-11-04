@@ -164,7 +164,7 @@ final class NativeTrayIntegrationTests: XCTestCase {
             XCTAssertTrue(system.restoredBundles.isEmpty)
             for originalRule in original {
                 XCTAssertEqual(model.trayPlacementGroup(id: originalRule.id), originalRule.visibility)
-                XCTAssertTrue(model.trayPlacementFailure(id: originalRule.id)?.contains("不同的旧分类") == true)
+                XCTAssertTrue(model.trayPlacementFailure(id: originalRule.id)?.sourceText.contains("不同的旧分类") == true)
             }
             let reloaded = try JSONDecoder().decode(ItemRuleBook.self, from: XCTUnwrap(defaults.data(forKey: "itemRules.v1")))
             XCTAssertEqual(reloaded.rules, Dictionary(uniqueKeysWithValues: original.map { ($0.id, $0) }))

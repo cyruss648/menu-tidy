@@ -7,19 +7,19 @@ public enum ItemVisibility: String, CaseIterable, Codable, Identifiable, Sendabl
 
     public var id: String { rawValue }
 
-    public var title: String {
+    public var title: LocalizedMessage {
         switch self {
-        case .visible: "常驻显示"
-        case .collapsible: "收起后隐藏"
-        case .alwaysHidden: "始终隐藏"
+        case .visible: LocalizedMessage("常驻显示")
+        case .collapsible: LocalizedMessage("收起后隐藏")
+        case .alwaysHidden: LocalizedMessage("始终隐藏")
         }
     }
 
-    public var detail: String {
+    public var detail: LocalizedMessage {
         switch self {
-        case .visible: "保留在菜单栏中，不随开关收起。"
-        case .collapsible: "收起时隐藏，展开时显示。"
-        case .alwaysHidden: "展开时也保持隐藏，管理图标或临时显示全部时可见。"
+        case .visible: LocalizedMessage("保留在菜单栏中，不随开关收起。")
+        case .collapsible: LocalizedMessage("收起时隐藏，展开时显示。")
+        case .alwaysHidden: LocalizedMessage("展开时也保持隐藏，管理图标或临时显示全部时可见。")
         }
     }
 }

@@ -15,7 +15,7 @@ final class NativeSystemMenuBarVisibilityStore {
     private var knownUnwritten: [String: Ledger.Entry] = [:]
     private var initialJournalWasUnreadable = false
     private var needsWriteAccess: Set<String> = []
-    private(set) var pendingRecoveryIssue: String?
+    private(set) var pendingRecoveryIssue: LocalizedMessage?
     private let domain = "com.apple.controlcenter" as CFString
 
     var managedKeys: Set<String> { Set(entries.keys) }
@@ -27,13 +27,13 @@ final class NativeSystemMenuBarVisibilityStore {
         access = host.map { NativeSystemVisibilityAccess(hostIdentifier: $0) }
         inputAccess = host.map { NativeSystemVisibilityAccess(hostIdentifier: $0, textInput: true) }
         do {
-            guard host != nil else { throw failure("无法确认当前主机，未改变系统图标设置。") }
+            guard host != nil else { throw failure(LocalizedMessage("无法确认当前主机，未改变系统图标设置。")) }
             let loaded = try journal.load().map(Ledger.decode) ?? []
             try validateHosts(loaded)
             entries = Dictionary(uniqueKeysWithValues: loaded.map { ($0.key, $0) })
         } catch {
             initialJournalWasUnreadable = true
-            pendingRecoveryIssue = "系统图标恢复记录无法安全读取。已停止新的隐藏操作，请保留 Transactions/NativeSystemVisibility.plist 以便恢复。"
+            pendingRecoveryIssue = LocalizedMessage("系统图标恢复记录无法安全读取。已停止新的隐藏操作，请保留 Transactions/NativeSystemVisibility.plist 以便恢复。")
         }
     }
 
@@ -45,7 +45,7 @@ final class NativeSystemMenuBarVisibilityStore {
     func requestAccess(key: String) async throws -> Bool {
         try validateKey(key)
         if accessAvailable(key: key) { return true }
-        guard let access = key == "TextInputMenu" ? inputAccess : access else { throw failure("无法定位系统图标偏好文件。") }
+        guard let access = key == "TextInputMenu" ? inputAccess : access else { throw failure(LocalizedMessage("无法定位系统图标偏好文件。")) }
         guard try await access.requestAccess() else { return false }
         _ = try readValue(key: key)
         needsWriteAccess.remove(key)
@@ -56,7 +56,7 @@ final class NativeSystemMenuBarVisibilityStore {
         do {
             let data = try journal.load()
             guard data != nil || !initialJournalWasUnreadable else {
-                throw failure("原来的系统图标恢复记录无法读取且现在已缺失，不能猜测原始设置。")
+                throw failure(LocalizedMessage("原来的系统图标恢复记录无法读取且现在已缺失，不能猜测原始设置。"))
             }
             let persisted = try Ledger.discardingKnownUnwritten(entries: data.map(Ledger.decode) ?? [],
                                                                known: Array(knownUnwritten.values))
@@ -71,7 +71,7 @@ final class NativeSystemMenuBarVisibilityStore {
             initialJournalWasUnreadable = false
             pendingRecoveryIssue = nil
         } catch {
-            pendingRecoveryIssue = "系统图标恢复记录仍无法安全重新载入；未改变系统设置，请保留 Transactions/NativeSystemVisibility.plist 后重试。"
+            pendingRecoveryIssue = LocalizedMessage("系统图标恢复记录仍无法安全重新载入；未改变系统设置，请保留 Transactions/NativeSystemVisibility.plist 后重试。")
             throw failure(pendingRecoveryIssue!)
         }
     }
@@ -89,7 +89,7 @@ final class NativeSystemMenuBarVisibilityStore {
             return true // An open native menu retains its temporary reveal.
         }
         guard try Ledger.isAllowed(current) else { return false }
-        guard let hostIdentifier else { throw failure("无法确认当前主机。") }
+        guard let hostIdentifier else { throw failure(LocalizedMessage("无法确认当前主机。")) }
         try perform(Ledger.Entry(key: key, hostIdentifier: hostIdentifier, originalValue: current,
                                  mode: .original, pending: .hide))
         return true
@@ -98,7 +98,7 @@ final class NativeSystemMenuBarVisibilityStore {
     func temporarilyReveal(key: String) throws {
         try requireReady(key)
         try reconcile(key: key)
-        guard let entry = entries[key] else { throw failure("此系统图标不由 Menu Tidy 管理，未改变显示设置。") }
+        guard let entry = entries[key] else { throw failure(LocalizedMessage("此系统图标不由 Menu Tidy 管理，未改变显示设置。")) }
         if entry.mode == .revealed { try assertCurrent(entry); return }
         guard entry.mode == .hidden else { throw conflict() }
         try perform(entry.preparing(.reveal))
@@ -157,14 +157,14 @@ final class NativeSystemMenuBarVisibilityStore {
 
     private func validateKey(_ key: String) throws {
         guard ["AirDrop", "TextInputMenu"].contains(key), hostIdentifier != nil else {
-            throw failure("此系统图标尚无经过验证的独立显示开关，未改变设置。")
+            throw failure(LocalizedMessage("此系统图标尚无经过验证的独立显示开关，未改变设置。"))
         }
     }
 
     private func validateHosts(_ loaded: [Ledger.Entry]) throws {
         guard let hostIdentifier,
               loaded.allSatisfy({ ["AirDrop", "TextInputMenu"].contains($0.key) && $0.hostIdentifier.uppercased() == hostIdentifier }) else {
-            throw failure("系统图标恢复记录与当前主机不匹配，未修改设置。")
+            throw failure(LocalizedMessage("系统图标恢复记录与当前主机不匹配，未修改设置。"))
         }
     }
 
@@ -218,14 +218,14 @@ final class NativeSystemMenuBarVisibilityStore {
                               kCFPreferencesCurrentUser, targetHost)
         guard CFPreferencesSynchronize(targetDomain, kCFPreferencesCurrentUser, targetHost) else {
             needsWriteAccess.insert(entry.key)
-            throw failure("系统图标显示开关尚未确认，恢复记录已保留。")
+            throw failure(LocalizedMessage("系统图标显示开关尚未确认，恢复记录已保留。"))
         }
         let readback: Int64
         do { readback = try readValue(key: entry.key) }
         catch { needsWriteAccess.insert(entry.key); throw error }
         guard readback & 0xA == replacementMask else {
             needsWriteAccess.insert(entry.key)
-            throw failure("系统图标显示结果尚未确认，恢复记录已保留；未覆盖新的设置。")
+            throw failure(LocalizedMessage("系统图标显示结果尚未确认，恢复记录已保留；未覆盖新的设置。"))
         }
         var completed = entries; completed[entry.key] = entry.completingPending()
         try save(completed)
@@ -243,17 +243,17 @@ final class NativeSystemMenuBarVisibilityStore {
                   let raw = CFPreferencesCopyValue("visible" as CFString, inputDomain,
                       kCFPreferencesCurrentUser, kCFPreferencesAnyHost),
                   CFGetTypeID(raw) == CFBooleanGetTypeID(), let value = raw as? Bool else {
-                throw failure("无法确认输入菜单显示开关，请允许访问 TextInputMenu 的精确偏好文件。")
+                throw failure(LocalizedMessage("无法确认输入菜单显示开关，请允许访问 TextInputMenu 的精确偏好文件。"))
             }
             return value ? Ledger.shownMask : Ledger.hiddenMask
         }
         guard CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost),
               let raw = CFPreferencesCopyValue(key as CFString, domain,
                                               kCFPreferencesCurrentUser, kCFPreferencesCurrentHost) else {
-            throw failure("无法读取 AirDrop 显示开关，请允许访问已定位的当前主机偏好文件。")
+            throw failure(LocalizedMessage("无法读取 AirDrop 显示开关，请允许访问已定位的当前主机偏好文件。"))
         }
         do { return try Ledger.integerValue(raw) }
-        catch { throw failure("AirDrop 显示开关不是已验证的整数类型，未修改系统设置。") }
+        catch { throw failure(LocalizedMessage("AirDrop 显示开关不是已验证的整数类型，未修改系统设置。")) }
     }
 
     private func save(_ next: [String: Ledger.Entry]) throws {
@@ -261,7 +261,7 @@ final class NativeSystemMenuBarVisibilityStore {
             try journal.save(next.isEmpty ? nil : Ledger.encode(Array(next.values)))
             entries = next
         } catch {
-            pendingRecoveryIssue = "系统图标恢复记录未能安全保存，已停止后续写入；请保留 Transactions/NativeSystemVisibility.plist 后重试恢复。"
+            pendingRecoveryIssue = LocalizedMessage("系统图标恢复记录未能安全保存，已停止后续写入；请保留 Transactions/NativeSystemVisibility.plist 后重试恢复。")
             throw failure(pendingRecoveryIssue!)
         }
     }
@@ -276,12 +276,12 @@ final class NativeSystemMenuBarVisibilityStore {
     }
 
     private func conflict() -> StoreFailure {
-        failure("系统图标的显示设置已被其他操作修改，未覆盖新设置；恢复记录已保留。")
+        failure(LocalizedMessage("系统图标的显示设置已被其他操作修改，未覆盖新设置；恢复记录已保留。"))
     }
-    private func failure(_ message: String) -> StoreFailure { StoreFailure(message: message) }
-    private struct StoreFailure: LocalizedError {
-        let message: String
-        var errorDescription: String? { message }
+    private func failure(_ message: LocalizedMessage) -> StoreFailure { StoreFailure(message: message) }
+    private struct StoreFailure: LocalizedMessageError {
+        let message: LocalizedMessage
+        var localizedMessage: LocalizedMessage { message }
     }
 }
 
@@ -322,9 +322,9 @@ private final class NativeSystemVisibilityAccess {
         let picker = NSOpenPanel()
         panel = picker
         defer { panel = nil }
-        picker.title = textInput ? "允许管理输入法切换图标" : "允许管理 AirDrop 菜单栏图标"
-        picker.message = textInput ? "请选择已定位的 com.apple.TextInputMenu.plist；仅使用 visible 显示开关，不修改输入法和快捷键。" : "请选择已定位的当前主机 com.apple.controlcenter 偏好文件。Menu Tidy 只使用其中 AirDrop 的菜单栏显示开关。"
-        picker.prompt = "允许访问"
+        picker.title = AppPreferences.shared.localized(textInput ? LocalizedMessage("允许管理输入法切换图标") : LocalizedMessage("允许管理 AirDrop 菜单栏图标"))
+        picker.message = AppPreferences.shared.localized(textInput ? LocalizedMessage("请选择已定位的 com.apple.TextInputMenu.plist；仅使用 visible 显示开关，不修改输入法和快捷键。") : LocalizedMessage("请选择已定位的当前主机 com.apple.controlcenter 偏好文件。Menu Tidy 只使用其中 AirDrop 的菜单栏显示开关。"))
+        picker.prompt = AppPreferences.shared.localized(LocalizedMessage("允许访问"))
         picker.directoryURL = preferenceFile.deletingLastPathComponent()
         picker.nameFieldStringValue = preferenceFile.lastPathComponent
         picker.canChooseFiles = true
@@ -338,8 +338,7 @@ private final class NativeSystemVisibilityAccess {
             } else { picker.begin { continuation.resume(returning: $0) } }
         }
         guard response == .OK, let selected = picker.url else { return false }
-        guard matches(selected) else { throw NSError(domain: "MenuTidy.SystemVisibilityAccess", code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "请选择自动定位的当前主机偏好文件，未读取或修改所选的其他文件。"]) }
+        guard matches(selected) else { throw MessageFailure(LocalizedMessage("请选择自动定位的当前主机偏好文件，未读取或修改所选的其他文件。")) }
         let started = selected.startAccessingSecurityScopedResource()
         do {
             let bookmark = try selected.bookmarkData(options: .withSecurityScope,

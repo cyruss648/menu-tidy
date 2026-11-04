@@ -53,7 +53,7 @@ final class NativeBatchApplicationIntegrationTests: XCTestCase {
         XCTAssertEqual(f.system.allowed[f.a], true)
         XCTAssertEqual(f.system.allowed[f.b], false)
         XCTAssertTrue(f.model.items.first { $0.id == "session:a" }?.isPending == true)
-        XCTAssertTrue(f.model.trayPlacementFailure(id: "session:a")?.contains("仍在菜单栏中") == true)
+        XCTAssertTrue(f.model.trayPlacementFailure(id: "session:a")?.sourceText.contains("仍在菜单栏中") == true)
         XCTAssertEqual(Set(f.system.restoredBundles), [f.a])
     }
 

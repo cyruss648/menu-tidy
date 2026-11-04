@@ -18,7 +18,7 @@ final class NativeMenuBarVisibilityStore {
     // failure, so same-process reload cannot adopt another writer's value.
     private var knownUnwritten: [String: Ledger.Entry] = [:]
     private var initialJournalWasUnreadable = false
-    private(set) var pendingRecoveryIssue: String?
+    private(set) var pendingRecoveryIssue: LocalizedMessage?
 
     var managedBundles: Set<String> { Set(entries.keys) }
     var revealedBundles: Set<String> { Set(entries.values.filter(\.isTemporarilyRevealed).map(\.bundleIdentifier)) }
@@ -50,7 +50,7 @@ final class NativeMenuBarVisibilityStore {
             entries = Dictionary(uniqueKeysWithValues: loaded.map { ($0.bundleIdentifier, $0) })
         } catch {
             initialJournalWasUnreadable = true
-            pendingRecoveryIssue = "菜单栏显示记录无法安全读取。已停止新的隐藏操作，请保留 Transactions/NativeVisibility.plist 以便恢复。"
+            pendingRecoveryIssue = LocalizedMessage("菜单栏显示记录无法安全读取。已停止新的隐藏操作，请保留 Transactions/NativeVisibility.plist 以便恢复。")
         }
     }
 
@@ -68,7 +68,7 @@ final class NativeMenuBarVisibilityStore {
         do {
             let data = try loadJournalData()
             guard data != nil || !initialJournalWasUnreadable else {
-                throw failure("原来的菜单栏恢复记录无法读取且现在已缺失，不能猜测原始显示设置。请保留或恢复原来的恢复文件。")
+                throw failure(LocalizedMessage("原来的菜单栏恢复记录无法读取且现在已缺失，不能猜测原始显示设置。请保留或恢复原来的恢复文件。"))
             }
             var persisted = try data.map(Ledger.decode) ?? []
             var remembered = Array(entries.values)
@@ -87,7 +87,7 @@ final class NativeMenuBarVisibilityStore {
             initialJournalWasUnreadable = false
             pendingRecoveryIssue = nil
         } catch {
-            pendingRecoveryIssue = "菜单栏恢复记录仍无法安全重新载入；已保留当前记录且未改变系统设置。请检查 Transactions/NativeVisibility.plist 后重试。"
+            pendingRecoveryIssue = LocalizedMessage("菜单栏恢复记录仍无法安全重新载入；已保留当前记录且未改变系统设置。请检查 Transactions/NativeVisibility.plist 后重试。")
             throw failure(pendingRecoveryIssue!)
         }
     }
@@ -120,7 +120,7 @@ final class NativeMenuBarVisibilityStore {
         try requireReady()
         try reconcile(bundle: bundle)
         guard let entry = entries[bundle] else {
-            throw failure("此应用的隐藏开关不由 Menu Tidy 管理，未改变系统显示设置。")
+            throw failure(LocalizedMessage("此应用的隐藏开关不由 Menu Tidy 管理，未改变系统显示设置。"))
         }
         if entry.mode == .revealed { try assertCurrent(entry); return }
         guard entry.mode == .hidden else { throw conflict() }
@@ -184,7 +184,7 @@ final class NativeMenuBarVisibilityStore {
         guard let entry = entries[bundle] else { return }
         let current = try Codec.decode(readData())
         guard try Ledger.recovery(for: entry, current: current) == .conflicted else {
-            throw failure("此应用的显示记录仍由 Menu Tidy 管理，请使用恢复显示结束管理。")
+            throw failure(LocalizedMessage("此应用的显示记录仍由 Menu Tidy 管理，请使用恢复显示结束管理。"))
         }
         var next = entries; next.removeValue(forKey: bundle)
         try save(next)
@@ -192,7 +192,7 @@ final class NativeMenuBarVisibilityStore {
 
     private func requireReady() throws {
         if let issue = pendingRecoveryIssue { throw failure(issue) }
-        guard testingIO != nil || access.hasSelection else { throw failure("请先允许访问菜单栏显示记录，再连接托盘图标。") }
+        guard testingIO != nil || access.hasSelection else { throw failure(LocalizedMessage("请先允许访问菜单栏显示记录，再连接托盘图标。")) }
     }
 
     private func assertCurrent(_ entry: Ledger.Entry) throws {
@@ -254,7 +254,7 @@ final class NativeMenuBarVisibilityStore {
         let readback = try Codec.decode(readData())
         for entry in changes {
             guard try readback.matches(record: entry.writtenRecord(), bundleIdentifier: entry.bundleIdentifier) else {
-                throw failure("菜单栏显示结果尚未确认，恢复记录已保留；没有覆盖新的目标记录。")
+                throw failure(LocalizedMessage("菜单栏显示结果尚未确认，恢复记录已保留；没有覆盖新的目标记录。"))
             }
         }
         var completed = entries
@@ -279,7 +279,7 @@ final class NativeMenuBarVisibilityStore {
                         try assertCurrent(entry)
                     } else {
                         guard try snapshot.isAllowed(bundleIdentifier: bundle) else {
-                            throw failure("此图标原本已被系统设置隐藏。请先允许它显示，再连接托盘。")
+                            throw failure(LocalizedMessage("此图标原本已被系统设置隐藏。请先允许它显示，再连接托盘。"))
                         }
                         changes.append(Ledger.Entry(bundleIdentifier: bundle,
                             originalRecord: try snapshot.record(bundleIdentifier: bundle), mode: .original, pending: .hide))
@@ -317,7 +317,7 @@ final class NativeMenuBarVisibilityStore {
         CFPreferencesSetValue(preferenceKey, written as CFData, domain,
                               kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
         guard CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) else {
-            throw failure("菜单栏显示开关尚未确认，恢复记录已保留。")
+            throw failure(LocalizedMessage("菜单栏显示开关尚未确认，恢复记录已保留。"))
         }
     }
 
@@ -325,7 +325,7 @@ final class NativeMenuBarVisibilityStore {
         if let testingIO { return try testingIO.readPreferences() as CFData }
         guard CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost),
               let raw = CFPreferencesCopyValue(preferenceKey, domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) else {
-            throw failure("无法读取菜单栏显示记录，请重新允许访问指定文件。")
+            throw failure(LocalizedMessage("无法读取菜单栏显示记录，请重新允许访问指定文件。"))
         }
         return raw
     }
@@ -343,18 +343,18 @@ final class NativeMenuBarVisibilityStore {
             try saveJournalData(data)
             entries = next
         } catch {
-            pendingRecoveryIssue = "菜单栏恢复记录未能安全保存，已停止后续写入；请保留 Transactions/NativeVisibility.plist 并重新启动恢复。"
+            pendingRecoveryIssue = LocalizedMessage("菜单栏恢复记录未能安全保存，已停止后续写入；请保留 Transactions/NativeVisibility.plist 并重新启动恢复。")
             throw failure(pendingRecoveryIssue!)
         }
     }
 
     private func conflict() -> StoreFailure {
-        failure("此应用的显示设置已被其他操作修改，未覆盖新设置。请恢复或重新连接此图标。")
+        failure(LocalizedMessage("此应用的显示设置已被其他操作修改，未覆盖新设置。请恢复或重新连接此图标。"))
     }
-    private func failure(_ message: String) -> StoreFailure { StoreFailure(message: message) }
-    private struct StoreFailure: LocalizedError {
-        let message: String
-        var errorDescription: String? { message }
+    private func failure(_ message: LocalizedMessage) -> StoreFailure { StoreFailure(message: message) }
+    private struct StoreFailure: LocalizedMessageError {
+        let message: LocalizedMessage
+        var localizedMessage: LocalizedMessage { message }
     }
 }
 

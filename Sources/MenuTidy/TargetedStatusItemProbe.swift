@@ -236,8 +236,8 @@ private final class TargetedStatusItemProbe: NSObject, NSApplicationDelegate {
             button.target = self
             button.sendAction(on: [.leftMouseUp])
             button.toolTip = observeOnly
-                ? "菜单栏观察实验：不发送输入，最多 45 秒自动移除"
-                : (menuAgentWeightsOptIn ? "菜单栏权重实验：不发送输入，最多 \(Int(diagnosticLifetime)) 秒自动移除" : "后台输入实验：临时菜单栏项，最多 15 秒自动移除")
+                ? "Menu bar observation: no input is sent; removed within 45 seconds"
+                : (menuAgentWeightsOptIn ? "Menu bar weight experiment: no input is sent; removed within \(Int(diagnosticLifetime)) seconds" : "Background input experiment: temporary menu bar item; removed within 15 seconds")
         }
         buttonA.title = "MT-A"
         buttonB.title = "MT-B"

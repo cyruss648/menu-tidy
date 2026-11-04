@@ -18,7 +18,7 @@ private final class LegacyNoCursorProbeView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.windowBackgroundColor.setFill()
         bounds.fill()
-        "无光标移动输入诊断：仅测试此空白窗口".draw(
+        "No-cursor diagnostic: only this blank window is tested".draw(
             at: NSPoint(x: 16, y: bounds.height - 30),
             withAttributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor]
         )

@@ -36,14 +36,14 @@ enum MenuBarHostTarget {
         guard expectedOwnerPID == ProcessInfo.processInfo.processIdentifier, items.count == 2,
               ownedRegistrations.isEmpty, Set(items.map(\.identifier)).count == 2,
               items[0].item !== items[1].item else {
-            throw ResolutionError.rejected("只能为本轮两个不同的自有图标注册一次。")
+            throw ResolutionError.rejected("Registration is allowed once for two different icons owned by this process.")
         }
         var buttons: [NSStatusBarButton] = []
         for entry in items {
             guard !entry.identifier.isEmpty, entry.item.statusBar === NSStatusBar.system,
                   let button = entry.item.button, button.accessibilityIdentifier() == entry.identifier,
                   !buttons.contains(where: { $0 === button }) else {
-                throw ResolutionError.rejected("自有状态栏对象或其精确标识无法确认。")
+                throw ResolutionError.rejected("The owned status item or its exact identifier could not be verified.")
             }
             buttons.append(button)
         }
@@ -71,7 +71,7 @@ enum MenuBarHostTarget {
 
         var errorDescription: String? {
             switch self {
-            case .rejected(let detail): "无法确认探针菜单栏接收目标：\(detail)"
+            case .rejected(let detail): "Could not verify the probe menu bar host target: \(detail)"
             }
         }
     }
@@ -91,7 +91,7 @@ enum MenuBarHostTarget {
 
         func value(_ element: AXUIElement, _ attribute: String, optional: Bool = false) throws -> CFTypeRef? {
             guard remaining > 0, ProcessInfo.processInfo.systemUptime < deadline else {
-                throw ResolutionError.rejected("只读解析超过限定次数或时间。")
+                throw ResolutionError.rejected("Read-only resolution exceeded its operation or time limit.")
             }
             remaining -= 1
             AXUIElementSetMessagingTimeout(element, 0.08)
@@ -99,7 +99,7 @@ enum MenuBarHostTarget {
             let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
             if optional && (result == .noValue || result == .attributeUnsupported) { return nil }
             guard result == .success else {
-                throw ResolutionError.rejected("AX 属性读取未完成（\(result.rawValue)）。")
+                throw ResolutionError.rejected("AX attribute read failed (\(result.rawValue)).")
             }
             return value
         }
@@ -108,12 +108,12 @@ enum MenuBarHostTarget {
                       optional: Bool = false) throws -> [AXUIElement] {
             guard let raw = try value(element, attribute, optional: optional) else { return [] }
             guard let values = raw as? [CFTypeRef], values.count <= 128 else {
-                throw ResolutionError.rejected("AX 子节点列表不完整或超出限定数量。")
+                throw ResolutionError.rejected("The AX child list is incomplete or exceeds its limit.")
             }
             var result: [AXUIElement] = []
             for value in values {
                 guard CFGetTypeID(value) == AXUIElementGetTypeID() else {
-                    throw ResolutionError.rejected("AX 子节点类型无法确认。")
+                    throw ResolutionError.rejected("The AX child node type could not be verified.")
                 }
                 result.append(unsafeDowncast(value, to: AXUIElement.self))
             }
@@ -125,36 +125,36 @@ enum MenuBarHostTarget {
                   let size = try value(element, kAXSizeAttribute),
                   CFGetTypeID(position) == AXValueGetTypeID(),
                   CFGetTypeID(size) == AXValueGetTypeID() else {
-                throw ResolutionError.rejected("AX 几何属性类型无法确认。")
+                throw ResolutionError.rejected("The AX geometry attribute type could not be verified.")
             }
             var point = CGPoint.zero
             var extent = CGSize.zero
             guard AXValueGetValue(unsafeDowncast(position, to: AXValue.self), .cgPoint, &point),
                   AXValueGetValue(unsafeDowncast(size, to: AXValue.self), .cgSize, &extent) else {
-                throw ResolutionError.rejected("AX 几何属性无法解码。")
+                throw ResolutionError.rejected("The AX geometry attribute could not be decoded.")
             }
             let result = CGRect(origin: point, size: extent)
-            guard valid(result) else { throw ResolutionError.rejected("AX 几何属性无效。") }
+            guard valid(result) else { throw ResolutionError.rejected("The AX geometry attribute is invalid.") }
             return result
         }
     }
 
     static func resolveOwnedItem(identifier: String, expectedOwnerPID: pid_t) throws -> Target {
         guard let registration = registeredItem(identifier: identifier, expectedOwnerPID: expectedOwnerPID) else {
-            throw ResolutionError.rejected("仅允许本进程明确创建的两个探针按钮。")
+            throw ResolutionError.rejected("Only the two probe buttons explicitly created by this process are allowed.")
         }
-        guard AXIsProcessTrusted() else { throw ResolutionError.rejected("辅助功能权限不可用。") }
+        guard AXIsProcessTrusted() else { throw ResolutionError.rejected("Accessibility access is unavailable.") }
         let hosts = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent")
             .filter { !$0.isTerminated && $0.bundleURL?.standardizedFileURL.path == "/System/Library/CoreServices/MenuBarAgent.app" }
         guard hosts.count == 1, let host = hosts.first,
               let hostEpoch = MenuBarProcessIdentity.launchTime(for: host), host.processIdentifier > 0 else {
-            throw ResolutionError.rejected("系统菜单栏宿主进程不能唯一确认。")
+            throw ResolutionError.rejected("The system menu bar host process is ambiguous.")
         }
         let hostPID = host.processIdentifier
         let application = AXUIElementCreateApplication(hostPID)
         let reads = Reads()
         let windows = try reads.children(application, attribute: kAXWindowsAttribute)
-        guard windows.count <= 32 else { throw ResolutionError.rejected("宿主窗口数量超出限定范围。") }
+        guard windows.count <= 32 else { throw ResolutionError.rejected("The host window count exceeds its limit.") }
         let bands = NSScreen.screens.compactMap { screen -> CGRect? in
             guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
             let bounds = CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
@@ -188,14 +188,14 @@ enum MenuBarHostTarget {
                     let geometry = "containerFrame=\(describe(containerFrame)) windowFrame=\(describe(windowFrame)) " +
                         "menuBands=[\(bands.map(describe).joined(separator: ";"))] " +
                         "widthAllowed=\(widthAllowed) insideWindow=\(insideWindow) centerInsideMenuBand=\(centerInsideMenuBand)"
-                    throw ResolutionError.rejected("目标容器不在真实菜单栏区域内。\(geometry) \(windowDiagnostic(window))")
+                    throw ResolutionError.rejected("The target container is outside the real menu bar region. \(geometry) \(windowDiagnostic(window))")
                 }
                 matches.append(Match(window: window, container: container, button: button,
                     windowFrame: windowFrame, frame: containerFrame))
             }
         }
         guard matches.count == 1, let match = matches.first else {
-            throw ResolutionError.rejected("实际宿主父子链未唯一匹配指定按钮（\(matches.count) 项）。")
+            throw ResolutionError.rejected("The actual host hierarchy did not uniquely match the specified button (\(matches.count) matches).")
         }
         let resolvedWindowID = try windowID(hostPID: hostPID, frame: match.windowFrame, axWindow: match.window)
         try validateEdges(match, application: application, identifier: identifier,
@@ -207,7 +207,7 @@ enum MenuBarHostTarget {
                                    visited: &hitNodes, hitError: &hitError) else {
             let context = "frame=\(describe(match.frame)) windowFrame=\(describe(match.windowFrame)) " +
                 "cgWindowID=\(resolvedWindowID) sourcePID=\(expectedOwnerPID) hostPID=\(hostPID)"
-            throw ResolutionError.rejected("目标中心未命中已确认的 AX 按钮或其独有容器。\(context) " +
+            throw ResolutionError.rejected("The target center did not hit the verified AX button or its unique container. \(context) " +
                 centerHitDiagnostic(match, nodes: hitNodes, hitError: hitError))
         }
         // Return only live evidence. Never carry an old host PID into a new epoch.
@@ -216,7 +216,7 @@ enum MenuBarHostTarget {
               try reads.frame(match.window) == match.windowFrame,
               try reads.frame(match.container) == match.frame,
               try windowID(hostPID: hostPID, frame: match.windowFrame, axWindow: match.window) == resolvedWindowID else {
-            throw ResolutionError.rejected("解析期间宿主进程、窗口或按钮几何发生变化。")
+            throw ResolutionError.rejected("The host process, window, or button geometry changed during resolution.")
         }
         return Target(sourcePID: expectedOwnerPID, hostPID: hostPID, hostWindowID: resolvedWindowID, frame: match.frame)
     }
@@ -235,7 +235,7 @@ enum MenuBarHostTarget {
               try pid(of: match.button) == expectedOwnerPID,
               try reads.value(match.button, kAXRoleAttribute) as? String == kAXButtonRole,
               try reads.value(match.button, kAXIdentifierAttribute) as? String == identifier else {
-            throw ResolutionError.rejected("再次读取的实际 AX 父子链或按钮身份不一致。")
+            throw ResolutionError.rejected("The actual AX hierarchy or button identity changed on re-read.")
         }
     }
 
@@ -308,7 +308,7 @@ enum MenuBarHostTarget {
 
     private static func windowID(hostPID: pid_t, frame: CGRect, axWindow: AXUIElement) throws -> CGWindowID {
         guard let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] else {
-            throw ResolutionError.rejected("无法读取真实 CG 窗口清单。")
+            throw ResolutionError.rejected("Could not read the real CG window list.")
         }
         var matches: [CGWindowID] = []
         for window in windows {
@@ -318,7 +318,7 @@ enum MenuBarHostTarget {
             guard let rawID = window[kCGWindowNumber as String] as? NSNumber,
                   rawID.doubleValue.isFinite, rawID.doubleValue >= 1,
                   rawID.doubleValue <= Double(UInt32.max), rawID.doubleValue.rounded(.down) == rawID.doubleValue else {
-                throw ResolutionError.rejected("真实宿主窗口编号无效。")
+                throw ResolutionError.rejected("The real host window identifier is invalid.")
             }
             matches.append(CGWindowID(rawID.uint32Value))
         }
@@ -327,7 +327,7 @@ enum MenuBarHostTarget {
                 ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == hostPID
             }
             let details = hostWindows.prefix(12).map(describeCGWindow).joined(separator: ";")
-            throw ResolutionError.rejected("宿主进程与 AX 窗口几何未唯一对应真实 CG 窗口。" +
+            throw ResolutionError.rejected("The host process and AX window geometry did not uniquely match a real CG window." +
                 "hostPID=\(hostPID) axWindowFrame=\(describe(frame)) frameMatches=\(matches.count) " +
                 "hostWindowCount=\(hostWindows.count) hostWindows=[\(details)] \(windowDiagnostic(axWindow))")
         }
@@ -386,7 +386,7 @@ enum MenuBarHostTarget {
     private static func pid(of element: AXUIElement) throws -> pid_t {
         var pid: pid_t = 0
         guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else {
-            throw ResolutionError.rejected("AX 节点所属进程无法确认。")
+            throw ResolutionError.rejected("The process owning the AX node could not be verified.")
         }
         return pid
     }

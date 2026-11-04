@@ -120,7 +120,7 @@ class GlobalInputSourceGateTests(unittest.TestCase):
             path.parent.mkdir(parents=True)
             path.write_text("// fixture\nCGWarpMouseCursorPosition(privateFixtureValue)\n")
             stdout, stderr = io.StringIO(), io.StringIO()
-            with patch.object(CHECKS, "ROOT", root), patch.object(CHECKS.sys, "argv", [str(SCRIPT), name]), \
+            with patch.object(CHECKS, "ROOT", root), patch.object(CHECKS, "validate_repository", return_value=[]), patch.object(CHECKS.sys, "argv", [str(SCRIPT), name]), \
                     redirect_stdout(stdout), redirect_stderr(stderr):
                 result = CHECKS.main()
             self.assertEqual(result, 1)
@@ -136,7 +136,7 @@ class GlobalInputSourceGateTests(unittest.TestCase):
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("CGWarpMouseCursorPosition(point)\n")
-            with patch.object(CHECKS, "ROOT", root), patch.object(CHECKS.sys, "argv", [str(SCRIPT), *names]), \
+            with patch.object(CHECKS, "ROOT", root), patch.object(CHECKS, "validate_repository", return_value=[]), patch.object(CHECKS.sys, "argv", [str(SCRIPT), *names]), \
                     redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 self.assertEqual(CHECKS.main(), 0)
 
@@ -153,7 +153,7 @@ class DiagnosticInputBoundaryTests(unittest.TestCase):
                 data += "\nenum MenuTidyApp { static func main() {\n" + CHECKS.APPROVED_MAIN_SELECTION + "\n} }\n"
             path.write_bytes(data.encode() if isinstance(data, str) else data)
             stdout, stderr = io.StringIO(), io.StringIO()
-            with patch.object(CHECKS, "ROOT", root), patch.object(CHECKS.sys, "argv", [str(SCRIPT), name]), \
+            with patch.object(CHECKS, "ROOT", root), patch.object(CHECKS, "validate_repository", return_value=[]), patch.object(CHECKS.sys, "argv", [str(SCRIPT), name]), \
                     redirect_stdout(stdout), redirect_stderr(stderr):
                 result = CHECKS.main()
             return result, stdout.getvalue(), stderr.getvalue()

@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import MenuTidyCore
 import OSLog
 
 /// The process-local ownership state that backs the macOS assessment.
@@ -42,9 +43,9 @@ final class NativeMenuBarAssessmentStore {
         "com.apple.MenuBarAgent", "com.apple.controlcenter", "com.apple.systemuiserver"
     ]
 
-    private struct Failure: LocalizedError {
-        let message: String
-        var errorDescription: String? { message }
+    private struct Failure: LocalizedMessageError {
+        let message: LocalizedMessage
+        var localizedMessage: LocalizedMessage { message }
     }
 
     private let configurationClass: NSObject.Type?
@@ -59,7 +60,7 @@ final class NativeMenuBarAssessmentStore {
     private(set) var hiddenBundles: Set<String> = []
     private(set) var revealedBundles: Set<String> = []
     private(set) var allowedBundles: Set<String> = []
-    private(set) var lastError: String?
+    private(set) var lastError: LocalizedMessage?
 
     init() {
         _ = dlopen(Self.frameworkPath, RTLD_NOW | RTLD_LOCAL)
@@ -126,7 +127,7 @@ final class NativeMenuBarAssessmentStore {
     func changeVisibility(_ changes: [String: Bool], observedBundles: Set<String>) async
         -> [String: Result<Void, Error>] {
         guard canActivate else {
-            let error = Failure(message: "当前 macOS 未提供可用的原生菜单栏隐藏后端。选择已保留。")
+            let error = Failure(message: LocalizedMessage("当前 macOS 未提供可用的原生菜单栏隐藏后端。选择已保留。"))
             return Dictionary(uniqueKeysWithValues: changes.keys.map { ($0, .failure(error)) })
         }
         pendingActivation?.cancel()
@@ -153,7 +154,7 @@ final class NativeMenuBarAssessmentStore {
             lastError = nil
             return Dictionary(uniqueKeysWithValues: changes.keys.map { ($0, .success(())) })
         } catch {
-            lastError = error.localizedDescription
+            lastError = error.localizedMessage
             invalidate()
             let failure = error as NSError
             return Dictionary(uniqueKeysWithValues: changes.keys.map { ($0, .failure(failure)) })
@@ -165,7 +166,7 @@ final class NativeMenuBarAssessmentStore {
     /// it first would make every application visible during the native action.
     func temporarilyReveal(bundle: String) async throws {
         guard canActivate, ownedBundles.contains(bundle) else {
-            throw Failure(message: "此应用的隐藏开关不由 Menu Tidy 管理，未改变系统显示设置。")
+            throw Failure(message: LocalizedMessage("此应用的隐藏开关不由 Menu Tidy 管理，未改变系统显示设置。"))
         }
         pendingActivation?.cancel()
         pendingActivation = nil
@@ -181,7 +182,7 @@ final class NativeMenuBarAssessmentStore {
         } catch {
             hiddenBundles = previousHiddenBundles
             revealedBundles = previousRevealedBundles
-            lastError = error.localizedDescription
+            lastError = error.localizedMessage
             throw error
         }
     }
@@ -278,7 +279,7 @@ final class NativeMenuBarAssessmentStore {
 
     private func makeConfiguration(allowed: [String]) throws -> NSObject {
         guard let configurationClass else {
-            throw Failure(message: "无法加载 macOS 菜单栏原生显示后端。")
+            throw Failure(message: LocalizedMessage("无法加载 macOS 菜单栏原生显示后端。"))
         }
         let configurationSelector = NSSelectorFromString(Self.configurationInitializer)
         // The private implementation indexes both arguments as NSArray. An
@@ -289,7 +290,7 @@ final class NativeMenuBarAssessmentStore {
         guard let raw,
               let configuration = raw.perform(configurationSelector, with: systemItems,
                   with: allowed as NSArray)?.takeRetainedValue() as? NSObject else {
-            throw Failure(message: "macOS 菜单栏原生显示后端拒绝了当前允许列表。")
+            throw Failure(message: LocalizedMessage("macOS 菜单栏原生显示后端拒绝了当前允许列表。"))
         }
         return configuration
     }
@@ -305,7 +306,7 @@ final class NativeMenuBarAssessmentStore {
 
     private func activateWithTimeout(configuration: NSObject) async throws -> NSObject {
         guard let assertionClass else {
-            throw Failure(message: "无法创建 macOS 菜单栏原生显示断言。")
+            throw Failure(message: LocalizedMessage("无法创建 macOS 菜单栏原生显示断言。"))
         }
         let assertion = assertionClass.init()
         let selector = NSSelectorFromString(Self.activationSelector)
@@ -314,7 +315,7 @@ final class NativeMenuBarAssessmentStore {
             let timeout = DispatchWorkItem {
                 guard !state.completed else { return }
                 state.completed = true
-                continuation.resume(throwing: Failure(message: "macOS 菜单栏原生显示后端响应超时，选择已保留。"))
+                continuation.resume(throwing: Failure(message: LocalizedMessage("macOS 菜单栏原生显示后端响应超时，选择已保留。")))
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timeout)
             typealias Activate = @convention(c) (AnyObject, Selector, AnyObject,

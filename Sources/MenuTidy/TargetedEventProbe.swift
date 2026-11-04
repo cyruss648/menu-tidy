@@ -17,12 +17,12 @@ private final class ProbeView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.windowBackgroundColor.setFill()
         bounds.fill()
-        let title = "后台输入实验"
+        let title = "Background input experiment"
         title.draw(at: NSPoint(x: 18, y: bounds.height - 42), withAttributes: [
             .font: NSFont.systemFont(ofSize: 20, weight: .semibold),
             .foregroundColor: NSColor.labelColor,
         ])
-        let detail = "仅向本进程发送定向事件\n不移动鼠标，不激活其他应用\n最多 15 秒自动退出；结果输出到标准输出"
+        let detail = "Sends targeted events only to this process\nDoes not move the pointer or activate other apps\nExits within 15 seconds; results go to standard output"
         detail.draw(in: NSRect(x: 18, y: 18, width: bounds.width - 36, height: 90), withAttributes: [
             .font: NSFont.systemFont(ofSize: 13),
             .foregroundColor: NSColor.secondaryLabelColor,
@@ -130,7 +130,7 @@ private final class TargetedEventProbe: NSObject, NSApplicationDelegate {
         let panel = ProbePanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
         panel.probe = self
-        panel.title = "后台输入实验"
+        panel.title = "Background input experiment"
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false

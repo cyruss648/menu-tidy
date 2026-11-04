@@ -2,6 +2,7 @@
 # Build a separate, noninstalled app for exercising the real SettingsView.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+python3 scripts/localization.py
 swift build -c debug
 bin_dir="$(swift build -c debug --show-bin-path)"
 app_path="$PWD/dist/Menu Tidy Preview.app"
@@ -10,6 +11,8 @@ cp "$bin_dir/MenuTidy" "$app_path/Contents/MacOS/MenuTidy"
 cp Resources/Info.plist "$app_path/Contents/Info.plist"
 cp Resources/AppIcon.icns "$app_path/Contents/Resources/AppIcon.icns"
 cp CHANGELOG.md "$app_path/Contents/Resources/CHANGELOG.md"
+mkdir -p "$app_path/Contents/Resources/en.lproj"
+cp Resources/en.lproj/CHANGELOG.md "$app_path/Contents/Resources/en.lproj/CHANGELOG.md"
 if [ -d Resources/en.lproj ]; then
   mkdir -p "$app_path/Contents/Resources/en.lproj"
   cp Resources/en.lproj/Localizable.strings "$app_path/Contents/Resources/en.lproj/Localizable.strings"

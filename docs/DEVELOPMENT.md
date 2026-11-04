@@ -41,7 +41,7 @@ cd menu-tidy
 # 快速静态检查
 ./scripts/check.sh
 
-# 只检查指定文件的静态规则
+# 指定文件的通用规则；本地化仍交叉检查完整源码与资源
 ./scripts/check.sh --static -- README.md Sources/MenuTidy/MenuTidyModel.swift
 
 # Swift 编译与测试，编译警告视为错误
@@ -62,6 +62,25 @@ docs: clarify system overflow limitations
 ```
 
 提交前核对 `git diff` 与 `git diff --cached`。应用包、构建目录、本地签名私钥、钥匙串、授权数据及个人日志不应加入仓库。
+
+## 本地化与外观状态
+
+应用自己生成的提示、进度、警告、错误和行详情使用 `MenuTidyCore.LocalizedMessage` 保存静态键和参数，在视图或 AppKit 展示边界调用 `AppPreferences.localized`。例如：
+
+```swift
+let notice = LocalizedMessage("正在检查 \(index)/\(total)：\(item.name)")
+let failure = LocalizedMessage("位置恢复尚未完成：\(error.localizedMessage)")
+```
+
+`LocalizedMessage` 只接收字面量及插值，不提供从任意运行时 `String` 构造翻译键的入口。插值的字符串作为原始数据保留，嵌套消息和应用自己的 `LocalizedMessageError` 保留各自的键。应用名称、路径、系统或第三方错误等外部数据不会进行替换或猜测翻译；需要直接展示外部文本时显式使用 `.verbatim(value)`。核心类型不读取 `UserDefaults` 或语言 bundle。
+
+模型中不要保存 `copy(...)` 或 `.localizedDescription` 已渲染的应用文案，否则切换语言后旧消息不会更新。现有 printf 文案的键限为 `StaticString`；转发可变参数必须使用 `localizedFormat(key, arguments: arguments)`。新动态消息优先使用 `LocalizedMessage`，不依赖 printf 的不安全参数类型。
+
+`python3 scripts/localization.py` 检查整个 `Sources/` 和 `Resources/en.lproj/Localizable.strings`，拒绝未包装的中文字面量、缺少英文键、重复键、空值、残留中文、格式参数数量/编号/类型不匹配，以及英文离线更新记录缺少版本。检查器识别注释、转义、普通/raw/多行字符串和嵌套插值；系统 AX 标签匹配只按精确文件与值保留两个例外。它是源码词法回归检查，不替代 Swift 类型检查或人工翻译质量审核。
+
+这些检查进入 pre-commit、pre-push、完整 CI、正式打包和 UI Preview 构建。即使 pre-commit 只传入部分文件，本地化仍检查完整关系，避免删除一个翻译时漏掉未改动的使用方。英文发布历史为对应所有版本的离线摘要，原始完整验证记录继续保留在仓库 `CHANGELOG.md`。
+
+外观和语言变化应由现有视图观察 `AppPreferences` 原地更新。不要为了刷新主题重建 `NSHostingView` 或设置与主题/语言绑定的 `.id`；这会重置滚动位置、弹层与局部状态。应用集成回归使用真实 `NSWindow`/`NSHostingView` 检查滚动容器、偏移和页面状态，并验证截图中的动态消息无需重新扫描即可切换语言；这些测试仍不等同于正式安装包的人工视觉验收。
 
 ## 构建与本地运行
 

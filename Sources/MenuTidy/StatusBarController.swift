@@ -72,7 +72,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 let item = NSStatusBar.system.statusItem(withLength: 28)
                 item.button?.title = title
                 let menu = NSMenu()
-                menu.addItem(withTitle: "Menu Tidy 测试图标 \(title)", action: nil, keyEquivalent: "")
+                menu.addItem(withTitle: AppPreferences.shared.localized(LocalizedMessage("Menu Tidy 测试图标 \(title)")), action: nil, keyEquivalent: "")
                 item.menu = menu
                 demoItems.append(item)
             }
@@ -141,7 +141,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
               isShortStatusFrame(controlFrame), isShortStatusFrame(dividerFrame),
               controlFrame.midY == dividerFrame.midY else { return true }
         if dividerFrame.midX >= controlFrame.midX {
-            model?.layoutIssue = AppPreferences.shared.localized("菜单栏分组位置需要恢复。请右键点击 Menu Tidy「···」，打开「管理菜单栏图标」检查并应用分组。重新打开应用也可以恢复显示。")
+            model?.layoutIssue = LocalizedMessage("菜单栏分组位置需要恢复。请右键点击 Menu Tidy「···」，打开「管理菜单栏图标」检查并应用分组。重新打开应用也可以恢复显示。")
             return false
         }
         model?.layoutIssue = nil
@@ -407,14 +407,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             let guide = NSMenuItem(title: copy("按住 ⌘ 拖动；左常隐、中收起、右常驻"), action: nil, keyEquivalent: "")
             guide.isEnabled = false
             menu.addItem(guide)
-            if let message = model?.managementError {
+            if let message = model?.managementError.map(copy) {
                 let error = NSMenuItem(title: String(message.prefix(72)) + (message.count > 72 ? "…" : ""), action: nil, keyEquivalent: "")
                 error.toolTip = message
                 error.isEnabled = false
                 menu.addItem(error)
             }
         } else {
-            addItem(menu, title: copy(model?.isPanelPresented == true ? "收起托盘" : "打开托盘"), action: #selector(toggle))
+            addItem(menu, title: copy(model?.isPanelPresented == true ? LocalizedMessage("收起托盘") : LocalizedMessage("打开托盘")), action: #selector(toggle))
         }
         if !usesPanelVisibility {
             addItem(menu, title: copy("收起现有菜单栏分组"), action: #selector(collapseNativeGroups), enabled: !busy && !isArranging)

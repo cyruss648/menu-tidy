@@ -1,4 +1,5 @@
 import Carbon
+import MenuTidyCore
 
 /// Carbon registers only this shortcut; it does not record other keyboard input.
 @MainActor
@@ -7,7 +8,7 @@ final class GlobalShortcut {
     private var handler: EventHandlerRef?
     var onPress: (() -> Void)?
 
-    func register() -> String? {
+    func register() -> LocalizedMessage? {
         unregister()
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -22,12 +23,12 @@ final class GlobalShortcut {
             }
             return noErr
         }, 1, &eventType, context, &handler)
-        guard result == noErr else { return "无法监听快捷键（\(result)）。仍可点击菜单栏按钮。" }
+        guard result == noErr else { return LocalizedMessage("无法监听快捷键（\(result)）。仍可点击菜单栏按钮。") }
         let status = RegisterEventHotKey(UInt32(kVK_ANSI_M), UInt32(controlKey | optionKey),
                                         EventHotKeyID(signature: 0x4D544459, id: 1), GetEventDispatcherTarget(), 0, &hotKey)
         if status != noErr {
             unregister()
-            return "⌃⌥M 被其他应用占用或注册失败（\(status)）。请点击菜单栏按钮。"
+            return LocalizedMessage("⌃⌥M 被其他应用占用或注册失败（\(status)）。请点击菜单栏按钮。")
         }
         return nil
     }

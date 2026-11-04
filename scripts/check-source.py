@@ -11,11 +11,13 @@ import subprocess
 import sys
 import tomllib
 from xml.parsers.expat import ExpatError
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from localization import validate_repository
 
 ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED = {".git", ".build", ".swiftpm", ".local", "dist", "node_modules", "vendor", "__pycache__"}
 MAX_BYTES = 1024 * 1024
-TEXT_SUFFIXES = {".swift", ".c", ".h", ".py", ".sh", ".md", ".toml", ".json", ".yaml", ".yml", ".txt"}
+TEXT_SUFFIXES = {".swift", ".c", ".h", ".py", ".sh", ".md", ".toml", ".json", ".yaml", ".yml", ".txt", ".strings"}
 TEXT_NAMES = {".editorconfig", ".gitignore", ".gitattributes", "LICENSE"}
 # High-confidence credential formats only. Report paths and rule names, never values.
 SECRET_PATTERNS = (
@@ -542,6 +544,11 @@ def main() -> int:
     for label in ("excluded build/local/dependency paths", "deleted files", "binary text-check skips"):
         if totals[label]:
             print(f"SKIP: {label}: {totals[label]} file(s)")
+    # Always cross-check the full source/catalog relationship. A staged-only
+    # hook must also catch a deleted translation used by an unchanged source.
+    if (ROOT / "Sources").exists():
+        errors.extend(validate_repository(ROOT))
+        print("CHECKED: localization source and English catalog")
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)

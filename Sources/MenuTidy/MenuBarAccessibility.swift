@@ -21,7 +21,7 @@ struct MenuBarItemSnapshot: Identifiable, Sendable {
     let frame: CGRect
     let hasReliableGeometry: Bool
     let canMove: Bool
-    let detail: String
+    let detail: LocalizedMessage
     let persistentIdentity: Bool
     let ownIdentifier: String?
     var presentationIdentity: MenuBarItemPresentationIdentity? = nil
@@ -49,7 +49,7 @@ struct MenuBarPositionKeyChallenge: Sendable {
     fileprivate let token: UUID
 }
 
-struct MenuBarPositionBindingError: LocalizedError, Sendable {
+struct MenuBarPositionBindingError: LocalizedMessageError, Sendable {
     enum Reason: String, Sendable {
         case permission, cancelled, invalidRequest, missingEntry, protectedItem
         case ownerChanged, ambiguousOwner, missingKey, ambiguousKey
@@ -59,26 +59,26 @@ struct MenuBarPositionBindingError: LocalizedError, Sendable {
     let id: String
     let reason: Reason
 
-    var errorDescription: String? {
-        let detail: String
+    var localizedMessage: LocalizedMessage {
+        let detail: LocalizedMessage
         switch reason {
-        case .permission: detail = "需要辅助功能权限才能确认图标身份"
-        case .cancelled: detail = "后台排序身份检查已取消"
-        case .invalidRequest: detail = "后台排序请求或排序数据不完整"
-        case .missingEntry: detail = "尚未读取到这个图标"
-        case .protectedItem: detail = "此系统项目不参与后台分组"
-        case .ownerChanged: detail = "图标所属进程已经变化，请刷新后重试"
-        case .ambiguousOwner: detail = "同一应用存在多个进程实例，无法唯一确认排序归属"
-        case .missingKey: detail = "这个图标没有可精确匹配的现有排序键"
-        case .ambiguousKey: detail = "这个应用存在多个排序键，无法唯一匹配图标"
-        case .incompleteSource: detail = "未能完整读取这个应用的菜单栏项目，尚不能确认唯一身份"
-        case .unsupportedSource: detail = "这个应用的菜单栏结构暂不支持严格的后台排序绑定"
-        case .ambiguousSource: detail = "这个应用提供多个菜单栏项目，无法唯一匹配排序键"
-        case .identityChanged: detail = "无法继续确认图标的原始菜单栏身份，未继续排序"
-        case .expired: detail = "后台排序身份凭据已过期，请重新检查"
-        case .visibilityUnconfirmed: detail = "尚未确认该系统图标的原始可见身份；请先使该系统图标在原生菜单栏中可见后重试"
+        case .permission: detail = LocalizedMessage("需要辅助功能权限才能确认图标身份")
+        case .cancelled: detail = LocalizedMessage("后台排序身份检查已取消")
+        case .invalidRequest: detail = LocalizedMessage("后台排序请求或排序数据不完整")
+        case .missingEntry: detail = LocalizedMessage("尚未读取到这个图标")
+        case .protectedItem: detail = LocalizedMessage("此系统项目不参与后台分组")
+        case .ownerChanged: detail = LocalizedMessage("图标所属进程已经变化，请刷新后重试")
+        case .ambiguousOwner: detail = LocalizedMessage("同一应用存在多个进程实例，无法唯一确认排序归属")
+        case .missingKey: detail = LocalizedMessage("这个图标没有可精确匹配的现有排序键")
+        case .ambiguousKey: detail = LocalizedMessage("这个应用存在多个排序键，无法唯一匹配图标")
+        case .incompleteSource: detail = LocalizedMessage("未能完整读取这个应用的菜单栏项目，尚不能确认唯一身份")
+        case .unsupportedSource: detail = LocalizedMessage("这个应用的菜单栏结构暂不支持严格的后台排序绑定")
+        case .ambiguousSource: detail = LocalizedMessage("这个应用提供多个菜单栏项目，无法唯一匹配排序键")
+        case .identityChanged: detail = LocalizedMessage("无法继续确认图标的原始菜单栏身份，未继续排序")
+        case .expired: detail = LocalizedMessage("后台排序身份凭据已过期，请重新检查")
+        case .visibilityUnconfirmed: detail = LocalizedMessage("尚未确认该系统图标的原始可见身份；请先使该系统图标在原生菜单栏中可见后重试")
         }
-        return detail + "；未发送鼠标或键盘事件。"
+        return detail + LocalizedMessage("；未发送鼠标或键盘事件。")
     }
 }
 
@@ -107,50 +107,50 @@ struct MenuBarItemPresentation: Sendable {
 }
 enum MenuBarPresentationStatus: Sendable { case open, closed, unavailable }
 
-enum MenuBarOverflowError: LocalizedError, Sendable {
+enum MenuBarOverflowError: LocalizedMessageError, Sendable {
     case entryNotFound, entryAmbiguous, actionUnsupported, cancelled
     case actionUnconfirmed(axError: Int32?)
 
-    var errorDescription: String? {
+    var localizedMessage: LocalizedMessage {
         switch self {
         case .entryNotFound:
-            return "未找到当前菜单栏中的系统溢出入口，请检查菜单栏后刷新。"
+            return LocalizedMessage("未找到当前菜单栏中的系统溢出入口，请检查菜单栏后刷新。")
         case .entryAmbiguous:
-            return "系统溢出入口无法唯一确认，已停止后台展开。"
+            return LocalizedMessage("系统溢出入口无法唯一确认，已停止后台展开。")
         case .actionUnsupported:
-            return "系统溢出入口未提供可用的后台展开操作。可手动展开并保持片刻，待图标可见时自动补采。"
+            return LocalizedMessage("系统溢出入口未提供可用的后台展开操作。可手动展开并保持片刻，待图标可见时自动补采。")
         case .actionUnconfirmed(let code):
-            let suffix = code.map { "（AX 返回码 \($0)）" } ?? ""
-            return "尚未确认系统溢出区域已展开\(suffix)；未重复发送操作，也未移动鼠标。"
+            let suffix = code.map { LocalizedMessage("（AX 返回码 \($0)）") } ?? ""
+            return LocalizedMessage("尚未确认系统溢出区域已展开\(suffix)；未重复发送操作，也未移动鼠标。")
         case .cancelled:
-            return "系统溢出区域准备已取消；未发送鼠标或键盘事件。"
+            return LocalizedMessage("系统溢出区域准备已取消；未发送鼠标或键盘事件。")
         }
     }
 }
 
-enum MenuBarAccessError: LocalizedError, Sendable {
+enum MenuBarAccessError: LocalizedMessageError, Sendable {
     case permission, eventPermission, disappeared, invalidGeometry, differentScreen, rejected, cancelled
     case dragEventTimedOut, inputStateChanged
     case scanTimedOut(scannedOwners: Int, totalOwners: Int, elapsed: TimeInterval)
     case actionUnavailable, actionRejected
-    case geometryDetail(String)
-    var errorDescription: String? {
+    case geometryDetail(LocalizedMessage)
+    var localizedMessage: LocalizedMessage {
         switch self {
-        case .permission: return "需要辅助功能权限。请在权限页授权 Menu Tidy 后重试。"
-        case .eventPermission: return "系统尚未允许控制事件。请在辅助功能中重新开启 Menu Tidy，重新打开应用后再试。"
-        case .disappeared: return "图标已退出或位置不可读取，请刷新列表后重试。"
-        case .invalidGeometry: return "菜单栏未提供有效位置。请先展开其他整理器、退出全屏，再刷新列表。"
+        case .permission: return LocalizedMessage("需要辅助功能权限。请在权限页授权 Menu Tidy 后重试。")
+        case .eventPermission: return LocalizedMessage("系统尚未允许控制事件。请在辅助功能中重新开启 Menu Tidy，重新打开应用后再试。")
+        case .disappeared: return LocalizedMessage("图标已退出或位置不可读取，请刷新列表后重试。")
+        case .invalidGeometry: return LocalizedMessage("菜单栏未提供有效位置。请先展开其他整理器、退出全屏，再刷新列表。")
         case .geometryDetail(let detail): return detail
-        case .differentScreen: return "目标与分隔线不在同一块屏幕，无法安全移动。请在主屏菜单栏重试。"
-        case .rejected: return "macOS 未接受图标移动。该图标可能被系统固定，或有其他菜单栏工具正在控制它。"
-        case .actionUnavailable: return "该图标暂不支持后台打开菜单，需在原生菜单栏手动打开。没有模拟鼠标点击。"
-        case .actionRejected: return "目标应用未接受本次菜单操作。没有补发点击；请稍后重试，或在原生菜单栏手动打开。"
-        case .cancelled: return "操作已取消；未发送鼠标或键盘事件。"
+        case .differentScreen: return LocalizedMessage("目标与分隔线不在同一块屏幕，无法安全移动。请在主屏菜单栏重试。")
+        case .rejected: return LocalizedMessage("macOS 未接受图标移动。该图标可能被系统固定，或有其他菜单栏工具正在控制它。")
+        case .actionUnavailable: return LocalizedMessage("该图标暂不支持后台打开菜单，需在原生菜单栏手动打开。没有模拟鼠标点击。")
+        case .actionRejected: return LocalizedMessage("目标应用未接受本次菜单操作。没有补发点击；请稍后重试，或在原生菜单栏手动打开。")
+        case .cancelled: return LocalizedMessage("操作已取消；未发送鼠标或键盘事件。")
         case .scanTimedOut(let scannedOwners, let totalOwners, let elapsed):
             let seconds = String(format: "%.1f", elapsed)
-            return "菜单栏读取未及时完成，已停止本次扫描（已检查 \(scannedOwners)/\(totalOwners) 个 owner，用时 \(seconds) 秒）。本轮未更新列表，请稍后重试。"
-        case .dragEventTimedOut: return "系统未及时处理拖动事件，已停止本次移动并释放鼠标。请稍后重试。"
-        case .inputStateChanged: return "检测到输入状态发生变化，已停止本次操作；未接管鼠标。"
+            return LocalizedMessage("菜单栏读取未及时完成，已停止本次扫描（已检查 \(scannedOwners)/\(totalOwners) 个 owner，用时 \(seconds) 秒）。本轮未更新列表，请稍后重试。")
+        case .dragEventTimedOut: return LocalizedMessage("系统未及时处理拖动事件，已停止本次移动并释放鼠标。请稍后重试。")
+        case .inputStateChanged: return LocalizedMessage("检测到输入状态发生变化，已停止本次操作；未接管鼠标。")
         }
     }
 }
@@ -276,13 +276,13 @@ actor MenuBarAccessibility {
         case unconfirmed
         case coveredByWindow(applicationName: String?)
 
-        func explanation(for target: String, fallback: String) -> String {
+        func explanation(for target: String, fallback: LocalizedMessage) -> LocalizedMessage {
             switch self {
             case .unconfirmed:
                 return fallback
             case .coveredByWindow(let applicationName):
-                let owner = applicationName.map { "「\($0)」的窗口" } ?? "另一应用的窗口"
-                return "\(target)所在位置被\(owner)遮挡，已停止移动。请收起或关闭该浮动窗口后重试，无需反复展开系统溢出入口。"
+                let owner = applicationName.map { LocalizedMessage("「\($0)」的窗口") } ?? LocalizedMessage("另一应用的窗口")
+                return LocalizedMessage("\(target)所在位置被\(owner)遮挡，已停止移动。请收起或关闭该浮动窗口后重试，无需反复展开系统溢出入口。")
             }
         }
     }
@@ -624,11 +624,11 @@ actor MenuBarAccessibility {
             if let identifier = candidate.identifier, Self.anchorIdentifiers.contains(identifier) {
                 Self.logger.notice("anchorMapping id=\(identifier, privacy: .public) ownIdentifier=\(own ?? "nil", privacy: .public) ownerPID=\(candidate.owner.pid) ownPID=\(ProcessInfo.processInfo.processIdentifier) ownerBundle=\(candidate.owner.bundleIdentifier ?? "nil", privacy: .public) ownBundle=\(ownBundle ?? "nil", privacy: .public) role=\(candidate.role, privacy: .public) source=\(String(describing: candidate.source), privacy: .public) frame=\(String(describing: candidate.frame), privacy: .public)")
             }
-            let snapshot = MenuBarItemSnapshot(id: id, processIdentifier: candidate.owner.pid, name: inputPersistent != nil ? "输入法切换" : candidate.name, ownerName: candidate.owner.name,
+            let snapshot = MenuBarItemSnapshot(id: id, processIdentifier: candidate.owner.pid, name: candidate.name, ownerName: candidate.owner.name,
                 bundleIdentifier: candidate.owner.bundleIdentifier, frame: candidate.frame,
                 hasReliableGeometry: hasReliableGeometry, canMove: !protected,
-                detail: systemOverflow ? "系统菜单栏溢出入口，用于恢复隐藏图标，不参与分组" :
-                    (protected ? "系统固定项目或 Menu Tidy 控制项，保持可见" : (persistent == nil ? "没有稳定标识，仅在本次运行中记住此图标的分类" : "")),
+                detail: systemOverflow ? LocalizedMessage("系统菜单栏溢出入口，用于恢复隐藏图标，不参与分组") :
+                    (protected ? LocalizedMessage("系统固定项目或 Menu Tidy 控制项，保持可见") : (persistent == nil ? LocalizedMessage("没有稳定标识，仅在本次运行中记住此图标的分类") : "")),
                 persistentIdentity: persistent != nil, ownIdentifier: own,
                 presentationIdentity: MenuBarItemPresentationIdentity.resolve(
                     bundleIdentifier: candidate.owner.bundleIdentifier, accessibilityIdentifier: candidate.identifier,
@@ -1220,7 +1220,7 @@ actor MenuBarAccessibility {
         let probe = probePresentations(for: entry, owners: owners)
         Self.logger.notice("itemPresentation baselineComplete=\(probe.complete) roots=\(probe.authoritativeRoots) nodes=\(probe.nodes.count)")
         guard probe.complete, livePresentationScopeMatches(entry, owners: owners) else {
-            throw MenuBarAccessError.geometryDetail("无法完整确认目标应用当前的菜单状态，尚未点击图标，请稍后重试。")
+            throw MenuBarAccessError.geometryDetail(LocalizedMessage("无法完整确认目标应用当前的菜单状态，尚未点击图标，请稍后重试。"))
         }
         let token = UUID()
         presentation = nil
@@ -1442,7 +1442,7 @@ actor MenuBarAccessibility {
               let owner = resolvedOwner(MenuBarOwner(pid: running.processIdentifier,
                   bundleIdentifier: running.bundleIdentifier, name: "",
                   launchTime: running.launchDate?.timeIntervalSince1970 ?? 0)) else {
-            throw MenuBarAccessError.geometryDetail("无法确认该系统图标的展示进程，尚未点击图标。请关闭系统面板后重试。")
+            throw MenuBarAccessError.geometryDetail(LocalizedMessage("无法确认该系统图标的展示进程，尚未点击图标。请关闭系统面板后重试。"))
         }
         owners.append(PresentationOwner(identity: owner, requiredBundlePath: delegate.bundlePath))
         Self.logger.notice("itemPresentation systemModuleOwnerBound=true ownerCount=\(owners.count)")
@@ -3048,7 +3048,7 @@ actor MenuBarAccessibility {
         }
         guard anchors.count == Self.anchorIdentifiers.count,
               Set(anchors.compactMap(\.snapshot.ownIdentifier)) == Self.anchorIdentifiers else {
-            throw MenuBarAccessError.geometryDetail("Menu Tidy 的三个定位项尚未完整读取，请刷新列表后重试。")
+            throw MenuBarAccessError.geometryDetail(LocalizedMessage("Menu Tidy 的三个定位项尚未完整读取，请刷新列表后重试。"))
         }
         let frames = anchors.compactMap { entryFrame($0) }
         var anchorsOverlap = false
@@ -3149,7 +3149,7 @@ actor MenuBarAccessibility {
         }
         guard controls.count == 1, clocks.count == 1,
               let control = controls.first, let clock = clocks.first else {
-            throw MenuBarAccessError.geometryDetail("无法确认可见的系统时钟与 Menu Tidy 入口，已停止恢复入口。")
+            throw MenuBarAccessError.geometryDetail(LocalizedMessage("无法确认可见的系统时钟与 Menu Tidy 入口，已停止恢复入口。"))
         }
         try await move(id: control.snapshot.id, before: clock.snapshot.id)
         // System-fixed extras can remain between our item and the clock. The
@@ -3163,7 +3163,7 @@ actor MenuBarAccessibility {
               result.maxX <= clockFrame.minX + 1,
               overflowFrames.allSatisfy({ result.minX >= $0.maxX }),
               sourceMatchesHitTest(control.element, at: CGPoint(x: result.midX, y: result.midY), context: "recovered-control") else {
-            throw MenuBarAccessError.geometryDetail("Menu Tidy 入口尚未移到时钟旁的可见区域，请重试恢复。")
+            throw MenuBarAccessError.geometryDetail(LocalizedMessage("Menu Tidy 入口尚未移到时钟旁的可见区域，请重试恢复。"))
         }
         managementControlNeedsRecovery = false
     }
@@ -4572,10 +4572,10 @@ actor MenuBarAccessibility {
         }
         Self.logger.notice("backgroundMovePreflight requested=\(uniqueIDs.count) unsupported=\(unsupported) unavailable=\(unavailable)")
         guard unsupported == 0, unavailable == 0 else {
-            var details: [String] = []
-            if unsupported > 0 { details.append("\(unsupported) 个待应用图标未提供后台移动接口") }
-            if unavailable > 0 { details.append("\(unavailable) 个待应用图标的后台移动能力暂时无法确认") }
-            throw MenuBarAccessError.geometryDetail(details.joined(separator: "；") + "。尚未展开或移动菜单栏，分类选择已保留；未接管鼠标。")
+            var details: [LocalizedMessage] = []
+            if unsupported > 0 { details.append(LocalizedMessage("\(unsupported) 个待应用图标未提供后台移动接口")) }
+            if unavailable > 0 { details.append(LocalizedMessage("\(unavailable) 个待应用图标的后台移动能力暂时无法确认")) }
+            throw MenuBarAccessError.geometryDetail(details.joined(separator: "；") + LocalizedMessage("。尚未展开或移动菜单栏，分类选择已保留；未接管鼠标。"))
         }
     }
 
@@ -4597,7 +4597,7 @@ actor MenuBarAccessibility {
         let capability = attributeIsSettable(entry.element, kAXPositionAttribute)
         Self.logger.notice("backgroundMove positionSettable=\(capability.settable) axError=\(capability.error.rawValue)")
         guard capability.error == .success, capability.settable else {
-            throw MenuBarAccessError.geometryDetail("此图标未提供后台移动接口，未移动鼠标；分类选择仍待应用。")
+            throw MenuBarAccessError.geometryDetail(LocalizedMessage("此图标未提供后台移动接口，未移动鼠标；分类选择仍待应用。"))
         }
         guard let sourceRect = entryFrame(entry), let anchorRect = entryFrame(anchor),
               sourceRect.width > 0, sourceRect.height > 0, anchorRect.width > 0, anchorRect.height > 0,
@@ -4648,7 +4648,7 @@ actor MenuBarAccessibility {
             } else { previous = nil }
         }
         Self.logger.error("backgroundMove verified=false placement=\(placement.rawValue, privacy: .public) sourceBefore=\(String(describing: sourceRect), privacy: .public) sourceAfter=\(String(describing: finalSource), privacy: .public) anchorAfter=\(String(describing: finalAnchor), privacy: .public)")
-        throw MenuBarAccessError.geometryDetail("后台移动请求尚未产生连续两次可确认的位置变化；未发送鼠标或键盘事件，分类选择仍待应用。")
+        throw MenuBarAccessError.geometryDetail(LocalizedMessage("后台移动请求尚未产生连续两次可确认的位置变化；未发送鼠标或键盘事件，分类选择仍待应用。"))
     }
 
     /// Bounded, read-only capability inventory. Ordinals are local to this call;

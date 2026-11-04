@@ -11,13 +11,13 @@ public struct BatchApplicationPlan: Sendable {
     public let supportedIDs: [String]
     public let blockedIDs: [String]
     public let uninspectedIDs: [String]
-    public let issues: [String: String]
+    public let issues: [String: LocalizedMessage]
     public let stopReason: StopReason?
 
     /// Reject overlapping or unrelated results so stale checks cannot grant
     /// permission to apply a different request. Result arrays retain UI order.
     public init?(requestedIDs: [String], supportedIDs: Set<String>,
-                 issues: [String: String], stopReason: StopReason? = nil) {
+                 issues: [String: LocalizedMessage], stopReason: StopReason? = nil) {
         let requested = Set(requestedIDs)
         let blocked = Set(issues.keys)
         guard requested.count == requestedIDs.count,

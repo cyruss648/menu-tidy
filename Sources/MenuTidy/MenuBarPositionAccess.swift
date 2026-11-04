@@ -1,4 +1,5 @@
 import AppKit
+import MenuTidyCore
 
 /// Keeps the user's narrowly selected preferences directory accessible across
 /// launches. Selection is performed by the system's open panel, never by
@@ -27,9 +28,9 @@ final class MenuBarPositionAccess {
         let panel = NSOpenPanel()
         self.panel = panel
         defer { self.panel = nil }
-        panel.title = "允许访问菜单栏排序记录"
-        panel.message = "请选择已定位的 Preferences 文件夹。Menu Tidy 只使用其中的菜单栏排序记录来后台分组，不移动鼠标。"
-        panel.prompt = "允许访问"
+        panel.title = AppPreferences.shared.localized(LocalizedMessage("允许访问菜单栏排序记录"))
+        panel.message = AppPreferences.shared.localized(LocalizedMessage("请选择已定位的 Preferences 文件夹。Menu Tidy 只使用其中的菜单栏排序记录来后台分组，不移动鼠标。"))
+        panel.prompt = AppPreferences.shared.localized(LocalizedMessage("允许访问"))
         panel.directoryURL = directory
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -80,12 +81,12 @@ final class MenuBarPositionAccess {
         }
     }
 
-    private enum AccessError: LocalizedError {
+    private enum AccessError: LocalizedMessageError {
         case wrongDirectory, cannotRemember
-        var errorDescription: String? {
+        var localizedMessage: LocalizedMessage {
             switch self {
-            case .wrongDirectory: "请选择自动定位的菜单栏 Preferences 文件夹，其他文件夹无法提供排序访问。"
-            case .cannotRemember: "未能保存这次目录授权，请重试。分类草稿已保留。"
+            case .wrongDirectory: LocalizedMessage("请选择自动定位的菜单栏 Preferences 文件夹，其他文件夹无法提供排序访问。")
+            case .cannotRemember: LocalizedMessage("未能保存这次目录授权，请重试。分类草稿已保留。")
             }
         }
     }

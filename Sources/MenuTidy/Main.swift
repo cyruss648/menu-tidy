@@ -251,6 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc private func systemAppearanceChanged() {
+        appPreferences.refreshSystemAppearance()
         guard appPreferences.theme == .system else { return }
         applyWindowAppearance()
     }
@@ -262,11 +263,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             : appPreferences.localized("Menu Tidy · 菜单栏整理")
         let name = appPreferences.theme.nsAppearanceName ?? systemAppearanceName()
         settingsWindow.appearance = NSAppearance(named: name)
-        // Replace the hosting root so SwiftUI observes the newly resolved scheme.
-        if let updates {
-            settingsWindow.contentView = NSHostingView(rootView: SettingsView(model: model, updates: updates,
-                presentation: settingsPresentation, preferences: appPreferences))
-        }
+        // The existing hosting tree observes AppPreferences. Replacing it here
+        // discards the scroll position, sheets and other local presentation state.
     }
 
     private func systemAppearanceName() -> NSAppearance.Name {

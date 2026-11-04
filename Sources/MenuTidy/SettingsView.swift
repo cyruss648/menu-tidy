@@ -8,10 +8,10 @@ final class SettingsViewState: ObservableObject {
         case items
         case settings
         var id: String { rawValue }
-        var titleKey: LocalizedStringKey {
+        var titleKey: LocalizedMessage {
             switch self {
-            case .items: "托盘图标"
-            case .settings: "权限与设置"
+            case .items: LocalizedMessage("托盘图标")
+            case .settings: LocalizedMessage("权限与设置")
             }
         }
     }
@@ -35,13 +35,13 @@ struct SettingsView: View {
     @State private var itemToForget: ManagedItemRow?
     @State private var draftToAssociate: PendingDraftRecord?
     @State private var associationTargetID = ""
-    @State private var associationIssue: String?
+    @State private var associationIssue: LocalizedMessage?
     @Environment(\.colorScheme) private var colorScheme
 
     private var accent: Color { MenuTidyPalette.accent(for: colorScheme) }
-    private func copy(_ key: String) -> String { preferences.localized(key) }
-    private func format(_ key: String, _ arguments: CVarArg...) -> String {
-        preferences.localizedFormat(key, arguments)
+    private func copy(_ key: LocalizedMessage) -> String { preferences.localized(key) }
+    private func format(_ key: StaticString, _ arguments: CVarArg...) -> String {
+        preferences.localizedFormat(key, arguments: arguments)
     }
     private typealias Page = SettingsViewState.Page
     private var isBusy: Bool { model.isRefreshing || model.isApplying || model.isActivatingPanelItem || model.isRecoveringPositions }
@@ -96,7 +96,7 @@ struct SettingsView: View {
             header
             HStack {
                 Picker(copy("页面"), selection: $presentation.page) {
-                ForEach(Page.allCases) { Text($0.titleKey).tag($0) }
+                ForEach(Page.allCases) { Text(copy($0.titleKey)).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -118,7 +118,6 @@ struct SettingsView: View {
         .tint(accent)
         .environment(\.locale, preferences.locale)
         .preferredColorScheme(preferences.resolvedColorScheme)
-        .id(preferences.theme.rawValue + "-" + preferences.language.rawValue)
         .frame(minWidth: 820, idealWidth: 960, maxWidth: .infinity,
                minHeight: 680, idealHeight: 740, maxHeight: .infinity)
         .sheet(item: $draftToAssociate) { draft in draftAssociationSheet(draft) }
@@ -175,13 +174,13 @@ struct SettingsView: View {
     private var statusText: String {
         let copy = preferences.localized
         if model.operationCancellationRequested { return copy("正在安全停止…") }
-        if model.isRecoveringPositions { return copy(model.usesNativeVisibility ? "正在恢复图标显示…" : "正在恢复排序…") }
+        if model.isRecoveringPositions { return copy(model.usesNativeVisibility ? LocalizedMessage("正在恢复图标显示…") : LocalizedMessage("正在恢复排序…")) }
         if model.isApplying { return copy("正在调整图标…") }
         if model.isRefreshing && model.isArranging { return copy("正在确认拖拽分组…") }
         if model.isRefreshing { return copy("正在读取图标…") }
         if model.isActivatingPanelItem { return copy("正在操作图标…") }
         if model.isArranging { return copy("拖拽整理中") }
-        return copy(model.isPanelPresented ? "托盘已打开" : "托盘已收起")
+        return copy(model.isPanelPresented ? LocalizedMessage("托盘已打开") : LocalizedMessage("托盘已收起"))
     }
 
     /// Keep progress outside the scrolling list so that a long list never hides
@@ -233,9 +232,9 @@ struct SettingsView: View {
         if model.operationCancellationRequested {
             return copy("正在结束当前步骤并恢复临时改动，请稍候。未完成的选择会保留。")
         }
-        if let progress = model.panelItemProgress, model.isActivatingPanelItem { return progress }
+        if let progress = model.panelItemProgress.map(copy), model.isActivatingPanelItem { return progress }
         if model.isRecoveringPositions { return copy("恢复完成后会重新确认菜单栏状态。") }
-        if let progress = model.managementMessage { return progress }
+        if let progress = model.managementMessage.map(copy) { return progress }
         if model.isRefreshing { return copy("正在读取最新状态；列表中的选择会保留。") }
         return model.usesNativeVisibility ? copy("正在确认图标的显示状态。") : copy("先检查当前状态，再调整并验证位置。")
     }
@@ -273,7 +272,7 @@ struct SettingsView: View {
                         }
                     }
                     .font(.system(size: 11)).foregroundStyle(.secondary)
-                    if let issue = model.draftPersistenceIssue {
+                    if let issue = model.draftPersistenceIssue.map(copy) {
                         Label(issue, systemImage: "exclamationmark.triangle")
                             .font(.system(size: 11)).foregroundStyle(.orange)
                     }
@@ -312,7 +311,7 @@ struct SettingsView: View {
     }
 
     private var managementSummary: String {
-        if let reason = model.trayPlacementBlockedReason { return reason }
+        if let reason = model.trayPlacementBlockedReason.map(copy) { return reason }
         if model.trayPlacementOutstandingCount > 0 {
             return format("%lld 项尚未完成 · 选择已保留，批量处理可直接应用的项目", Int64(model.trayPlacementOutstandingCount))
         }
@@ -406,9 +405,9 @@ struct SettingsView: View {
 
     private func trayItemRow(_ item: ManagedItemRow) -> some View {
         let pending = model.trayPlacementIsPending(id: item.id)
-        let message = model.trayPlacementFailure(id: item.id)
+        let message = model.trayPlacementFailure(id: item.id).map(copy)
         let needsConfirmation = item.isPending && !pending && message == nil
-        let retryTitle = message == nil ? copy("应用") : model.trayPlacementRetryTitle(id: item.id)
+        let retryTitle = message == nil ? copy("应用") : copy(model.trayPlacementRetryTitle(id: item.id))
         return HStack(spacing: 12) {
             itemIcon(item)
             VStack(alignment: .leading, spacing: 5) {
@@ -765,7 +764,7 @@ struct SettingsView: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             if let issue = associationIssue {
-                Text(issue).font(.system(size: 11)).foregroundStyle(.orange)
+                Text(copy(issue)).font(.system(size: 11)).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
@@ -775,7 +774,7 @@ struct SettingsView: View {
                     if model.reassociateDraft(id: draft.id, to: associationTargetID) {
                         draftToAssociate = nil
                     } else {
-                        associationIssue = model.managementError ?? copy("当前图标不可用，未修改草稿。请返回列表刷新后重试。")
+                        associationIssue = model.managementError ?? LocalizedMessage("当前图标不可用，未修改草稿。请返回列表刷新后重试。")
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -820,7 +819,7 @@ struct SettingsView: View {
 
     private var recoveryNotice: some View {
         Group {
-            if let recovery = model.positionRecoveryMessage {
+            if let recovery = model.positionRecoveryMessage.map(copy) {
                 VStack(alignment: .leading, spacing: 8) {
                     detailedIssueNotice(recovery, symbol: "arrow.uturn.backward.circle",
                                         title: copy("查看图标恢复详情"), isExpanded: $presentation.recoveryDetailsExpanded)
@@ -837,17 +836,17 @@ struct SettingsView: View {
 
     private var compatibilityNotices: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let progress = model.panelItemProgress, !isBusy {
+            if let progress = model.panelItemProgress.map(copy), !isBusy {
                 issueNotice(progress, symbol: "arrow.left.arrow.right", tint: accent)
             }
-            if let error = model.managementError {
+            if let error = model.managementError.map(copy) {
                 detailedIssueNotice(error, symbol: "exclamationmark.triangle.fill",
                                     title: copy("查看完整原因"), isExpanded: $presentation.managementErrorDetailsExpanded)
             }
-            if let warning = model.iconImageWarning {
+            if let warning = model.iconImageWarning.map(copy) {
                 VStack(alignment: .leading, spacing: 5) {
                     issueNotice(warning, symbol: "photo")
-                    if let details = model.iconImageWarningDetails {
+                    if let details = model.iconImageWarningDetails.map(copy) {
                         DisclosureGroup(copy("查看图像获取详情"), isExpanded: $presentation.imageWarningDetailsExpanded) {
                             Text(details)
                                 .font(.system(size: 11))
@@ -861,16 +860,16 @@ struct SettingsView: View {
                     }
                 }
             }
-            if let error = model.panelActivationError {
+            if let error = model.panelActivationError.map(copy) {
                 issueNotice(format("图标操作：%@", error), symbol: "cursorarrow.click", isError: true)
             }
-            if let error = model.panelError {
+            if let error = model.panelError.map(copy) {
                 issueNotice(format("图标栏：%@", error), symbol: "rectangle.on.rectangle.slash", isError: true)
             }
             ForEach(Array(environmentNotices.enumerated()), id: \.offset) { _, issue in
                 issueNotice(issue, symbol: "exclamationmark.triangle")
             }
-            if let message = model.managementMessage, !isBusy { issueNotice(message, symbol: "info.circle", tint: accent) }
+            if let message = model.managementMessage.map(copy), !isBusy { issueNotice(message, symbol: "info.circle", tint: accent) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -905,7 +904,7 @@ struct SettingsView: View {
     }
     private var environmentNotices: [String] {
         var result: [String] = []
-        for issue in [model.environmentIssue, model.layoutIssue].compactMap({ $0 }) {
+        for issue in [model.environmentIssue.map(copy), model.layoutIssue.map(copy)].compactMap({ $0 }) {
             if !result.contains(issue) { result.append(issue) }
         }
         return result
@@ -927,8 +926,8 @@ struct SettingsView: View {
                 }
                 UpdateSettingsView(updates: updates)
                 managementNotices
-                if let issue = model.shortcutIssue { issueNotice(issue, symbol: "keyboard") }
-                if let issue = model.loginIssue {
+                if let issue = model.shortcutIssue.map(copy) { issueNotice(issue, symbol: "keyboard") }
+                if let issue = model.loginIssue.map(copy) {
                     VStack(alignment: .leading, spacing: 6) {
                         issueNotice(issue, symbol: "person.crop.circle.badge.exclamationmark")
                         Button(copy("打开系统登录项设置")) { model.showSystemLoginSettings() }
@@ -960,7 +959,7 @@ struct SettingsView: View {
                 appearanceOption(title: copy("主题"), detail: copy("控制窗口、托盘和设置页的明暗模式")) {
                     Picker(copy("主题"), selection: $preferences.theme) {
                         ForEach(AppPreferences.Theme.allCases) { theme in
-                            Label(theme.titleKey, systemImage: theme.symbol).tag(theme)
+                            Label(copy(theme.titleKey), systemImage: theme.symbol).tag(theme)
                         }
                     }
                     .pickerStyle(.menu)
@@ -969,7 +968,7 @@ struct SettingsView: View {
                 appearanceOption(title: copy("语言"), detail: copy("目前支持简体中文和 English")) {
                     Picker(copy("语言"), selection: $preferences.language) {
                         ForEach(AppPreferences.Language.allCases) { language in
-                            Text(language.titleKey).tag(language)
+                            Text(copy(language.titleKey)).tag(language)
                         }
                     }
                     .pickerStyle(.menu)
@@ -1014,7 +1013,7 @@ struct SettingsView: View {
             if !model.accessibilityGranted {
                 HStack(alignment: .top, spacing: 16) {
                     permissionStep("1", title: copy("打开授权页面"), detail: copy("申请权限或打开系统设置。"))
-                    permissionStep("2", title: copy("开启 Menu Tidy"), detail: format("在系统设置的「%@」中开启。", model.permissionSettingsName))
+                    permissionStep("2", title: copy("开启 Menu Tidy"), detail: format("在系统设置的「%@」中开启。", copy(model.permissionSettingsName)))
                     permissionStep("3", title: copy("返回应用"), detail: copy("自动检测权限，再刷新图标列表。"))
                 }
                 Text(copy("系统开关需要你亲自确认，应用不能代替或绕过授权。"))
@@ -1033,7 +1032,7 @@ struct SettingsView: View {
                 }
             }
 
-            if let message = model.permissionCheckMessage {
+            if let message = model.permissionCheckMessage.map(copy) {
                 issueNotice(message, symbol: "info.circle", tint: accent)
             }
 
@@ -1104,7 +1103,7 @@ struct SettingsView: View {
                 if compact { Button(copy("权限说明")) { presentation.page = .settings }.buttonStyle(.link) }
             }
             .disabled(groupingControlsDisabled)
-            if let message = model.nativeVisibilityAccessMessage {
+            if let message = model.nativeVisibilityAccessMessage.map(copy) {
                 issueNotice(message, symbol: "info.circle", tint: model.nativeVisibilityAccessAvailable ? accent : .orange)
             }
         }
@@ -1120,7 +1119,7 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Button(copy("授权系统图标显示设置…")) { model.requestNativeSystemVisibilityAccess() }
                 .disabled(groupingControlsDisabled)
-            if let message = model.nativeSystemVisibilityAccessMessage {
+            if let message = model.nativeSystemVisibilityAccessMessage.map(copy) {
                 issueNotice(message, symbol: "info.circle", tint: .orange)
             }
         }
@@ -1172,7 +1171,7 @@ struct SettingsView: View {
                 }
             }
             .disabled(groupingControlsDisabled)
-            if let message = model.menuBarPositionAccessMessage {
+            if let message = model.menuBarPositionAccessMessage.map(copy) {
                 issueNotice(message, symbol: "info.circle",
                             tint: model.menuBarPositionAccessAvailable ? accent : .orange)
             }
