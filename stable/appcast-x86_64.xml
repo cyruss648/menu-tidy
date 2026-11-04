@@ -6,20 +6,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.7.5</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.5</link>
-      <pubDate>Wed, 04 Nov 2026 04:16:20 +0000</pubDate>
-      <sparkle:version>81</sparkle:version>
-      <sparkle:shortVersionString>0.7.5</sparkle:shortVersionString>
+      <title>Menu Tidy 0.7.6</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.6</link>
+      <pubDate>Wed, 04 Nov 2026 06:55:34 +0000</pubDate>
+      <sparkle:version>82</sparkle:version>
+      <sparkle:shortVersionString>0.7.6</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="plain-text">## [0.7.5] - 2026-11-04
+      <description sparkle:format="plain-text">## [0.7.6] - 2026-11-04
 
-修复主题从浅色切回跟随系统后仍保持浅色，并补齐英文界面翻译。
+补齐动态状态、错误和恢复提示的英文显示，并使主题与语言切换保留当前界面状态。
 
-- 跟随系统现在解析当前系统外观，并在系统外观变化时同步窗口与 SwiftUI 内容。
-- 设置、托盘、更新和菜单中的主要界面文案会按所选语言显示；英文资源覆盖这些界面文案。
+- 使用保留翻译键和插值参数的消息类型覆盖模型、行详情、权限、底层存储、托盘、更新进度和嵌套错误；已有提示随语言重新渲染，应用名称等外部数据保持原样。
+- 增加 432 条英文资源及所有历史版本的英文离线摘要；日期按应用选择的语言格式化，修复格式化参数数组的转发。
+- 增加源码与资源交叉校验，检查裸中文、漏译、重复键、空翻译、英文残留中文和格式参数不一致；提交、推送、CI 与打包均执行，部分文件提交也检查完整关系。
+- 移除切换外观时的窗口内容替换和视图 `.id` 重建；设置、托盘和已打开的历史窗口观察偏好原地更新，保留滚动位置、页面、搜索和展开状态。
+- 增加动态消息重渲染、嵌套错误、原始名称保留、门禁负例和真实 AppKit 滚动容器回归。
 
-验证：`./scripts/check.sh --full` 通过 96 项 Python 测试、515 项核心 Swift 测试、123 项应用集成测试和 warnings-as-errors 构建。该版本沿用项目自签名发行身份，未经 Apple 公证。
+验证：`./scripts/check.sh --full` 通过 109 项 Python 测试、520 项核心 Swift 测试、130 项应用集成测试及 warnings-as-errors 构建。真实 AppKit 窗口回归确认主题切换保留滚动容器与偏移，已打开托盘原地更新外观。当前桌面锁定，正式安装包的人工视觉交互尚未验收；该版本沿用项目自签名发行身份，未经 Apple 公证。
 
 ### 软件内更新与首次安装
 
@@ -31,8 +34,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.7.5-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.7.5-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.7.6-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.7.6-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -55,12 +58,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.5/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.5/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.5/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.6/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.6/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.6/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.5/Menu-Tidy-0.7.5-macos-x86_64.zip" length="3997465" type="application/octet-stream" sparkle:edSignature="29jngX4awf0DCyFSpqwifkuIg8KpH/5Q5z1RAdaBM3VhjshB2MuFsj87hzX1sj2hRFh4DykO62QUYiXsFDjrDA=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.6/Menu-Tidy-0.7.6-macos-x86_64.zip" length="4042237" type="application/octet-stream" sparkle:edSignature="hoeJzKzRkfBjHq+B0w9fIGkjo/nUKaOapB0kSPe3WzcupRIDtl9Ub7zvX6UbBoowNC9+P6HWADNsGK5NUm+9Bw=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: cUHZSypHRlMwiw92yspjZpIensI4pnGT2rekkyfOnHbKfqCeLD6bQ8Kk3OAfLg7juOHzyeevkl8cxhrzk9JzCA==
-length: 5437
+edSignature: OF3fM6qoS5wlgtJ+UiwGN4mTU3Wa1CQtB1uHmgfOCw6X6iDaQE0uC5pZGY2fcUyQMU/cXKY3rGg0m9BSllIADw==
+length: 6318
 -->
