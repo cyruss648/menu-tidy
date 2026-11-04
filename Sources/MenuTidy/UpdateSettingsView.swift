@@ -1,3 +1,4 @@
+import MenuTidyCore
 import SwiftUI
 
 /// Content only: the parent settings page owns the single vertical scroll view.
@@ -15,12 +16,23 @@ struct UpdateSettingsView: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 0) {
-                preferenceRow(title: "自动检查更新", detail: "定期检查当前更新通道；关闭后仍可手动检查。") {
-                    Toggle("自动检查更新", isOn: Binding(
+                preferenceRow(title: "自动检查更新", detail: "默认每 30 分钟检查当前更新通道。菜单栏操作进行中会顺延；关闭后仍可手动检查。") {
+                    HStack(spacing: 10) {
+                        Picker("自动检查间隔", selection: Binding(
+                            get: { updates.updateCheckInterval },
+                            set: { updates.setUpdateCheckInterval($0) })) {
+                            ForEach(UpdateCheckInterval.choices, id: \.self) { seconds in
+                                Text(updateIntervalLabel(seconds)).tag(seconds)
+                            }
+                        }
+                        .labelsHidden().pickerStyle(.menu).frame(width: 120)
+                        .disabled(!updates.canConfigureUpdates || !updates.automaticallyChecksForUpdates)
+                        Toggle("自动检查更新", isOn: Binding(
                         get: { updates.automaticallyChecksForUpdates },
                         set: { updates.setAutomaticallyChecksForUpdates($0) }))
                         .labelsHidden().toggleStyle(.switch)
                         .disabled(!updates.canConfigureUpdates)
+                    }
                 }
                 Divider()
                 preferenceRow(title: "自动下载并在退出时安装",
@@ -108,5 +120,10 @@ struct UpdateSettingsView: View {
             control()
         }
         .padding(.vertical, 13)
+    }
+
+    private func updateIntervalLabel(_ seconds: TimeInterval) -> String {
+        if seconds >= 3600 { return "每 \(Int(seconds / 3600)) 小时" }
+        return "每 \(Int(seconds / 60)) 分钟"
     }
 }

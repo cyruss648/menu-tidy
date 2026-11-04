@@ -9,6 +9,7 @@ import Sparkle
 final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var automaticallyChecksForUpdates = true
     @Published private(set) var automaticallyDownloadsUpdates = false
+    @Published private(set) var updateCheckInterval = UpdateCheckInterval.defaultValue
     @Published private(set) var canCheckForUpdates = false
     @Published private(set) var canConfigureUpdates = false
     @Published private(set) var allowsAutomaticUpdates = false
@@ -24,6 +25,8 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var postponedInstallation: (() -> Void)?
     private var schedulingPolicy = UpdateSchedulingPolicy()
     private var schedulingTask: Task<Void, Never>?
+    private var automaticCheckTimer: Timer?
+    private let intervalDefaultsKey = "updateCheckInterval"
 
     var currentVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
@@ -60,6 +63,8 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
         // Initial values come from Info.plist. Sparkle persists subsequent choices
         // made here or in its own UI; never overwrite them during app launch.
         updater.sendsSystemProfile = false
+        updateCheckInterval = UpdateCheckInterval.validated(UserDefaults.standard.double(forKey: intervalDefaultsKey))
+        updater.updateCheckInterval = updateCheckInterval
         observe(updater)
         model.objectWillChange.sink { [weak self] in
             // ObservableObject sends before its properties change.
@@ -87,6 +92,15 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
         if !enabled { schedulingPolicy.automaticChecksWereDisabled() }
         updater.automaticallyChecksForUpdates = enabled
         refreshState()
+        scheduleAutomaticCheckTimer(from: updater.lastUpdateCheckDate)
+    }
+
+    func setUpdateCheckInterval(_ interval: TimeInterval) {
+        let validated = UpdateCheckInterval.validated(interval)
+        updateCheckInterval = validated
+        UserDefaults.standard.set(validated, forKey: intervalDefaultsKey)
+        controller?.updater.updateCheckInterval = validated
+        scheduleAutomaticCheckTimer(from: controller?.updater.lastUpdateCheckDate)
     }
 
     func setAutomaticallyDownloadsUpdates(_ enabled: Bool) {
@@ -140,6 +154,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
                 schedulingPolicy.didStartUpdater(successfully: true)
                 canConfigureUpdates = true
                 refreshState()
+                scheduleAutomaticCheckTimer(from: updater.lastUpdateCheckDate)
             } catch {
                 schedulingPolicy.didStartUpdater(successfully: false)
                 issue = "更新服务无法启动：\(error.localizedDescription)"
@@ -250,5 +265,32 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
         }
         refreshState()
         scheduleUpdaterWork()
+        scheduleAutomaticCheckTimer(from: Date())
+    }
+
+    /// Sparkle refuses to schedule any automatic check sooner than one hour.
+    /// This timer preserves the shorter intervals selected in Settings.
+    private func scheduleAutomaticCheckTimer(from reference: Date?) {
+        automaticCheckTimer?.invalidate()
+        automaticCheckTimer = nil
+        guard canConfigureUpdates, let updater = controller?.updater,
+              updater.automaticallyChecksForUpdates else { return }
+        let delay = UpdateCheckInterval.delay(since: reference, interval: updateCheckInterval, now: Date())
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.performDueAutomaticUpdateCheck() }
+        }
+        timer.tolerance = min(30, max(1, delay * 0.1))
+        automaticCheckTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func performDueAutomaticUpdateCheck() {
+        automaticCheckTimer = nil
+        guard let updater = controller?.updater, updater.automaticallyChecksForUpdates else { return }
+        if operationInProgress || waitingToInstall || updater.sessionInProgress || !updater.canCheckForUpdates {
+            scheduleAutomaticCheckTimer(from: Date().addingTimeInterval(30 - updateCheckInterval))
+            return
+        }
+        updater.checkForUpdatesInBackground()
     }
 }
