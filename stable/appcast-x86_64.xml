@@ -6,21 +6,21 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.7.2</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.2</link>
-      <pubDate>Tue, 03 Nov 2026 01:58:06 +0000</pubDate>
-      <sparkle:version>78</sparkle:version>
-      <sparkle:shortVersionString>0.7.2</sparkle:shortVersionString>
+      <title>Menu Tidy 0.7.3</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.3</link>
+      <pubDate>Wed, 04 Nov 2026 02:21:18 +0000</pubDate>
+      <sparkle:version>79</sparkle:version>
+      <sparkle:shortVersionString>0.7.3</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="plain-text">## [0.7.2] - 2026-11-03
+      <description sparkle:format="plain-text">## [0.7.3] - 2026-11-04
 
-优化独立托盘图标的辨识度，优先使用应用原生图标。
+修复已隐藏应用在 Homebrew 更新并重启后从托盘中丢失的问题。
 
-- 托盘图标显示顺序调整为应用原生图标 → 菜单栏图像快照 → 名称标识；应用原生图标更稳定地表达应用身份。
-- 保留屏幕录制权限作为可选增强，仅在应用图标不可用时使用菜单栏快照回退；无可用图像时显示名称标识。
-- 更新设置说明、用户文档和托盘来源悬停提示，明确图像来源。
+- 应用进程退出后，保持其恢复显示状态，直到下一次菜单栏扫描确认新进程；避免持久化的隐藏选择在扫描前重新隐藏新进程。
+- 扫描前等待 macOS 27 原生显示断言生效，再识别新进程并自动重新应用原来的托盘选择。
+- 增加隐藏应用重启后重新发现并自动重连的集成回归。
 
-验证：`./scripts/check.sh --full` 通过 96 项 Python 测试、513 项核心 Swift 测试、122 项应用集成测试和 warnings-as-errors 构建。真实已安装应用的窗口视觉与托盘图标辨识度仍需解锁桌面后独立验收；该版本沿用项目自签名发行身份，未经 Apple 公证。
+验证：`./scripts/check.sh --full` 通过 96 项 Python 测试、513 项核心 Swift 测试、123 项应用集成测试和 warnings-as-errors 构建。真实已安装应用在 Homebrew 更新后的托盘恢复仍需独立验收；该版本沿用项目自签名发行身份，未经 Apple 公证。
 
 ### 软件内更新与首次安装
 
@@ -32,8 +32,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.7.2-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.7.2-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.7.3-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.7.3-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -56,12 +56,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.2/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.2/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.2/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.3/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.3/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.3/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.2/Menu-Tidy-0.7.2-macos-x86_64.zip" length="3953025" type="application/octet-stream" sparkle:edSignature="OXUhx3KKv3R7z+ZBTnFYMTazVmY5UkSX34sDFA3jAWO2yBXBU2/xpDERRlsJA5TjgEj2qFXhL/qnGTN94VN4Cg=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.3/Menu-Tidy-0.7.3-macos-x86_64.zip" length="3957677" type="application/octet-stream" sparkle:edSignature="fRnXcZ+KCgnaq9XeSrY8bbkJt7Hhd4c8CEUOy5oyCrh3Et6n/7qc0nxNRV3Dl7WhXyARrcq/d531wIy/IxvjAg=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: DY8IUFZm5I2rRhfV6BzHKdOPjfnuyA6UYtLUvrqLD77Ld7E3TUw2oy7P0yb+Yt9mrrj4syDzn0NMkdqd/PX4Aw==
-length: 5666
+edSignature: a5QuJF/lbVoUfAvFWJ7cZAB8SpyZ9vOf/RxLdYfM3ek4Ei0EjDZES2QIkmq2Rvjx6qgt9oEgg9p7dGO9WuGUBw==
+length: 5638
 -->
