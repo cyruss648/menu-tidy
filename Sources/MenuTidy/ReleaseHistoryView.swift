@@ -59,14 +59,15 @@ struct ReleaseHistoryView: View {
     }
 }
 
-private struct HistoryEntry {
+struct HistoryEntry {
     let title: String
     let lines: [String]
 
-    static func bundled(language: AppPreferences.Language) -> [Self] {
-        let url = language == .english
-            ? Bundle.main.resourceURL?.appendingPathComponent("en.lproj/CHANGELOG.md")
-            : Bundle.main.url(forResource: "CHANGELOG", withExtension: "md")
+    static func bundled(language: AppPreferences.Language, resourceBundle: Bundle = .main) -> [Self] {
+        // Avoid Bundle's automatic OS-language fallback: the app's explicit
+        // Chinese preference must read the root history even on an English OS.
+        let relativePath = language == .english ? "en.lproj/CHANGELOG.md" : "CHANGELOG.md"
+        let url = resourceBundle.resourceURL?.appendingPathComponent(relativePath)
         guard let url,
               let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         return text.components(separatedBy: "\n## [").dropFirst().compactMap { section in

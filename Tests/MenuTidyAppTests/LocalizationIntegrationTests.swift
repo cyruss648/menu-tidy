@@ -135,6 +135,28 @@ final class LocalizationIntegrationTests: XCTestCase {
         XCTAssertEqual(preferences.resolvedColorScheme, .light)
     }
 
+    func testBundledHistoryUsesTheExplicitLanguageAndCoversTheSameVersions() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        // Match the packaged bundle layout, including the root Chinese file.
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("en.lproj"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.copyItem(at: root.appendingPathComponent("CHANGELOG.md"),
+                                        to: directory.appendingPathComponent("CHANGELOG.md"))
+        try FileManager.default.copyItem(at: root.appendingPathComponent("Resources/en.lproj/CHANGELOG.md"),
+                                        to: directory.appendingPathComponent("en.lproj/CHANGELOG.md"))
+        let bundle = try XCTUnwrap(Bundle(path: directory.path))
+        let chinese = HistoryEntry.bundled(language: .chinese, resourceBundle: bundle)
+        let english = HistoryEntry.bundled(language: .english, resourceBundle: bundle)
+        XCTAssertFalse(chinese.isEmpty)
+        XCTAssertEqual(chinese.map(\.title), english.map(\.title).map {
+            $0.replacingOccurrences(of: "Unreleased diagnostic version", with: "未发布诊断版本")
+        })
+        XCTAssertTrue(chinese[0].lines.joined().contains("动态状态"))
+        XCTAssertTrue(english[0].lines.joined().contains("Localized dynamic status"))
+    }
+
     func testOpenTrayUpdatesItsLanguageAndAppearanceWithoutReplacingContent() async throws {
         let (model, _, _, dispose) = try fixture()
         defer { dispose() }
