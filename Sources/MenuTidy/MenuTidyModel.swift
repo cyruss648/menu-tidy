@@ -3583,7 +3583,7 @@ final class MenuTidyModel: ObservableObject {
         if allowNativeOwnerRecovery && isRefreshing && !isApplying && !isActivatingPanelItem &&
             !isRecoveringPositions && !isArranging && !preparingToTerminate && !stopping &&
             positionRecoveryMessage == nil {
-            restoreDepartedNativeOwnersBeforeScan()
+            try await restoreDepartedNativeOwnersBeforeScan()
         } else {
             scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
         }
@@ -5474,7 +5474,14 @@ private extension MenuTidyModel {
         let hidden = Set(nativeTrayChoices.choices.compactMap { bundle, group in
             group == .visible ? nil : bundle
         })
-        nativeAssessmentStore.syncDesiredHiddenBundles(hidden)
+        // A relaunched hidden application must remain visible through the next
+        // discovery scan. Reasserting its persisted choice here would hide the
+        // replacement process before its menu-bar item can be observed.
+        let recovering = Set(nativeOwnerRecoveries.pendingTargets.compactMap { target in
+            if case .application(let bundle) = target { return bundle }
+            return nil
+        })
+        nativeAssessmentStore.syncDesiredHiddenBundles(hidden.subtracting(recovering))
     }
 
     func refreshNativeAssessmentIfNeeded() {
@@ -5532,7 +5539,7 @@ private extension MenuTidyModel {
 
     /// Runs synchronously inside the existing exclusive refresh operation.
     /// Restores only receipt-owned preferences; it never adopts the new owner.
-    func restoreDepartedNativeOwnersBeforeScan() {
+    func restoreDepartedNativeOwnersBeforeScan() async throws {
         guard usesNativeVisibility else { return }
         var failed = false
         let targets = departedNativeTargetsReadyForRecovery()
@@ -5550,6 +5557,13 @@ private extension MenuTidyModel {
                 Self.diagnosticLogger.notice("nativeOwnerRecovery restored=true departedEpochConfirmed=true")
             } catch {
                 nativeOwnerRecoveries.recordFailure(target: target)
+                failed = true
+                Self.diagnosticLogger.notice("nativeOwnerRecovery restored=false explicitRecoveryRequired=true")
+            }
+        }
+        if usesNativeAssessment {
+            do { try await nativeAssessmentStore.waitForPendingActivation() }
+            catch {
                 failed = true
                 Self.diagnosticLogger.notice("nativeOwnerRecovery restored=false explicitRecoveryRequired=true")
             }

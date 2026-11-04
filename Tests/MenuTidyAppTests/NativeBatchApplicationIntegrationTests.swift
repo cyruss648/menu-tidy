@@ -109,6 +109,31 @@ final class NativeBatchApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testHiddenOwnerRelaunchIsDiscoveredAndReconnected() async throws {
+        let f = try Fixture(); defer { f.dispose() }
+        f.model.applyPendingTrayPlacements()
+        await f.model.waitForTestingOperations()
+        XCTAssertEqual(f.system.allowed[f.b], false)
+        XCTAssertFalse(try XCTUnwrap(f.model.items.first { $0.bundleIdentifier == f.b }).isPending)
+
+        f.system.snapshots.removeAll { $0.bundleIdentifier == f.b }
+        f.system.identities.removeValue(forKey: "session:b")
+        f.system.snapshots.append(MenuBarItemSnapshot(id: "session:b2", processIdentifier: 402, name: f.b,
+            ownerName: f.b, bundleIdentifier: f.b, frame: CGRect(x: 40, y: 0, width: 22, height: 22),
+            hasReliableGeometry: true, canMove: true, detail: "", persistentIdentity: false, ownIdentifier: nil))
+        f.system.identities["session:b2"] = ObservedItemGroupHistory.Identity(id: "session:b2", pid: 402,
+            bundleIdentifier: f.b, launchTime: 30)
+
+        f.model.refreshMenuItems()
+        await f.model.waitForTestingOperations()
+        let relaunched = try XCTUnwrap(f.model.items.first { $0.bundleIdentifier == f.b && $0.isAvailable })
+        XCTAssertFalse(relaunched.isPending)
+        XCTAssertEqual(f.model.trayPlacementGroup(id: relaunched.id), .alwaysHidden)
+        XCTAssertEqual(f.system.allowed[f.b], false)
+        XCTAssertEqual(f.model.trayPlacementOutstandingCount, 0)
+    }
+
+    @MainActor
     private final class Fixture {
         let a = "org.example.BatchA", b = "org.example.BatchB", c = "org.example.BatchC"
         let suite = "dev.hdh.MenuTidy.tests.native-batch.\(UUID().uuidString)"
