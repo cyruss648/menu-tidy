@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.9] - 2026-11-10
+
+Restore automatic discovery when an accessory application's launch notification is missing.
+
+- Observe changes to the system running application list and enqueue the existing bounded discovery retries for each new process lifetime.
+- Unchanged membership does not restart exhausted attempts. Departure removes old retries, and shutdown releases the observation.
+- Keep hidden-source identity discovery and native-menu exit recovery, without adding periodic accessibility scans.
+
+Verification, upgrade, and desktop acceptance are recorded in the launch discovery report. Uses the existing self-signed release identity and is not Apple-notarized.
+
 ## [0.7.8] - 2026-11-10
 
 - Fixed discovery of newly launched hidden applications while Menu Tidy is already running.

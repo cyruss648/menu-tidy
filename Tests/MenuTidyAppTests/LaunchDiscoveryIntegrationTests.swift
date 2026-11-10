@@ -5,6 +5,54 @@ import XCTest
 
 final class LaunchDiscoveryIntegrationTests: XCTestCase {
     @MainActor
+    func testMembershipChangeDiscoversWithoutLaunchNotification() async throws {
+        let f = try Fixture(); defer { f.dispose() }
+        f.model.noteRunningApplications([])
+        f.model.noteRunningApplications([f.owner])
+        f.system.snapshots = [f.snapshot]
+        try await f.fire(101)
+        XCTAssertEqual(f.model.panelItems.count, 1)
+        XCTAssertNil(f.system.maintenanceTimer)
+        XCTAssertEqual(f.system.panelPressCount, 0)
+    }
+
+    @MainActor
+    func testUnchangedMembershipDoesNotRearmExhaustedRetries() async throws {
+        let f = try Fixture(); defer { f.dispose() }
+        f.model.noteRunningApplications([])
+        f.model.noteRunningApplications([f.owner])
+        for time in [101.0, 103, 107, 115] { try await f.fire(time) }
+        XCTAssertNil(f.system.maintenanceTimer)
+        f.model.noteRunningApplications([f.owner])
+        XCTAssertNil(f.system.maintenanceTimer)
+    }
+
+    @MainActor
+    func testMembershipRelaunchGetsFreshRetriesAfterExhaustion() async throws {
+        let f = try Fixture(); defer { f.dispose() }
+        f.model.noteRunningApplications([])
+        f.model.noteRunningApplications([f.owner])
+        for time in [101.0, 103, 107, 115] { try await f.fire(time) }
+        let replacement = MenuBarOwner(pid: 10002, bundleIdentifier: f.bundle, name: "Fixture", launchTime: 200)
+        f.system.identities["session:new-status"] = ObservedItemGroupHistory.Identity(id: "session:new-status",
+            pid: replacement.pid, bundleIdentifier: f.bundle, launchTime: replacement.launchTime)
+        f.system.uptime = 200
+        f.model.noteRunningApplications([replacement])
+        var scans = 0
+        f.system.beforeScan = { scans += 1 }
+        try await f.fire(201)
+        XCTAssertEqual(scans, 1)
+        XCTAssertNotNil(f.system.maintenanceTimer)
+    }
+
+    @MainActor
+    func testInitialMembershipDoesNotStartLaunchRetries() throws {
+        let f = try Fixture(); defer { f.dispose() }
+        f.model.noteRunningApplications([f.owner])
+        XCTAssertNil(f.system.maintenanceTimer)
+    }
+
+    @MainActor
     func testDelayedHiddenStatusItemReconnectsWithoutManualRefreshOrRestart() async throws {
         let f = try Fixture(); defer { f.dispose() }
         let originalChoice = f.defaults.data(forKey: "nativeTrayChoices.v1")

@@ -255,6 +255,8 @@ final class MenuTidyModel: ObservableObject {
     private var memoryPressureSource: DispatchSourceMemoryPressure?
     private var lastInteraction = ProcessInfo.processInfo.systemUptime
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var runningApplicationsObservation: NSKeyValueObservation?
+    private var runningApplicationKeys: Set<ScanOwnerKey>?
     private var applicationObservers: [NSObjectProtocol] = []
     private let demoMode = CommandLine.arguments.contains("--demo-items")
     let isUIPreview = CommandLine.arguments.contains("--preview-ui")
@@ -858,6 +860,7 @@ final class MenuTidyModel: ObservableObject {
     func start() {
         guard !started, !isUIPreview, testingEnvironment == nil else { return }
         started = true
+        noteRunningApplications(currentRunningApplicationOwners())
         desktopSessionMonitor.onChange = { [weak self] available in self?.desktopSessionAvailabilityChanged(available) }
         desktopSessionMonitor.start()
         controlRouter.start(model: self)
@@ -907,6 +910,16 @@ final class MenuTidyModel: ObservableObject {
         }
         pressure.resume()
         memoryPressureSource = pressure
+        // Some accessory launches update runningApplications without sending a
+        // didLaunch notification. Observe membership, not a periodic AX scan.
+        runningApplicationsObservation = NSWorkspace.shared.observe(\.runningApplications, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.started, !self.stopping else { return }
+                self.noteRunningApplications(self.currentRunningApplicationOwners())
+            }
+        }
+        // Close the gap between taking the baseline and installing KVO.
+        noteRunningApplications(currentRunningApplicationOwners())
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 let launchedOwner: MenuBarOwner?
@@ -1268,6 +1281,35 @@ final class MenuTidyModel: ObservableObject {
     func noteApplicationLaunch(_ owner: MenuBarOwner) {
         guard owner.pid > 0, owner.launchTime.isFinite, owner.launchTime > 0 else { return }
         launchDiscovery.register(ScanOwnerKey(owner), at: maintenanceUptime)
+        trayDiscoveryNeeded = true
+    }
+
+    private func currentRunningApplicationOwners() -> [MenuBarOwner] {
+        NSWorkspace.shared.runningApplications.compactMap { app in
+            guard let epoch = MenuBarProcessIdentity.launchTime(for: app) else { return nil }
+            return MenuBarOwner(pid: app.processIdentifier, bundleIdentifier: app.bundleIdentifier,
+                name: app.localizedName ?? "", launchTime: epoch)
+        }
+    }
+
+    func noteRunningApplications(_ owners: [MenuBarOwner]) {
+        let valid = owners.filter { $0.pid > 0 && $0.launchTime.isFinite && $0.launchTime > 0 }
+        let current = Set(valid.map(ScanOwnerKey.init))
+        let previous = runningApplicationKeys
+        runningApplicationKeys = current
+        guard let previous, previous != current else { return }
+        let arrivals = valid.filter { !previous.contains(ScanOwnerKey($0)) }
+        for owner in arrivals { noteApplicationLaunch(owner) }
+        launchDiscovery.reconcile(current: current, observed: [])
+        Self.diagnosticLogger.notice("workspaceMembership arrivals=\(arrivals.count) departures=\(previous.subtracting(current).count)")
+        guard ensureDesktopSessionAvailable() else { trayDiscoveryNeeded = true; return }
+        registerDepartedNativeOwners()
+        scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
+        pruneObservedGroupHistory()
+        rebuildRows()
+        refreshNativeAssessmentIfNeeded()
+        refreshEnvironment()
+        requestPassiveCaptureAfterEvent()
         trayDiscoveryNeeded = true
     }
 
@@ -5573,6 +5615,9 @@ final class MenuTidyModel: ObservableObject {
         maintenanceFireAt = nil
         memoryPressureSource?.cancel()
         memoryPressureSource = nil
+        runningApplicationsObservation?.invalidate()
+        runningApplicationsObservation = nil
+        runningApplicationKeys = nil
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         workspaceObservers.removeAll()
         applicationObservers.forEach { NotificationCenter.default.removeObserver($0) }
