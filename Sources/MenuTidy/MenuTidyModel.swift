@@ -4586,6 +4586,7 @@ final class MenuTidyModel: ObservableObject {
             var revealedKey: String?
             var nativeRevealedTarget: NativeVisibilityTarget?
             var nativeRevealedIdentity: ObservedItemGroupHistory.Identity?
+            var actionIdentity: ObservedItemGroupHistory.Identity?
             var presentation: MenuBarItemPresentation?
             var revealVerified = false
             var pressAttempted = false
@@ -4600,6 +4601,11 @@ final class MenuTidyModel: ObservableObject {
                 await self.passiveIconCaptureTask?.value
                 try Task.checkCancellation()
                 try await self.scanNow()
+                guard let source = self.snapshots.first(where: { $0.id == id }),
+                      let identity = self.observedItemIdentity(source), self.ownerIsCurrent(identity) else {
+                    throw MenuBarAccessError.disappeared
+                }
+                actionIdentity = identity
                 if self.usesNativeVisibility {
                     guard let evidence = self.nativeVisibilityEvidence[id],
                           self.ownerIsCurrent(evidence.identity),
@@ -4654,7 +4660,7 @@ final class MenuTidyModel: ObservableObject {
                         var unknownSince: TimeInterval?
                         while !Task.isCancelled && !self.preparingToTerminate {
                             try self.requireDesktopSession(generation: sessionGeneration)
-                            let status = await self.panelPresentationStatus(presentation)
+                            let status = await self.panelPresentationStatus(presentation, identity: actionIdentity)
                             try self.requireDesktopSession(generation: sessionGeneration)
                             switch status {
                             case .closed:
@@ -4680,8 +4686,12 @@ final class MenuTidyModel: ObservableObject {
                     }
                 } else {
                     // Never retry a possibly dispatched AX request.
-                    self.panelActivationError = LocalizedMessage("已发送一次后台操作，但未确认新菜单或窗口。没有补发点击。")
-                    Self.diagnosticLogger.notice("backgroundItemAction presentationConfirmed=false")
+                    if let actionIdentity, self.panelItemOwnerHasEnded(actionIdentity) {
+                        presentationClosed = true
+                    } else {
+                        self.panelActivationError = LocalizedMessage("已发送一次后台操作，但未确认新菜单或窗口。没有补发点击。")
+                        Self.diagnosticLogger.notice("backgroundItemAction presentationConfirmed=false")
+                    }
                 }
             } catch is CancellationError {
                 if self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration {
@@ -4689,9 +4699,15 @@ final class MenuTidyModel: ObservableObject {
                 }
             } catch {
                 if self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration {
-                    await self.refreshAfterHiddenFailure(error)
-                    self.panelActivationError = error.localizedMessage
-                    Self.diagnosticLogger.notice("backgroundItemAction failed=true")
+                    if case MenuBarAccessError.disappeared = error,
+                       let actionIdentity, self.panelItemOwnerHasEnded(actionIdentity) {
+                        presentationClosed = true
+                        Self.diagnosticLogger.notice("backgroundItemAction ownerExited=true")
+                    } else {
+                        await self.refreshAfterHiddenFailure(error)
+                        self.panelActivationError = error.localizedMessage
+                        Self.diagnosticLogger.notice("backgroundItemAction failed=true")
+                    }
                 }
             }
             if !self.ensureDesktopSessionAvailable() || sessionGeneration != self.desktopSessionGeneration {
@@ -4712,7 +4728,7 @@ final class MenuTidyModel: ObservableObject {
                         }
                         for _ in 0..<4 {
                             guard self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration else { return false }
-                            let status = await self.panelPresentationStatus(retainedPresentation)
+                            let status = await self.panelPresentationStatus(retainedPresentation, identity: actionIdentity)
                             guard self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration else { return false }
                             if status == .closed { return true }
                             try? await Task.sleep(for: .milliseconds(150))
@@ -4735,12 +4751,15 @@ final class MenuTidyModel: ObservableObject {
                 let hadVisibleProof = revealVerified
                 let cleanup = Task { @MainActor in
                     var verificationCandidates: [MenuBarPositionCandidate] = []
+                    var positionRestored = false
                     do {
                         let result = try self.restoreTemporaryManagedItem(key: key)
                         try await self.completeHiddenLayoutRefresh(result.requiresLayoutRefresh)
                         guard result.isComplete else { throw MenuBarAccessError.rejected }
+                        positionRestored = true
                         if AXIsProcessTrusted(), self.accessibilityGranted,
-                           !self.stopping, !self.preparingToTerminate {
+                           !self.stopping, !self.preparingToTerminate,
+                           actionIdentity.map({ !self.panelItemOwnerHasEnded($0) }) == true {
                             // The target window may remain open longer than
                             // a position lease. Renew proof, never its expiry.
                             try await self.scanNow()
@@ -4760,13 +4779,21 @@ final class MenuTidyModel: ObservableObject {
                         }
                         Self.diagnosticLogger.notice("backgroundItemAction hiddenPositionRestored=true")
                     } catch {
-                        await self.refreshAfterHiddenFailure(error)
-                        self.verifiedPositionGroups.removeValue(forKey: id)
-                        self.verifiedPositionEvidence.removeValue(forKey: id)
-                        self.actualGroups.removeValue(forKey: id)
-                        self.rebuildRows()
-                        self.positionLayoutRecoveryNeeded = true
-                        self.positionRecoveryMessage = LocalizedMessage("临时显示位置尚未恢复：\(error.localizedMessage)")
+                        if case MenuBarAccessError.disappeared = error, positionRestored,
+                           let actionIdentity, self.panelItemOwnerHasEnded(actionIdentity) {
+                            self.verifiedPositionGroups.removeValue(forKey: id)
+                            self.verifiedPositionEvidence.removeValue(forKey: id)
+                            self.actualGroups.removeValue(forKey: id)
+                            self.rebuildRows()
+                        } else {
+                            await self.refreshAfterHiddenFailure(error)
+                            self.verifiedPositionGroups.removeValue(forKey: id)
+                            self.verifiedPositionEvidence.removeValue(forKey: id)
+                            self.actualGroups.removeValue(forKey: id)
+                            self.rebuildRows()
+                            self.positionLayoutRecoveryNeeded = true
+                            self.positionRecoveryMessage = LocalizedMessage("临时显示位置尚未恢复：\(error.localizedMessage)")
+                        }
                     }
                     await self.access.discardBackgroundPositionCandidates(verificationCandidates)
                 }
@@ -4774,23 +4801,49 @@ final class MenuTidyModel: ObservableObject {
             }
             if canRestore, let target = nativeRevealedTarget, let identity = nativeRevealedIdentity {
                 let cleanup = Task { @MainActor in
+                    var restoreAttempted = false
                     do {
                         try self.requireDesktopSession(generation: sessionGeneration)
-                        let shouldHide = !self.stopping && !self.preparingToTerminate && (self.testingEnvironment != nil || AXIsProcessTrusted()) &&
+                        let shouldHide = !self.panelItemOwnerHasEnded(identity) &&
+                            !self.stopping && !self.preparingToTerminate && (self.testingEnvironment != nil || AXIsProcessTrusted()) &&
                             self.latestNativeGroup(id: id, target: target) != .visible
                         if shouldHide { try self.rehideNativeTarget(target) }
-                        else { try self.restoreNativeTarget(target) }
+                        else {
+                            restoreAttempted = true
+                            try self.restoreNativeTarget(target)
+                            if self.usesNativeAssessment { try await self.nativeAssessmentStore.waitForPendingActivation() }
+                            try self.requireDesktopSession(generation: sessionGeneration)
+                        }
                         if shouldHide, let evidence = self.nativeVisibilityEvidence[id] {
                             try await self.waitForNativeVisibility(id: id, target: target,
                                 identity: evidence.identity, visible: false)
                         }
                         if !shouldHide {
                             self.removeNativeEvidence(target: target)
+                            self.pruneObservedGroupHistory()
+                            self.rebuildRows()
                         }
                         Self.diagnosticLogger.notice("backgroundItemAction nativeHiddenRestored=true")
                     } catch {
                         if !self.ensureDesktopSessionAvailable() || sessionGeneration != self.desktopSessionGeneration {
                             self.deferNativePanelRecovery(id: id, target: target, identity: identity)
+                        } else if !restoreAttempted, self.panelItemOwnerHasEnded(identity) {
+                            do {
+                                try self.restoreNativeTarget(target)
+                                if self.usesNativeAssessment { try await self.nativeAssessmentStore.waitForPendingActivation() }
+                                try self.requireDesktopSession(generation: sessionGeneration)
+                                self.removeNativeEvidence(target: target)
+                                self.pruneObservedGroupHistory()
+                                self.rebuildRows()
+                            } catch {
+                                if !self.ensureDesktopSessionAvailable() || sessionGeneration != self.desktopSessionGeneration {
+                                    self.deferNativePanelRecovery(id: id, target: target, identity: identity)
+                                } else {
+                                    self.removeNativeEvidence(target: target)
+                                    self.rebuildRows()
+                                    self.positionRecoveryMessage = LocalizedMessage("图标显示状态尚未恢复：\(error.localizedMessage)")
+                                }
+                            }
                         } else {
                             self.removeNativeEvidence(target: target)
                             self.rebuildRows()
@@ -4806,6 +4859,9 @@ final class MenuTidyModel: ObservableObject {
                 }
             }
             await self.access.discardBackgroundPositionCandidates(candidates)
+            if let actionIdentity, self.panelItemOwnerHasEnded(actionIdentity) {
+                self.retireEndedPanelOwner(actionIdentity)
+            }
             if let error = self.panelActivationError ?? self.positionRecoveryMessage {
                 self.trayItemErrors[id] = error
             }
@@ -4919,12 +4975,40 @@ final class MenuTidyModel: ObservableObject {
         return try await access.pressItem(id: id, baseline: baseline)
     }
 
-    private func panelPresentationStatus(_ presentation: MenuBarItemPresentation) async -> MenuBarPresentationStatus {
+    private func panelItemOwnerHasEnded(_ identity: ObservedItemGroupHistory.Identity) -> Bool {
+        if let testingEnvironment { return testingEnvironment.endedOwners.contains(identity) }
+        return Self.nativeOwnerHasEnded(identity)
+    }
+
+    private func retireEndedPanelOwner(_ identity: ObservedItemGroupHistory.Identity) {
+        let ownerKey = ScanOwnerKey(identity)
+        let departedIDs = Set(snapshots.filter {
+            $0.processIdentifier == identity.pid && snapshotOwnerKeys[$0.processIdentifier] == ownerKey
+        }.map(\.id))
+        snapshots.removeAll { departedIDs.contains($0.id) }
+        if snapshotOwnerKeys[identity.pid] == ownerKey { snapshotOwnerKeys.removeValue(forKey: identity.pid) }
+        for id in departedIDs {
+            actualGroups.removeValue(forKey: id)
+            verifiedPositionGroups.removeValue(forKey: id)
+            verifiedPositionEvidence.removeValue(forKey: id)
+        }
+        pruneObservedGroupHistory()
+        rebuildRows()
+        trayDiscoveryNeeded = true
+    }
+
+    private func panelPresentationStatus(_ presentation: MenuBarItemPresentation,
+                                         identity: ObservedItemGroupHistory.Identity?) async -> MenuBarPresentationStatus {
+        if let identity, panelItemOwnerHasEnded(identity) { return .closed }
+        let status: MenuBarPresentationStatus
         if let testingEnvironment {
             testingEnvironment.panelStatusReadCount += 1
-            return await testingEnvironment.panelPresentationStatus?() ?? .closed
+            status = await testingEnvironment.panelPresentationStatus?() ?? .closed
+        } else {
+            status = await access.presentationStatus(presentation)
         }
-        return await access.presentationStatus(presentation)
+        if let identity, panelItemOwnerHasEnded(identity) { return .closed }
+        return status
     }
 
     func beginArrangement() {
@@ -5576,17 +5660,8 @@ private extension MenuTidyModel {
     }
 
     static func nativeOwnerHasEnded(_ identity: ObservedItemGroupHistory.Identity) -> Bool {
-        guard identity.pid > 0, identity.launchTime.isFinite, identity.launchTime > 0 else { return false }
-        if let app = NSRunningApplication(processIdentifier: identity.pid) {
-            if app.isTerminated { return true }
-            guard let currentLaunch = MenuBarProcessIdentity.launchTime(for: app) else { return false }
-            if currentLaunch != identity.launchTime { return true }
-            guard let currentBundle = app.bundleIdentifier, let previousBundle = identity.bundleIdentifier else { return false }
-            return currentBundle != previousBundle
-        }
-        // Signal zero only tests process existence. EPERM and other failures
-        // remain unknown; only ESRCH proves that this PID no longer exists.
-        return kill(identity.pid, 0) == -1 && errno == ESRCH
+        MenuBarProcessIdentity.hasEnded(pid: identity.pid, bundleIdentifier: identity.bundleIdentifier,
+            launchTime: identity.launchTime)
     }
 
     func nativeTarget(for source: MenuBarItemSnapshot) async -> NativeVisibilityTarget? {
@@ -5692,6 +5767,7 @@ private extension MenuTidyModel {
     func restoreNativeTarget(_ target: NativeVisibilityTarget) throws {
         if let testingEnvironment {
             guard case .application(let bundle) = target else { throw MenuBarAccessError.rejected }
+            try testingEnvironment.beforeRestore?()
             if testingEnvironment.managedBundles.remove(bundle) != nil { testingEnvironment.allowed[bundle] = true }
             testingEnvironment.revealedBundles.remove(bundle)
             testingEnvironment.restoredBundles.append(bundle)

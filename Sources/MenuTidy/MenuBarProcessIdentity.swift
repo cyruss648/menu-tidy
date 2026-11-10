@@ -5,6 +5,20 @@ import Foundation
 /// Use the same process epoch for application and menu-bar owner checks.
 /// Background system hosts can omit NSRunningApplication.launchDate.
 enum MenuBarProcessIdentity {
+    /// Missing metadata and AX failures do not prove exit. A terminated process,
+    /// a replacement epoch or ESRCH does; EPERM remains unknown.
+    static func hasEnded(pid: pid_t, bundleIdentifier: String?, launchTime: TimeInterval) -> Bool {
+        guard pid > 0, launchTime.isFinite, launchTime > 0 else { return false }
+        if let app = NSRunningApplication(processIdentifier: pid) {
+            if app.isTerminated { return true }
+            guard let currentLaunch = self.launchTime(for: app) else { return false }
+            if currentLaunch != launchTime { return true }
+            guard let currentBundle = app.bundleIdentifier, let previousBundle = bundleIdentifier else { return false }
+            return currentBundle != previousBundle
+        }
+        return kill(pid, 0) == -1 && errno == ESRCH
+    }
+
     static func launchTime(for application: NSRunningApplication) -> TimeInterval? {
         guard !application.isTerminated else { return nil }
         if let time = application.launchDate?.timeIntervalSince1970,

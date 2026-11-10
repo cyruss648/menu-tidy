@@ -1,5 +1,7 @@
 # 文档索引
 
+从托盘原生菜单退出应用后出现恢复错误、其它图标无法打开的修复，见[2026-11-10 托盘应用退出恢复](TRAY-OWNER-EXIT-20261110.md)。
+
 托盘原生菜单触发锁屏后的取消与恢复修复，见[2026-10-16 托盘会话恢复](TRAY-SESSION-RECOVERY-20261016.md)。
 
 日常安装与使用从[项目 README](../README.md)开始。发布包、架构及签名信息以 [GitHub Releases](https://github.com/cyruss648/menu-tidy/releases) 的对应版本说明为准。

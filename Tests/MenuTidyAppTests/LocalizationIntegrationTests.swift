@@ -153,8 +153,12 @@ final class LocalizationIntegrationTests: XCTestCase {
         XCTAssertEqual(chinese.map(\.title), english.map(\.title).map {
             $0.replacingOccurrences(of: "Unreleased diagnostic version", with: "未发布诊断版本")
         })
-        XCTAssertTrue(chinese[0].lines.joined().contains("动态状态"))
-        XCTAssertTrue(english[0].lines.joined().contains("Localized dynamic status"))
+        // Verify a known translation without assuming it is still the newest
+        // entry when a later release adds its own history.
+        let chineseLocalization = try XCTUnwrap(chinese.first { $0.title.hasPrefix("0.7.6 ") })
+        let englishLocalization = try XCTUnwrap(english.first { $0.title == chineseLocalization.title })
+        XCTAssertTrue(chineseLocalization.lines.joined().contains("动态状态"))
+        XCTAssertTrue(englishLocalization.lines.joined().contains("Localized dynamic status"))
     }
 
     func testOpenTrayUpdatesItsLanguageAndAppearanceWithoutReplacingContent() async throws {

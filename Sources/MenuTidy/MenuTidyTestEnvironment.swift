@@ -33,7 +33,10 @@ final class MenuTidyTestEnvironment {
     var rehiddenBundles: [String] = []
     var beforePanelPress: (() async throws -> Void)?
     var panelPresentationStatus: (() async -> MenuBarPresentationStatus)?
+    /// Positive process-exit evidence, independent of missing AX snapshots.
+    var endedOwners: [ObservedItemGroupHistory.Identity] = []
     var beforeRehide: (() throws -> Void)?
+    var beforeRestore: (() throws -> Void)?
 
     func isCurrent(_ identity: ObservedItemGroupHistory.Identity) -> Bool {
         identities[identity.id] == identity

@@ -1305,7 +1305,13 @@ actor MenuBarAccessibility {
     /// Queries the same retained AX object. An IPC failure or occlusion is not
     /// evidence of closure. The caller may require consecutive closed samples.
     func presentationStatus(_ token: MenuBarItemPresentation) -> MenuBarPresentationStatus {
-        guard AXIsProcessTrusted(), let current = presentation, current.token == token.token,
+        guard let current = presentation, current.token == token.token else { return .unavailable }
+        let owner = current.node.owner.identity
+        // The retained menu/window cannot outlive its exact process epoch.
+        // Check that before AX scope validation, which fails normally on Quit.
+        if MenuBarProcessIdentity.hasEnded(pid: owner.pid, bundleIdentifier: owner.bundleIdentifier,
+            launchTime: owner.launchTime) { return .closed }
+        guard AXIsProcessTrusted(),
               livePresentationScopeMatches(current.entry, owners: current.owners) else { return .unavailable }
         let role = copyAttribute(current.node.element, kAXRoleAttribute)
         guard livePresentationScopeMatches(current.entry, owners: current.owners) else { return .unavailable }

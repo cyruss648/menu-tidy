@@ -4,6 +4,13 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-11-10
+
+- Fixed a recovery error that prevented other tray icons from opening after quitting an application from its native menu.
+- Confirmed process exit ends observation of the old menu and releases temporary visibility ownership. Saved classifications remain available for rediscovery after relaunch.
+- Added coverage for quitting, replacement process epochs, exit during cleanup, and opening another icon afterward. Uncertain menu states and actual restoration failures retain recovery protection.
+- Full checks passed 109 Python tests, 520 core Swift tests, and 143 application integration tests. In-app upgrade and installed Maccy interaction acceptance are recorded separately after publication. Release signing uses the project's self-signed identity without Apple notarization.
+
 ## [0.7.6] - 2026-11-04
 
 - Localized dynamic status, progress, warnings, recovery details, and nested application errors. Stored messages follow language changes; external application names and system data remain unchanged.
