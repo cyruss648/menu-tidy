@@ -4,6 +4,13 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-11-10
+
+- Fixed discovery of newly launched hidden applications while Menu Tidy is already running.
+- Direct status items in a currently managed application's own extras root can supply identity without usable on-screen geometry. Such geometry never authorizes clicks or proves visibility or placement.
+- Added bounded read-only discovery retries during the first 15 seconds after launch. Discovery stops on success, process exit, or exhaustion and waits for active native operations.
+- Saved classifications and drafts remain intact. Added regression coverage for hidden-source boundaries, delayed status creation, bounded retries, and reconnection. Full checks passed 109 Python tests, 529 core Swift tests, and 147 application integration tests. In-app upgrade and installed desktop acceptance are recorded separately. Signing uses the project's self-signed identity without Apple notarization.
+
 ## [0.7.7] - 2026-11-10
 
 - Fixed a recovery error that prevented other tray icons from opening after quitting an application from its native menu.

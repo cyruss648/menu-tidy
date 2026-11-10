@@ -286,6 +286,7 @@ final class MenuTidyModel: ObservableObject {
     private var successfulScanOwnerKeys: Set<ScanOwnerKey> = []
     private var snapshotOwnerKeys: [pid_t: ScanOwnerKey] = [:]
     private var scanSchedule = MenuBarScanSchedule<ScanOwnerKey>()
+    private var launchDiscovery = MenuBarLaunchDiscoverySchedule<ScanOwnerKey>()
     private var actualGroups: [String: ItemVisibility] = [:]
     private var lastKnownObservedGroups = ObservedItemGroupHistory()
     private var workTask: Task<Void, Never>?
@@ -907,9 +908,17 @@ final class MenuTidyModel: ObservableObject {
         pressure.resume()
         memoryPressureSource = pressure
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
-            workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                let launchedOwner: MenuBarOwner?
+                if name == NSWorkspace.didLaunchApplicationNotification,
+                   let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                   let epoch = MenuBarProcessIdentity.launchTime(for: app) {
+                    launchedOwner = MenuBarOwner(pid: app.processIdentifier, bundleIdentifier: app.bundleIdentifier,
+                        name: app.localizedName ?? "", launchTime: epoch)
+                } else { launchedOwner = nil }
                 MainActor.assumeIsolated {
                     guard let self else { return }
+                    if let launchedOwner { self.noteApplicationLaunch(launchedOwner) }
                     guard self.ensureDesktopSessionAvailable() else { self.trayDiscoveryNeeded = true; return }
                     self.registerDepartedNativeOwners()
                     self.scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
@@ -1186,8 +1195,13 @@ final class MenuTidyModel: ObservableObject {
         wasMonitoringAutoCollapse = monitorsAutoCollapse
         let passiveDue = !sessionResumePending && canSchedulePassiveIconCapture && passiveIconCaptureTask == nil
             ? passiveCaptureSchedule.nextAttemptAt : nil
-        let recoveryDue = !sessionResumePending && (needsPositionRevalidation || (trayDiscoveryNeeded && !panelInteractionBusy))
-            ? lastRecoveryCheck + BackgroundMaintenanceSchedule.interactionInterval : nil
+        let recoveryDue: TimeInterval? = !sessionResumePending ? [
+            needsPositionRevalidation || (trayDiscoveryNeeded && !panelInteractionBusy)
+                ? lastRecoveryCheck + BackgroundMaintenanceSchedule.interactionInterval : nil,
+            !panelInteractionBusy && accessibilityGranted ? launchDiscovery.nextAttemptAt.map {
+                max($0, lastRecoveryCheck + BackgroundMaintenanceSchedule.interactionInterval)
+            } : nil
+        ].compactMap { $0 }.min() : nil
         guard let delay = BackgroundMaintenanceSchedule.nextDelay(at: now,
             autoCollapseDue: !sessionResumePending && monitorsAutoCollapse ? lastAutoCollapseCheck + BackgroundMaintenanceSchedule.interactionInterval : nil,
             permissionDue: !sessionResumePending && (settingsVisible || isArranging) ? lastPermissionCheck + BackgroundMaintenanceSchedule.permissionInterval : nil,
@@ -1232,9 +1246,12 @@ final class MenuTidyModel: ObservableObject {
         if now >= lastRecoveryCheck + BackgroundMaintenanceSchedule.interactionInterval {
             lastRecoveryCheck = now
             if needsPositionRevalidation { recoverVisibility() }
-            if trayDiscoveryNeeded && !panelInteractionBusy {
-                trayDiscoveryNeeded = false
-                refreshMenuItems()
+            if !panelInteractionBusy && accessibilityGranted {
+                let launchRetryDue = launchDiscovery.consumeDue(at: now)
+                if trayDiscoveryNeeded || launchRetryDue {
+                    trayDiscoveryNeeded = false
+                    refreshMenuItems()
+                }
             }
         }
         runStartupPendingApplication(at: now)
@@ -1246,6 +1263,20 @@ final class MenuTidyModel: ObservableObject {
     private func requestPassiveCaptureAfterEvent() {
         passiveCaptureSchedule.requestAfterEvent(at: ProcessInfo.processInfo.systemUptime)
         rescheduleMaintenanceTimer()
+    }
+
+    func noteApplicationLaunch(_ owner: MenuBarOwner) {
+        guard owner.pid > 0, owner.launchTime.isFinite, owner.launchTime > 0 else { return }
+        launchDiscovery.register(ScanOwnerKey(owner), at: maintenanceUptime)
+        trayDiscoveryNeeded = true
+    }
+
+    var managedHiddenApplicationBundles: Set<String> {
+        guard usesNativeVisibility else { return [] }
+        return Set(managedNativeTargets.compactMap { target in
+            guard case .application(let bundle) = target, (try? nativeAllowed(target)) == false else { return nil }
+            return bundle
+        })
     }
 
     func requestAccessibility() {
@@ -3571,7 +3602,8 @@ final class MenuTidyModel: ObservableObject {
             return $0.pid < $1.pid
         }
         let selected = scanSchedule.plan(current: sorted.map(ScanOwnerKey.init),
-            priority: Set(sorted.filter { rank($0) < 4 }.map(ScanOwnerKey.init)), discover: discover)
+            priority: Set(sorted.filter { rank($0) < 4 }.map(ScanOwnerKey.init)).union(launchDiscovery.targets),
+            discover: discover)
         let byKey = Dictionary(sorted.map { (ScanOwnerKey($0), $0) }, uniquingKeysWith: { first, _ in first })
         return selected.compactMap { byKey[$0] }
     }
@@ -3605,6 +3637,7 @@ final class MenuTidyModel: ObservableObject {
                 retainHiddenIDs: Set(nativeVisibilityEvidence.filter {
                     $0.value.group != .visible && self.ownerIsCurrent($0.value.identity)
                 }.keys),
+                hiddenApplicationBundles: managedHiddenApplicationBundles,
                 enumerationOwners: scanOwners)
             }
         } catch {
@@ -3679,6 +3712,9 @@ final class MenuTidyModel: ObservableObject {
         }
         try requireDesktopSession(generation: sessionGeneration)
         published = true
+        launchDiscovery.reconcile(current: currentOwnerKeys, observed: Set(snapshots.compactMap { snapshot in
+            snapshotOwnerKeys[snapshot.processIdentifier]
+        }))
         rememberObservedGroups(scannedOwners: scanOwners)
         rebuildRows()
     }

@@ -246,6 +246,7 @@ actor MenuBarAccessibility {
         let name: String
         let sourceFrame: CGRect
         let requiresHostPresentation: Bool
+        var hiddenApplicationIdentityOnly = false
         var hostPresentation: HostPresentation?
         var hostGeometryUnresolved = false
         var frame: CGRect { hostPresentation?.snapshotFrame ?? sourceFrame }
@@ -340,6 +341,7 @@ actor MenuBarAccessibility {
     }
     private var entries: [String: Entry] = [:]
     private var scanReadBudget: AccessibilityScanBudget?
+    private var scanHiddenApplicationBundles: Set<String> = []
     private var scanApplicationMenuBarRoots: [pid_t: AXUIElement] = [:]
     private var scanRemoteWindowRoots: [pid_t: [AXUIElement]] = [:]
     private var scanApplicationMenuBarQueries: Set<pid_t> = []
@@ -398,6 +400,7 @@ actor MenuBarAccessibility {
     func scan(owners: [MenuBarOwner], menuBands: [CGRect],
               positions: [String: Double] = [:],
               retainHiddenIDs: Set<String> = [],
+              hiddenApplicationBundles: Set<String> = [],
               enumerationOwners: [MenuBarOwner]? = nil) throws -> [MenuBarItemSnapshot] {
         guard AXIsProcessTrusted() else {
             systemModuleContinuity.removeAll()
@@ -405,6 +408,7 @@ actor MenuBarAccessibility {
             throw MenuBarAccessError.permission
         }
         self.menuBands = menuBands
+        scanHiddenApplicationBundles = hiddenApplicationBundles
         scanReadBudget = AccessibilityScanBudget(startedAt: ProcessInfo.processInfo.systemUptime)
         let scanStartedAt = ProcessInfo.processInfo.systemUptime
         scanApplicationMenuBarRoots.removeAll(keepingCapacity: true)
@@ -414,6 +418,7 @@ actor MenuBarAccessibility {
         var published = false
         defer {
             scanReadBudget = nil
+            scanHiddenApplicationBundles.removeAll()
             scanApplicationMenuBarRoots.removeAll(keepingCapacity: true)
             scanRemoteWindowRoots.removeAll(keepingCapacity: true)
             scanApplicationMenuBarQueries.removeAll(keepingCapacity: true)
@@ -473,7 +478,9 @@ actor MenuBarAccessibility {
         }
         let provisionalCount = candidates.count
         let identityCandidates = candidates
-        candidates.removeAll { $0.requiresHostPresentation && $0.hostPresentation == nil }
+        candidates.removeAll {
+            $0.requiresHostPresentation && $0.hostPresentation == nil && !$0.hiddenApplicationIdentityOnly
+        }
         Self.logger.notice("hostPresentation scannedBindings=\(candidates.filter { $0.hostPresentation != nil }.count) rejectedUnbound=\(provisionalCount - candidates.count)")
         try Task.checkCancellation()
         // Prefer the originating app's menu-bar item, then preserve its stable
@@ -524,6 +531,10 @@ actor MenuBarAccessibility {
             if let key = persistentKey(candidate) { identifierCounts[key, default: 0] += 1 }
         }
         logDuplicateCandidateBuckets(candidates: candidates, unique: unique, identifierCounts: identifierCounts)
+        let identityOnlyCount = unique.filter { $0.hiddenApplicationIdentityOnly && $0.hostPresentation == nil }.count
+        if identityOnlyCount > 0 {
+            Self.logger.notice("nativeHiddenInventory discoveredSources=\(identityOnlyCount) reliableGeometry=false")
+        }
         var unreliableGeometry: Set<Int> = []
         for first in unique.indices {
             for second in unique.indices where second > first {
@@ -619,7 +630,8 @@ actor MenuBarAccessibility {
                 verifiedOrigin = sourceMatchesHitTest(candidate.element,
                     at: CGPoint(x: candidate.sourceFrame.midX, y: candidate.sourceFrame.midY), context: "origin-position")
             }
-            let hostGeometryUnresolved = (candidate.hostGeometryUnresolved || lostHostBinding) && !verifiedOrigin
+            let hostGeometryUnresolved = (candidate.hostGeometryUnresolved || lostHostBinding ||
+                (candidate.hiddenApplicationIdentityOnly && candidate.hostPresentation == nil)) && !verifiedOrigin
             let hasReliableGeometry = !unreliableGeometry.contains(candidateIndex) && !hostGeometryUnresolved
             if let identifier = candidate.identifier, Self.anchorIdentifiers.contains(identifier) {
                 Self.logger.notice("anchorMapping id=\(identifier, privacy: .public) ownIdentifier=\(own ?? "nil", privacy: .public) ownerPID=\(candidate.owner.pid) ownPID=\(ProcessInfo.processInfo.processIdentifier) ownerBundle=\(candidate.owner.bundleIdentifier ?? "nil", privacy: .public) ownBundle=\(ownBundle ?? "nil", privacy: .public) role=\(candidate.role, privacy: .public) source=\(String(describing: candidate.source), privacy: .public) frame=\(String(describing: candidate.frame), privacy: .public)")
@@ -4910,10 +4922,14 @@ actor MenuBarAccessibility {
                 (rect.width <= 500 || identifier?.hasPrefix("menu-tidy-") == true) &&
                 menuBands.contains(where: { $0.intersects(rect) })
         } ?? false
-        // A hidden origin may report no rectangle at all. Keep only a provisional
-        // direct remote item here; the parent must establish its unique binding,
-        // or scan removes it before identity/geometry can reach the model.
-        guard sourceIsUsable || (source == .hostWindow && depth == 2 && ancestors.count == 2 &&
+        let hiddenIdentityOnly = !sourceIsUsable && HiddenApplicationInventoryPolicy.accepts(
+            isApplicationExtras: source == .applicationExtras, depth: depth, role: role,
+            ownerPID: owner.pid, rootPID: enumerationRootPID, launchTime: owner.launchTime,
+            bundleIdentifier: owner.bundleIdentifier, managedHiddenBundles: scanHiddenApplicationBundles)
+        // A managed application's direct extras child can supply identity
+        // without geometry. Remote host items remain provisional until their
+        // parent establishes a unique presentation binding.
+        guard sourceIsUsable || hiddenIdentityOnly || (source == .hostWindow && depth == 2 && ancestors.count == 2 &&
             (role == kAXMenuBarItemRole || role == kAXButtonRole)) else {
             logOwnWalk(node, ownersByPID: ownersByPID, source: source, depth: depth, stage: "filtered:origin-geometry-without-host-path")
             return
@@ -4925,6 +4941,7 @@ actor MenuBarAccessibility {
         output.append(Candidate(element: node, owner: owner, identifier: identifier,
                                 name: String((label ?? owner.name).prefix(100)), sourceFrame: sourceRect ?? .zero,
                                 requiresHostPresentation: !sourceIsUsable,
+                                hiddenApplicationIdentityOnly: hiddenIdentityOnly,
                                 hostPresentation: nil, role: role, source: source,
                                 enumerationRootPID: enumerationRootPID, ancestors: ancestors))
         logOwnWalk(node, ownersByPID: ownersByPID, source: source, depth: depth, stage: "candidate-accepted")
