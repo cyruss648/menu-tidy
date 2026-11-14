@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.20] - 2026-11-15
+
+Fixed macOS 27 startup recovery rehiding running native tray applications when their status items were created after the first accessibility scan.
+
+- Startup recovery now keeps its protection active and retries within a bounded backoff window when a saved running application is still missing from the AX inventory.
+- Saved native hiding choices are reapplied only after the inventory becomes complete or the bounded retries establish that an application has no discoverable status item.
+- Added regression coverage for late status item creation across BLEUnlock, WhatCable, and other login launched tray applications.
+
+Verification: full gate, dual architecture public release, signed feeds, and public artifact installation are recorded after completion. Uses the project's self signed release identity and is not Apple notarized.
+
 ## [0.7.19] - 2026-11-14
 
 Fixed macOS 27 native tray applications being reported as “exited or unreadable” after restart or login recovery while MenuBarAgent rebuilt their accessibility nodes.

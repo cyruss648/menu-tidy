@@ -218,13 +218,37 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
         defer { fixture.dispose() }
         fixture.system.runningBundles = [bundle, "org.example.NoStatusItem"]
 
-        try fireMaintenance(fixture.system, at: 110)
-        await fixture.model.waitForTestingOperations()
+        try await exhaustNativeStartupRecovery(fixture, startingAt: 110)
 
         XCTAssertNotNil(fixture.defaults.string(forKey: "nativeStartupRecoveryRelease.v1"))
         XCTAssertNil(fixture.system.maintenanceTimer)
         XCTAssertTrue(fixture.model.managementItems.contains { $0.bundleIdentifier == "org.example.NoStatusItem" })
         XCTAssertFalse(fixture.model.managementItems.first { $0.bundleIdentifier == "org.example.NoStatusItem" }?.canMove ?? true)
+    }
+
+    @MainActor
+    func testNativeStartupRecoveryRetriesAnIncompleteInventoryBeforeRehiding() async throws {
+        let lateBundle = "org.example.LateNativeStatusItem"
+        let fixture = try makeFixture(
+            choices: [bundle: .collapsible, lateBundle: .collapsible],
+            nativeStartupRecovery: true)
+        defer { fixture.dispose() }
+        fixture.system.runningBundles = [bundle, lateBundle]
+
+        try fireMaintenance(fixture.system, at: 110)
+        await fixture.model.waitForTestingOperations()
+        XCTAssertNil(fixture.defaults.string(forKey: "nativeStartupRecoveryRelease.v1"))
+        XCTAssertNotNil(fixture.system.maintenanceTimer)
+        XCTAssertTrue(fixture.system.allowed[lateBundle] ?? true)
+
+        addItem(to: fixture.system, id: "session:late-native", bundle: lateBundle, pid: 10001)
+        try fireMaintenance(fixture.system, at: 113)
+        await fixture.model.waitForTestingOperations()
+
+        XCTAssertNotNil(fixture.defaults.string(forKey: "nativeStartupRecoveryRelease.v1"))
+        XCTAssertNil(fixture.system.maintenanceTimer)
+        XCTAssertEqual(Set(fixture.system.hiddenBundles), Set([bundle, lateBundle]))
+        XCTAssertTrue(fixture.model.managementItems.contains { $0.bundleIdentifier == lateBundle })
     }
 
     @MainActor
@@ -274,6 +298,15 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
         await fixture.model.waitForTestingOperations()
         try fireMaintenance(fixture.system, at: uptime + 0.05)
         await fixture.model.waitForTestingOperations()
+    }
+
+    @MainActor
+    private func exhaustNativeStartupRecovery(_ fixture: Fixture, startingAt uptime: TimeInterval) async throws {
+        for offset in [0.0, 3.0, 9.0] {
+            guard fixture.system.maintenanceTimer != nil else { break }
+            try fireMaintenance(fixture.system, at: uptime + offset)
+            await fixture.model.waitForTestingOperations()
+        }
     }
 
     @MainActor

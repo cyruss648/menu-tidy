@@ -5873,6 +5873,15 @@ private extension MenuTidyModel {
 
         if !inventoryComplete {
             Self.diagnosticLogger.notice("nativeStartupRebind inventoryIncomplete=true observedBundles=\(observedBundles.count) expectedRunning=\(expectedRunning.count) missing=\(expectedRunning.subtracting(observedBundles).count)")
+            if attempt < Self.nativeStartupRetryDelays.count {
+                // A running application can create its status item after the
+                // first post-release scan. Keep native assessment released
+                // through the bounded retry window instead of immediately
+                // hiding the still-unobserved application again.
+                nativeStartupRecoveryDue = maintenanceUptime + Self.nativeStartupRetryDelays[attempt - 1]
+                Self.diagnosticLogger.notice("nativeStartupRebind retry=true reason=inventory-incomplete attempt=\(attempt) nextDue=\(self.nativeStartupRecoveryDue ?? 0)")
+                return
+            }
         }
         defaults.set(nativeStartupEnvironmentSignature, forKey: Self.nativeStartupEnvironmentKey)
         if let release = nativeStartupRecoveryReleaseSignature {
