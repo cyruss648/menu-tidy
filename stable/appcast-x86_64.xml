@@ -6,19 +6,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.7.11</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.11</link>
-      <pubDate>Sat, 14 Nov 2026 04:35:48 +0000</pubDate>
-      <sparkle:version>87</sparkle:version>
-      <sparkle:shortVersionString>0.7.11</sparkle:shortVersionString>
+      <title>Menu Tidy 0.7.12</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.12</link>
+      <pubDate>Sat, 14 Nov 2026 05:01:11 +0000</pubDate>
+      <sparkle:version>88</sparkle:version>
+      <sparkle:shortVersionString>0.7.12</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="plain-text">## [0.7.11] - 2026-11-14
+      <description sparkle:format="plain-text">## [0.7.12] - 2026-11-14
 
-修复启动重绑定尚未排队时，macOS 环境变化导致 BLEUnlock 等原生托盘应用仍无法被发现的问题。
+修复原生托盘重绑定失败时提前结束流程，导致 BLEUnlock 等应用没有进入后续发现扫描的问题。
 
-- 当保存的 macOS 环境标记缺失或与当前系统不一致时，继续使用已保存的非可见应用 Bundle ID 作为扫描提示。
-- 扫描仍必须确认应用进程正在运行并取得当前菜单栏身份；环境提示不会直接创建在线图标，也不会把离线记录误判为已发现。
-- 增加启动时序回归测试，覆盖环境变化发生在启动重绑定排队之后的情况。
+- 重绑定失败后仍执行一次受保护的菜单栏扫描，扫描结果仍需确认运行进程和当前菜单栏身份。
+- 重绑定失败继续保留有限重试，扫描成功不会把失败的原生写入误报为恢复成功。
+- 增加重绑定失败后仍执行扫描的启动集成回归测试。
 
 验证：`./scripts/check.sh --full` 通过后发布。沿用项目自签名发行身份，未经 Apple 公证。
 
@@ -32,8 +32,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.7.11-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.7.11-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.7.12-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.7.12-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -56,12 +56,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.11/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.11/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.11/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.12/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.12/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.12/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.11/Menu-Tidy-0.7.11-macos-x86_64.zip" length="4103212" type="application/octet-stream" sparkle:edSignature="YZU/V4tgz1GqdnrhrKgo2fSbim4crFDOgcUf77UANSTvlpdu7w3NjXNnENElnUo140fjTAFpprLogsllC8EqDA=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.12/Menu-Tidy-0.7.12-macos-x86_64.zip" length="4103893" type="application/octet-stream" sparkle:edSignature="OAU3HdbX7uNlowHTkdsjU4vih65lJQiH6lDrGmCsjxYEKFO+SR0t+7AfyyM6hTXs7svqFOKIcCRIP+cj3RUmAw=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: YmTgBT5A9V5xaxtr/bB4xVXNUfQYeQpG7hdk84DfjGz2ZTJCYt+a46yucej03H8fHRa32CLMiu2kGqQcWaPPBw==
-length: 5559
+edSignature: +cT2OXaTaoF9ugYMwfkNy9MwvddujsOj5yzp8hcOwqLChkECqriGXZTF/S1WrkqNlMlrsGH6kOgygFrQ054VBw==
+length: 5454
 -->
