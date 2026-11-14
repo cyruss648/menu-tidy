@@ -33,6 +33,9 @@ final class MenuTidyTestEnvironment {
     /// Opt in only for startup-rebind integration tests. Production always
     /// enables this path; existing fixtures keep their original clock behavior.
     var nativeStartupRecoveryEnabled = false
+    /// Models macOS 27's application-wide assessment result when MenuBarAgent
+    /// has replaced the source AX node during a visibility transition.
+    var nativeAssessmentAuthoritative = false
     var revealedBundles: Set<String> = []
     var panelPressCount = 0
     var panelStatusReadCount = 0
@@ -45,7 +48,14 @@ final class MenuTidyTestEnvironment {
     var beforeRestore: (() throws -> Void)?
 
     func isCurrent(_ identity: ObservedItemGroupHistory.Identity) -> Bool {
-        identities[identity.id] == identity
+        if nativeAssessmentAuthoritative {
+            return identities.values.contains {
+                $0.pid == identity.pid &&
+                    $0.bundleIdentifier == identity.bundleIdentifier &&
+                    $0.launchTime == identity.launchTime
+            }
+        }
+        return identities[identity.id] == identity
     }
 
     func visibility(id: String) -> Bool? {

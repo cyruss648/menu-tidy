@@ -134,6 +134,26 @@ final class NativeBatchApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeAssessmentAcceptsAXNodeReplacementWhileOwnerEpochRemainsCurrent() async throws {
+        let f = try Fixture(); defer { f.dispose() }
+        f.system.nativeAssessmentAuthoritative = true
+        var replaced = false
+        f.system.beforeVisibilityReadForItem = { id in
+            guard id == "session:a", !replaced else { return }
+            replaced = true
+            f.system.snapshots.removeAll { $0.id == id }
+        }
+
+        f.model.applyPendingTrayPlacements()
+        await f.model.waitForTestingOperations()
+
+        XCTAssertTrue(replaced)
+        XCTAssertEqual(f.system.allowed[f.a], false)
+        XCTAssertNil(f.model.trayPlacementFailure(id: "session:a"))
+        XCTAssertEqual(f.model.trayPlacementOutstandingCount, 0)
+    }
+
+    @MainActor
     private final class Fixture {
         let a = "org.example.BatchA", b = "org.example.BatchB", c = "org.example.BatchC"
         let suite = "dev.hdh.MenuTidy.tests.native-batch.\(UUID().uuidString)"

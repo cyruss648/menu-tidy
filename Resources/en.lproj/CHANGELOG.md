@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.19] - 2026-11-14
+
+Fixed macOS 27 native tray applications being reported as “exited or unreadable” after restart or login recovery while MenuBarAgent rebuilt their accessibility nodes.
+
+- The native assessment backend now confirms application visibility with the exact bundle identifier and current process launch epoch, allowing a transiently missing or recreated AX node to complete confirmation.
+- After a successful application-level hide, a status item temporarily absent from the AX inventory no longer becomes a failed batch during the final scan; a real exit, process replacement, or identity change still remains pending.
+- Added regression coverage for AX node replacement, native batch confirmation, and startup recovery so BLEUnlock, WhatCable, and other login-launched tray applications do not regain false error cards after restart.
+
+Verification: full gate, dual-architecture public release, signed feeds, and public artifact installation are recorded after completion. Uses the project's self-signed release identity and is not Apple-notarized.
+
 ## [0.7.18] - 2026-11-14
 
 Fixed multiple native tray applications disappearing or falling back to “offline and retained records” after restart or login when their startup order differs.

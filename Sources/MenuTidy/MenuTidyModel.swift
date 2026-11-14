@@ -669,9 +669,21 @@ final class MenuTidyModel: ObservableObject {
                     } : nil
                     if applicationGroup != nil, let bundle = row.bundleIdentifier {
                         let current = self.items.filter { $0.isAvailable && $0.canMove && $0.bundleIdentifier == bundle }
-                        confirmed = !current.isEmpty && current.allSatisfy {
-                            self.rules.rule(for: $0.id)?.visibility == request.group && self.actualGroups[$0.id] == request.group &&
-                                self.draftSessionIdentity(for: $0.id).map { self.ownerIsCurrent($0) } == true
+                        if current.isEmpty,
+                           (self.usesNativeAssessment ||
+                            self.testingEnvironment?.nativeAssessmentAuthoritative == true),
+                           self.nativeTrayChoices.group(bundle: bundle) == request.group,
+                           self.itemApplicationIssues[request.id] == nil {
+                            // A successful application-level assessment can
+                            // remove every status item from the AX inventory.
+                            // The saved bundle choice is sufficient after the
+                            // operation already confirmed the live owner.
+                            confirmed = true
+                        } else {
+                            confirmed = !current.isEmpty && current.allSatisfy {
+                                self.rules.rule(for: $0.id)?.visibility == request.group && self.actualGroups[$0.id] == request.group &&
+                                    self.draftSessionIdentity(for: $0.id).map { self.ownerIsCurrent($0) } == true
+                            }
                         }
                     } else {
                         confirmed = self.rules.rule(for: request.id)?.visibility == request.group && self.actualGroups[request.id] == request.group
@@ -2333,6 +2345,19 @@ final class MenuTidyModel: ObservableObject {
                         if self.items.contains(where: { row in
                             guard requestedIDSet.contains(row.id), self.itemApplicationIssues[row.id] == nil else { return false }
                             if let fixed = fixedRules?.first(where: { $0.id == row.id }) {
+                                if !row.isAvailable,
+                                   (self.usesNativeAssessment ||
+                                    self.testingEnvironment?.nativeAssessmentAuthoritative == true),
+                                   let bundle = row.bundleIdentifier,
+                                   self.nativeTrayChoices.group(bundle: bundle) == fixed.visibility {
+                                    // An application-level assessment can
+                                    // intentionally remove every AX source
+                                    // after a successful hide. The durable
+                                    // bundle choice is the confirmation for
+                                    // this offline row; a missing source here
+                                    // is not an application exit or failure.
+                                    return false
+                                }
                                 return self.actualGroups[row.id] != fixed.visibility
                             }
                             return row.isPending
@@ -6389,7 +6414,33 @@ private extension MenuTidyModel {
                     }
                     try checkOperationDeadline()
                     guard job.identities.allSatisfy({ self.ownerIsCurrent($0.1) }) else { throw MenuBarAccessError.disappeared }
-                    for (item, observed) in job.identities {
+                    let confirmationIdentities: [(MenuBarItemSnapshot, ObservedItemGroupHistory.Identity)]
+                    if case .application(let bundle) = job.target,
+                       usesNativeAssessment || testingEnvironment?.nativeAssessmentAuthoritative == true {
+                        let originalOwners = Set(job.identities.map { ScanOwnerKey($0.1) })
+                        let current = snapshots.compactMap { item -> (MenuBarItemSnapshot, ObservedItemGroupHistory.Identity)? in
+                            guard item.canMove, item.ownIdentifier == nil, item.bundleIdentifier == bundle,
+                                  let currentIdentity = observedItemIdentity(item),
+                                  ownerIsCurrent(currentIdentity) else { return nil }
+                            return (item, currentIdentity)
+                        }
+                        let currentOwners = Set(current.map { ScanOwnerKey($0.1) })
+                        if !current.isEmpty {
+                            guard currentOwners.isSubset(of: originalOwners) else {
+                                throw MenuBarAccessError.disappeared
+                            }
+                            confirmationIdentities = current
+                        } else {
+                            // The application-level assessment remains valid
+                            // even if MenuBarAgent has temporarily removed every
+                            // source AX node. Keep the original owner epoch as
+                            // the durable confirmation for this request.
+                            confirmationIdentities = job.identities
+                        }
+                    } else {
+                        confirmationIdentities = job.identities
+                    }
+                    for (item, observed) in confirmationIdentities {
                         confirmNativeRule(ItemRule(id: item.id, name: item.name, bundleIdentifier: item.bundleIdentifier,
                             visibility: job.rule.visibility), identity: observed, target: job.target)
                     }
@@ -6524,23 +6575,50 @@ private extension MenuTidyModel {
         var consecutive = 0
         var refreshed = false
         var observedVisibleDuringHide = false
+        let applicationAssessmentAuthoritative: Bool = {
+            guard case .application = target else { return false }
+            if testingEnvironment?.nativeAssessmentAuthoritative == true { return true }
+            return usesNativeAssessment
+        }()
         while ProcessInfo.processInfo.systemUptime < deadline {
             try requireDesktopSession(generation: sessionGeneration)
             try checkOperationDeadline()
-            guard !stopping, (testingEnvironment != nil || AXIsProcessTrusted()), self.ownerIsCurrent(identity),
-                  snapshots.first(where: { $0.id == id }).flatMap(observedItemIdentity) == identity else {
+            let identityStillCurrent: Bool
+            if applicationAssessmentAuthoritative,
+               case .application(let bundle) = target {
+                // macOS 27's assessment backend owns the application-wide
+                // visibility result. MenuBarAgent may replace the source AX
+                // node while applying it, so the old item ID is not required
+                // here. The process epoch and exact bundle still are.
+                identityStillCurrent = identity.bundleIdentifier == bundle &&
+                    ownerIsCurrent(identity)
+            } else {
+                identityStillCurrent = ownerIsCurrent(identity) &&
+                    snapshots.first(where: { $0.id == id }).flatMap(observedItemIdentity) == identity
+            }
+            guard !stopping, (testingEnvironment != nil || AXIsProcessTrusted()),
+                  identityStillCurrent else {
+                Self.diagnosticLogger.notice("nativeVisibility identityConfirmed=false applicationAssessmentAuthoritative=\(applicationAssessmentAuthoritative) ownerCurrent=\(self.ownerIsCurrent(identity)) snapshotMatches=\(self.snapshots.first(where: { $0.id == id }).flatMap(self.observedItemIdentity) == identity)")
                 throw MenuBarAccessError.disappeared
             }
             let allowed: Bool
             let observed: Bool?
-            if case .application(let bundle) = target,
-               nativeAssessmentStore.isManaged(bundle: bundle) || nativeAssessmentStore.isActive {
-                try await nativeAssessmentStore.waitForPendingActivation()
-                allowed = nativeAssessmentStore.isAllowed(bundle: bundle)
-                // MenuBarAgent keeps the source AX node alive on macOS 27;
-                // the assessment assertion is the authoritative visibility
-                // result for this backend, while AX remains an item identity
-                // check performed above.
+            if applicationAssessmentAuthoritative,
+               case .application(let bundle) = target {
+                if usesNativeAssessment {
+                    try await nativeAssessmentStore.waitForPendingActivation()
+                    allowed = nativeAssessmentStore.isAllowed(bundle: bundle)
+                } else {
+                    allowed = try nativeAllowed(target)
+                }
+                if let testingEnvironment {
+                    try await testingEnvironment.beforeVisibilityReadForItem?(id)
+                    try await testingEnvironment.beforeVisibilityRead?()
+                }
+                // The assessment assertion is the authoritative visibility
+                // result for this backend. The process epoch and bundle check
+                // above prevent an exited or replaced application from being
+                // accepted as a successful confirmation.
                 observed = allowed
             } else {
                 allowed = try nativeAllowed(target)
