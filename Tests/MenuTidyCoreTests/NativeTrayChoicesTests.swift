@@ -128,6 +128,15 @@ final class NativeTrayChoicesTests: XCTestCase {
         XCTAssertNil(decoded.group(bundle: "org.example.mixedcase"))
     }
 
+    func testHiddenBundlesExposeOnlyNonVisiblePersistedIntent() {
+        let choices = NativeTrayChoices(existing: [
+            "org.example.Visible": .visible,
+            "org.example.Collapsible": .collapsible,
+            "org.example.Always": .alwaysHidden
+        ])
+        XCTAssertEqual(choices.hiddenBundles, ["org.example.Collapsible", "org.example.Always"])
+    }
+
     func testUnknownCategoryAndUnsafePersistedBundleRejectDecode() {
         for json in [
             #"{"choices":{"org.example.App":"futureCategory"}}"#,

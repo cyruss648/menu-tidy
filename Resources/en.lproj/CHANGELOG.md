@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.10] - 2026-11-14
+
+Fixed rediscovery of native tray items after a macOS upgrade while Menu Tidy is already running, including applications such as BLEUnlock.
+
+- Record the macOS startup environment and schedule a delayed native tray rebind when that environment changes, with bounded retries while system state settles.
+- Use saved non-visible application bundle identifiers as startup discovery hints. The scanner still verifies a live process and a current menu bar identity before publishing an item.
+- Apply startup tray choices after native rebinding completes, preserving existing classifications, drafts, and saved tray choices.
+
+Verification: `./scripts/check.sh --full` passed 109 Python tests, 530 core Swift tests, 152 application integration tests, and the warnings-as-errors build. Release signing uses the project's self-signed identity and is not Apple-notarized.
+
 ## [0.7.9] - 2026-11-10
 
 Restore automatic discovery when an accessory application's launch notification is missing.

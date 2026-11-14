@@ -153,6 +153,6 @@ cd menu-tidy
 
 ## 版本与许可证
 
-当前源码版本为 **0.7.9（构建 85）**。新启动隐藏应用的发现修复见[启动发现记录](docs/NATIVE-LAUNCH-DISCOVERY-20261110.md)。从托盘菜单退出应用后的恢复修复见[应用退出恢复记录](docs/TRAY-OWNER-EXIT-20261110.md)。版本变更见 [CHANGELOG.md](CHANGELOG.md)，公开可安装版本以 [GitHub Releases](https://github.com/cyruss648/menu-tidy/releases) 为准。本轮托盘菜单锁屏恢复与解锁后首击修复见[托盘会话恢复记录](docs/TRAY-SESSION-RECOVERY-20261016.md)，此前锁屏暂停与解锁补偿见[锁屏补偿验证](docs/SESSION-RECONCILIATION-20261015.md)，后台定时补偿与批量处理见[周期补偿与批量应用](docs/PERIODIC-BATCH-20261015.md)。Atoll 原生隐藏与重复草稿的修复及实机验证见[Atoll 验证记录](docs/ATOLL-NATIVE-HIDING-20261015.md)；此前 Clash 与实时活动的显示去重见[显示条目去重记录](docs/ITEM-PRESENTATION-20261014.md)。
+当前源码版本为 **0.7.10（构建 86）**。macOS 升级后的原生托盘重绑定修复见 [CHANGELOG.md](CHANGELOG.md)。新启动隐藏应用的发现修复见[启动发现记录](docs/NATIVE-LAUNCH-DISCOVERY-20261110.md)。从托盘菜单退出应用后的恢复修复见[应用退出恢复记录](docs/TRAY-OWNER-EXIT-20261110.md)。公开可安装版本以 [GitHub Releases](https://github.com/cyruss648/menu-tidy/releases) 为准。本轮托盘菜单锁屏恢复与解锁后首击修复见[托盘会话恢复记录](docs/TRAY-SESSION-RECOVERY-20261016.md)，此前锁屏暂停与解锁补偿见[锁屏补偿验证](docs/SESSION-RECONCILIATION-20261015.md)，后台定时补偿与批量处理见[周期补偿与批量应用](docs/PERIODIC-BATCH-20261015.md)。Atoll 原生隐藏与重复草稿的修复及实机验证见[Atoll 验证记录](docs/ATOLL-NATIVE-HIDING-20261015.md)；此前 Clash 与实时活动的显示去重见[显示条目去重记录](docs/ITEM-PRESENTATION-20261014.md)。
 
 本项目采用 **MIT OR Apache-2.0** 双许可证，可自行选择其中一种许可证使用。许可声明见 [LICENSE](LICENSE)，完整条款见 [MIT License](LICENSE-MIT) 和 [Apache License 2.0](LICENSE-APACHE)。第三方组件保留各自的许可证与版权声明。

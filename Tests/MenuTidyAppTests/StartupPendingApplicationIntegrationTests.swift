@@ -174,6 +174,21 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeStartupRecoveryRebindsSavedChoicesBeforeNormalStartupApply() async throws {
+        let fixture = try makeFixture(nativeStartupRecovery: true)
+        defer { fixture.dispose() }
+        let (model, system) = (fixture.model, fixture.system)
+        XCTAssertNotNil(system.maintenanceTimer)
+
+        try fireMaintenance(system, at: 110)
+        await model.waitForTestingOperations()
+
+        XCTAssertEqual(system.hiddenBundles, [bundle])
+        XCTAssertNotNil(fixture.defaults.string(forKey: "nativeStartupEnvironment.v1"))
+        XCTAssertNil(system.maintenanceTimer)
+    }
+
+    @MainActor
     private func finishStartupAttempt(_ fixture: Fixture, at uptime: TimeInterval) async throws {
         try fireMaintenance(fixture.system, at: uptime)
         await fixture.model.waitForTestingOperations()
@@ -201,7 +216,8 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
 
     @MainActor
     private func makeFixture(enabled: Bool? = nil, completedSetup: Bool = true,
-                             choices: [String: ItemVisibility]? = nil) throws -> Fixture {
+                             choices: [String: ItemVisibility]? = nil,
+                             nativeStartupRecovery: Bool = false) throws -> Fixture {
         let suite = "dev.hdh.MenuTidy.tests.startup.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.set(false, forKey: "periodicApplyPending")
@@ -215,6 +231,7 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
         }
         defaults.set(try JSONEncoder().encode(savedChoices), forKey: "nativeTrayChoices.v1")
         let system = MenuTidyTestEnvironment()
+        system.nativeStartupRecoveryEnabled = nativeStartupRecovery
         system.uptime = 100
         addItem(to: system, id: "session:startup", bundle: bundle, pid: 10000)
         return Fixture(model: MenuTidyModel(testing: system, defaults: defaults), system: system,

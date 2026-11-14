@@ -27,6 +27,9 @@ final class MenuTidyTestEnvironment {
     var pressedMouseButtons = false
     var maintenanceTimer: Timer?
     var desktopSessionAvailable = true
+    /// Opt in only for startup-rebind integration tests. Production always
+    /// enables this path; existing fixtures keep their original clock behavior.
+    var nativeStartupRecoveryEnabled = false
     var revealedBundles: Set<String> = []
     var panelPressCount = 0
     var panelStatusReadCount = 0

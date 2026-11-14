@@ -10,9 +10,11 @@ public enum BackgroundMaintenanceSchedule {
                                  permissionDue: TimeInterval?, passiveCaptureDue: TimeInterval?,
                                  recoveryDue: TimeInterval?, startupApplicationDue: TimeInterval? = nil,
                                  periodicApplicationDue: TimeInterval? = nil,
-                                 sessionResumeDue: TimeInterval? = nil) -> TimeInterval? {
+                                 sessionResumeDue: TimeInterval? = nil,
+                                 nativeStartupRecoveryDue: TimeInterval? = nil) -> TimeInterval? {
         guard now.isFinite else { return nil }
-        let deadlines = [autoCollapseDue, permissionDue, passiveCaptureDue, recoveryDue, startupApplicationDue, periodicApplicationDue, sessionResumeDue]
+        let deadlines = [autoCollapseDue, permissionDue, passiveCaptureDue, recoveryDue, startupApplicationDue,
+                         periodicApplicationDue, sessionResumeDue, nativeStartupRecoveryDue]
             .compactMap { $0 }.filter(\.isFinite)
         guard let deadline = deadlines.min() else { return nil }
         return max(0.05, deadline - now)

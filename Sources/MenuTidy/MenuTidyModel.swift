@@ -239,6 +239,9 @@ final class MenuTidyModel: ObservableObject {
     private var startupPendingApplicationDue: TimeInterval?
     private var startupPendingApplicationNeedsRefresh = true
     private var startupPendingApplicationFinished = false
+    private var nativeStartupRecoveryDue: TimeInterval?
+    private var nativeStartupRecoveryAttempt = 0
+    private var nativeStartupRecoveryScheduled = false
     private var periodicPendingApplicationDue: TimeInterval?
     private var periodicPendingApplicationGeneration = 0
     @Published private(set) var desktopSessionAvailable = true
@@ -838,6 +841,7 @@ final class MenuTidyModel: ObservableObject {
             sessionResumePending = !desktopSessionAvailable
             started = true
             rebuildRows()
+            scheduleNativeStartupRecoveryIfNeeded()
             scheduleStartupPendingApplication()
             schedulePeriodicPendingApplication()
             return
@@ -869,6 +873,7 @@ final class MenuTidyModel: ObservableObject {
         configureShortcut()
         refreshLoginStatus()
         refreshEnvironment()
+        scheduleNativeStartupRecoveryIfNeeded()
         // Recover our own exact preference writes even if AX was revoked
         // while this application was stopped. Recovery never needs AX input.
         if needsLegacyPositionRecovery {
@@ -894,7 +899,7 @@ final class MenuTidyModel: ObservableObject {
                     positionRecoveryMessage = LocalizedMessage("上次隐藏位置尚未恢复：\(error.localizedMessage)")
                 }
             }
-        } else if usesNativeVisibility && hasManagedNativeTargets {
+        } else if usesNativeVisibility && hasManagedNativeTargets && !nativeStartupRecoveryScheduled {
             recoverNativeVisibilityAndRefresh()
         } else if accessibilityGranted {
             refreshMenuItems(collapseWhenFinished: startCollapsed && hasCompletedSetup && !demoMode)
@@ -1221,7 +1226,8 @@ final class MenuTidyModel: ObservableObject {
             passiveCaptureDue: passiveDue, recoveryDue: recoveryDue,
             startupApplicationDue: startupPendingApplicationDue,
             periodicApplicationDue: periodicPendingApplicationDue,
-            sessionResumeDue: sessionResumeDue) else {
+            sessionResumeDue: sessionResumeDue,
+            nativeStartupRecoveryDue: nativeStartupRecoveryDue) else {
             timer?.invalidate(); timer = nil; maintenanceFireAt = nil
             testingEnvironment?.maintenanceTimer = nil
             return
@@ -1268,6 +1274,7 @@ final class MenuTidyModel: ObservableObject {
             }
         }
         runStartupPendingApplication(at: now)
+        runNativeStartupRecovery(at: now)
         runPeriodicPendingApplication(at: now)
         schedulePassiveIconCapture()
         rescheduleMaintenanceTimer()
@@ -1315,10 +1322,17 @@ final class MenuTidyModel: ObservableObject {
 
     var managedHiddenApplicationBundles: Set<String> {
         guard usesNativeVisibility else { return [] }
-        return Set(managedNativeTargets.compactMap { target in
+        let persisted = (nativeStartupRecoveryDue != nil || nativeStartupRecoveryAttempt > 0)
+            ? nativeTrayChoices.hiddenBundles : []
+        let owned: Set<String> = Set(managedNativeTargets.compactMap { target in
             guard case .application(let bundle) = target, (try? nativeAllowed(target)) == false else { return nil }
             return bundle
         })
+        // A stale macOS 27 assessment can hide an application before this
+        // process has rebuilt its process-local ownership state. Saved intent
+        // is safe as a discovery hint: the scanner still requires a live owner
+        // and a fresh AX identity before publishing the item.
+        return persisted.union(owned)
     }
 
     func requestAccessibility() {
@@ -1579,7 +1593,8 @@ final class MenuTidyModel: ObservableObject {
 
     func refreshMenuItems(collapseWhenFinished: Bool = false, prepareOverflow: Bool = false,
                           discover: Bool = true, applyStartupPendingWhenFinished: Bool = false,
-                          periodicPendingGeneration: Int? = nil, sessionResumeGeneration: Int? = nil) {
+                          periodicPendingGeneration: Int? = nil, sessionResumeGeneration: Int? = nil,
+                          nativeStartupRecoveryAttempt: Int? = nil) {
         if isUIPreview { managementMessage = LocalizedMessage("预览：图标列表已更新，当前选择已保留。"); return }
         guard ensureDesktopSessionAvailable() else { return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
@@ -1613,6 +1628,9 @@ final class MenuTidyModel: ObservableObject {
                     self.isResumingPanelRecovery = false
                     self.finishSessionResumeRefresh(generation: generation, succeeded: scanSucceeded && !Task.isCancelled)
                     self.resumePendingPanelAction(succeeded: scanSucceeded && !Task.isCancelled, generation: generation)
+                } else if let attempt = nativeStartupRecoveryAttempt {
+                    self.finishNativeStartupRecovery(attempt: attempt,
+                        succeeded: scanSucceeded && !Task.isCancelled)
                 } else if applyStartupPendingWhenFinished {
                     self.finishStartupPendingRefresh(succeeded: scanSucceeded && !Task.isCancelled,
                         sessionGeneration: refreshSessionGeneration)
@@ -5630,6 +5648,104 @@ final class MenuTidyModel: ObservableObject {
 
 @MainActor
 private extension MenuTidyModel {
+    private static let nativeStartupEnvironmentKey = "nativeStartupEnvironment.v1"
+    private static let nativeStartupInitialDelay: TimeInterval = 10
+    private static let nativeStartupRetryDelays: [TimeInterval] = [2, 5, 12]
+
+    private var nativeStartupEnvironmentSignature: String {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        return "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+    }
+
+    private var nativeStartupRecoveryIsEnabled: Bool {
+        testingEnvironment?.nativeStartupRecoveryEnabled ?? true
+    }
+
+    private func scheduleNativeStartupRecoveryIfNeeded() {
+        guard nativeStartupRecoveryIsEnabled, usesNativeVisibility, started,
+              !stopping, !preparingToTerminate, desktopSessionAvailable,
+              !sessionResumePending, hasCompletedSetup, !nativeTrayChoices.choices.isEmpty else {
+            nativeStartupRecoveryDue = nil
+            return
+        }
+        let current = nativeStartupEnvironmentSignature
+        guard defaults.string(forKey: Self.nativeStartupEnvironmentKey) != current else {
+            nativeStartupRecoveryDue = nil
+            return
+        }
+        guard !nativeStartupRecoveryScheduled else { return }
+        nativeStartupRecoveryScheduled = true
+        nativeStartupRecoveryAttempt = 0
+        nativeStartupRecoveryDue = maintenanceUptime + Self.nativeStartupInitialDelay
+        Self.diagnosticLogger.notice("nativeStartupRebind scheduled=true reason=environment-changed due=\(self.nativeStartupRecoveryDue ?? 0)")
+    }
+
+    private func runNativeStartupRecovery(at now: TimeInterval) {
+        guard let due = nativeStartupRecoveryDue, now >= due else { return }
+        guard nativeStartupRecoveryIsEnabled, usesNativeVisibility, hasCompletedSetup,
+              !stopping, !preparingToTerminate, desktopSessionAvailable, !sessionResumePending else {
+            return
+        }
+        if panelInteractionBusy || trayPlacementTask != nil || isPanelPresented ||
+            contextMenuVisible || temporarilyRevealingAll {
+            nativeStartupRecoveryDue = now + BackgroundMaintenanceSchedule.interactionInterval
+            Self.diagnosticLogger.notice("nativeStartupRebind skipped=true busy=true")
+            return
+        }
+        refreshPermissions()
+        guard accessibilityGranted else {
+            nativeStartupRecoveryDue = now + BackgroundMaintenanceSchedule.permissionInterval
+            return
+        }
+        guard nativeStartupRecoveryAttempt < Self.nativeStartupRetryDelays.count else {
+            nativeStartupRecoveryDue = nil
+            Self.diagnosticLogger.notice("nativeStartupRebind exhausted=true")
+            return
+        }
+
+        nativeStartupRecoveryDue = nil
+        nativeStartupRecoveryAttempt += 1
+        let attempt = nativeStartupRecoveryAttempt
+        Self.diagnosticLogger.notice("nativeStartupRebind started=true attempt=\(attempt)")
+        guard restoreAllNativeTargets() else {
+            finishNativeStartupRecovery(attempt: attempt, succeeded: false)
+            return
+        }
+        nativeVisibilityEvidence.removeAll()
+        actualGroups.removeAll()
+        rebuildRows()
+        refreshMenuItems(nativeStartupRecoveryAttempt: attempt)
+    }
+
+    private func finishNativeStartupRecovery(attempt: Int, succeeded: Bool) {
+        guard nativeStartupRecoveryScheduled, attempt == nativeStartupRecoveryAttempt else { return }
+        let runningBundles = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        let expectedRunning = nativeTrayChoices.hiddenBundles.intersection(runningBundles)
+        let observedBundles = Set(snapshots.compactMap(\.bundleIdentifier))
+        let inventoryComplete = expectedRunning.isSubset(of: observedBundles)
+        guard succeeded, inventoryComplete else {
+            let failure = !succeeded ? "scan-failed" : "inventory-incomplete"
+            if attempt < Self.nativeStartupRetryDelays.count {
+                nativeStartupRecoveryDue = maintenanceUptime + Self.nativeStartupRetryDelays[attempt - 1]
+                Self.diagnosticLogger.notice("nativeStartupRebind finished=false reason=\(failure, privacy: .public) retry=\(attempt)")
+            } else {
+                nativeStartupRecoveryDue = nil
+                Self.diagnosticLogger.notice("nativeStartupRebind exhausted=true reason=\(failure, privacy: .public)")
+            }
+            return
+        }
+
+        defaults.set(nativeStartupEnvironmentSignature, forKey: Self.nativeStartupEnvironmentKey)
+        nativeStartupRecoveryDue = nil
+        nativeStartupRecoveryAttempt = 0
+        Self.diagnosticLogger.notice("nativeStartupRebind finished=true observedBundles=\(observedBundles.count) expectedRunning=\(expectedRunning.count)")
+        if startupApplyPendingEnabled {
+            startupPendingApplicationNeedsRefresh = false
+            finishStartupPendingApplication()
+            applyAutomaticPendingTrayPlacements()
+        }
+    }
+
     var usesNativeAssessment: Bool {
         testingEnvironment == nil && nativeAssessmentStore.isAvailable
     }
