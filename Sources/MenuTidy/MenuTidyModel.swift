@@ -1322,7 +1322,10 @@ final class MenuTidyModel: ObservableObject {
 
     var managedHiddenApplicationBundles: Set<String> {
         guard usesNativeVisibility else { return [] }
-        let persisted = (nativeStartupRecoveryDue != nil || nativeStartupRecoveryAttempt > 0)
+        let startupEnvironmentChanged = nativeStartupRecoveryIsEnabled &&
+            defaults.string(forKey: Self.nativeStartupEnvironmentKey) != nativeStartupEnvironmentSignature
+        let persisted = (nativeStartupRecoveryDue != nil || nativeStartupRecoveryAttempt > 0 ||
+                         startupEnvironmentChanged)
             ? nativeTrayChoices.hiddenBundles : []
         let owned: Set<String> = Set(managedNativeTargets.compactMap { target in
             guard case .application(let bundle) = target, (try? nativeAllowed(target)) == false else { return nil }

@@ -189,6 +189,19 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testEnvironmentChangeKeepsSavedBundleAsDiscoveryHintBeforeRecoveryIsQueued() throws {
+        let current = ProcessInfo.processInfo.operatingSystemVersion
+        let signature = "\(current.majorVersion).\(current.minorVersion).\(current.patchVersion)"
+        let fixture = try makeFixture(nativeStartupRecovery: true, startupEnvironmentMarker: signature)
+        defer { fixture.dispose() }
+
+        XCTAssertEqual(fixture.model.managedHiddenApplicationBundles, [])
+        fixture.defaults.set("previous-environment", forKey: "nativeStartupEnvironment.v1")
+
+        XCTAssertEqual(fixture.model.managedHiddenApplicationBundles, [bundle])
+    }
+
+    @MainActor
     private func finishStartupAttempt(_ fixture: Fixture, at uptime: TimeInterval) async throws {
         try fireMaintenance(fixture.system, at: uptime)
         await fixture.model.waitForTestingOperations()
@@ -217,7 +230,8 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
     @MainActor
     private func makeFixture(enabled: Bool? = nil, completedSetup: Bool = true,
                              choices: [String: ItemVisibility]? = nil,
-                             nativeStartupRecovery: Bool = false) throws -> Fixture {
+                             nativeStartupRecovery: Bool = false,
+                             startupEnvironmentMarker: String? = nil) throws -> Fixture {
         let suite = "dev.hdh.MenuTidy.tests.startup.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.set(false, forKey: "periodicApplyPending")
@@ -230,6 +244,9 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
             _ = savedChoices.set(bundle: bundle, group: group)
         }
         defaults.set(try JSONEncoder().encode(savedChoices), forKey: "nativeTrayChoices.v1")
+        if let startupEnvironmentMarker {
+            defaults.set(startupEnvironmentMarker, forKey: "nativeStartupEnvironment.v1")
+        }
         let system = MenuTidyTestEnvironment()
         system.nativeStartupRecoveryEnabled = nativeStartupRecovery
         system.uptime = 100

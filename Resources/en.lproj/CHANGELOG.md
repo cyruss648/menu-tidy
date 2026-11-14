@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.11] - 2026-11-14
+
+Fixed discovery of native tray applications such as BLEUnlock when a macOS environment change occurs before startup rebinding has been queued.
+
+- Continue using saved non-visible application bundle identifiers as scan hints when the saved macOS environment marker is missing or differs from the current system.
+- Scanning still requires a live application process and a current menu bar identity; the environment hint never creates an online icon or promotes an offline record.
+- Added a startup ordering regression test for an environment change observed after startup rebinding was evaluated.
+
+Verification: `./scripts/check.sh --full` passed before release. Uses the project's self-signed release identity and is not Apple-notarized.
+
 ## [0.7.10] - 2026-11-14
 
 Fixed rediscovery of native tray items after a macOS upgrade while Menu Tidy is already running, including applications such as BLEUnlock.
