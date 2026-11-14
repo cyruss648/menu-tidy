@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.14] - 2026-11-14
+
+Fixed startup recovery scanning the MenuBarAgent accessibility tree before it settled after releasing the native tray display assessment on macOS 27, which could make saved hidden applications such as BLEUnlock appear undiscovered and become hidden again.
+
+- Wait for the MenuBarAgent AX tree to settle before scanning after releasing the native assessment.
+- Keep recovery protection and bounded retry state active while the delayed scan is pending, so an incomplete tray inventory cannot trigger re-hiding.
+- Added startup recovery coverage for the delayed post-release scan to prevent BLEUnlock and similar applications from falling back to offline-only records after a system upgrade or restart.
+
+Verification: `./scripts/check.sh --full` passed before release. Uses the project's self-signed release identity and is not Apple-notarized.
+
 ## [0.7.13] - 2026-11-14
 
 Fixed startup recovery reapplying saved hidden choices before the macOS 27 native tray scan completed, which made BLEUnlock and similar items disappear from MenuBarAgent again.

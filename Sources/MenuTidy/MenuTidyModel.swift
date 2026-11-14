@@ -242,6 +242,8 @@ final class MenuTidyModel: ObservableObject {
     private var nativeStartupRecoveryDue: TimeInterval?
     private var nativeStartupRecoveryAttempt = 0
     private var nativeStartupRecoveryScheduled = false
+    private var nativeStartupRecoveryScanPending = false
+    private var nativeStartupRecoveryRebindSucceeded = true
     private var periodicPendingApplicationDue: TimeInterval?
     private var periodicPendingApplicationGeneration = 0
     @Published private(set) var desktopSessionAvailable = true
@@ -5656,6 +5658,7 @@ private extension MenuTidyModel {
     private static let nativeStartupEnvironmentKey = "nativeStartupEnvironment.v1"
     private static let nativeStartupInitialDelay: TimeInterval = 10
     private static let nativeStartupRetryDelays: [TimeInterval] = [2, 5, 12]
+    private static let nativeStartupReleaseSettleDelay: TimeInterval = 1.25
 
     private var nativeStartupEnvironmentSignature: String {
         let version = ProcessInfo.processInfo.operatingSystemVersion
@@ -5671,11 +5674,15 @@ private extension MenuTidyModel {
               !stopping, !preparingToTerminate, desktopSessionAvailable,
               !sessionResumePending, hasCompletedSetup, !nativeTrayChoices.choices.isEmpty else {
             nativeStartupRecoveryDue = nil
+            nativeStartupRecoveryScanPending = false
+            nativeStartupRecoveryRebindSucceeded = true
             return
         }
         let current = nativeStartupEnvironmentSignature
         guard defaults.string(forKey: Self.nativeStartupEnvironmentKey) != current else {
             nativeStartupRecoveryDue = nil
+            nativeStartupRecoveryScanPending = false
+            nativeStartupRecoveryRebindSucceeded = true
             return
         }
         guard !nativeStartupRecoveryScheduled else { return }
@@ -5708,23 +5715,46 @@ private extension MenuTidyModel {
             return
         }
 
+        if nativeStartupRecoveryScanPending {
+            nativeStartupRecoveryScanPending = false
+            let attempt = nativeStartupRecoveryAttempt
+            Self.diagnosticLogger.notice("nativeStartupRebind scan=true attempt=\(attempt)")
+            refreshMenuItems(nativeStartupRecoveryAttempt: attempt,
+                nativeStartupRecoveryRebindSucceeded: nativeStartupRecoveryRebindSucceeded)
+            return
+        }
+
         nativeStartupRecoveryDue = nil
         nativeStartupRecoveryAttempt += 1
         let attempt = nativeStartupRecoveryAttempt
         Self.diagnosticLogger.notice("nativeStartupRebind started=true attempt=\(attempt)")
         let rebindSucceeded = restoreAllNativeTargets()
+        nativeStartupRecoveryRebindSucceeded = rebindSucceeded
         if !rebindSucceeded {
             Self.diagnosticLogger.notice("nativeStartupRebind rebindSucceeded=false scanAfterFailure=true")
         }
         nativeVisibilityEvidence.removeAll()
         actualGroups.removeAll()
         rebuildRows()
-        refreshMenuItems(nativeStartupRecoveryAttempt: attempt,
-            nativeStartupRecoveryRebindSucceeded: rebindSucceeded)
+        if testingEnvironment != nil {
+            nativeStartupRecoveryScanPending = false
+            refreshMenuItems(nativeStartupRecoveryAttempt: attempt,
+                nativeStartupRecoveryRebindSucceeded: rebindSucceeded)
+            return
+        }
+        // MenuBarAgent updates its AX tree asynchronously after the native
+        // assessment assertion is released. Scanning in the same run loop
+        // still sees the old hidden inventory and makes a successful rebind
+        // look incomplete. Keep the assertion released and let the next
+        // maintenance tick start the scan after the tree has settled.
+        nativeStartupRecoveryScanPending = true
+        nativeStartupRecoveryDue = now + Self.nativeStartupReleaseSettleDelay
+        Self.diagnosticLogger.notice("nativeStartupRebind released=true scanDue=\(self.nativeStartupRecoveryDue ?? 0)")
     }
 
     private func finishNativeStartupRecovery(attempt: Int, succeeded: Bool) {
         guard nativeStartupRecoveryScheduled, attempt == nativeStartupRecoveryAttempt else { return }
+        nativeStartupRecoveryScanPending = false
         let runningBundles = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         let expectedRunning = nativeTrayChoices.hiddenBundles.intersection(runningBundles)
         let observedBundles = Set(snapshots.compactMap(\.bundleIdentifier))
@@ -5738,6 +5768,7 @@ private extension MenuTidyModel {
                 nativeStartupRecoveryDue = nil
                 nativeStartupRecoveryScheduled = false
                 nativeStartupRecoveryAttempt = 0
+                nativeStartupRecoveryRebindSucceeded = true
                 Self.diagnosticLogger.notice("nativeStartupRebind exhausted=true reason=\(failure, privacy: .public)")
                 refreshNativeAssessmentIfNeeded()
             }
@@ -5748,6 +5779,7 @@ private extension MenuTidyModel {
         nativeStartupRecoveryDue = nil
         nativeStartupRecoveryScheduled = false
         nativeStartupRecoveryAttempt = 0
+        nativeStartupRecoveryRebindSucceeded = true
         Self.diagnosticLogger.notice("nativeStartupRebind finished=true observedBundles=\(observedBundles.count) expectedRunning=\(expectedRunning.count)")
         refreshNativeAssessmentIfNeeded()
         if startupApplyPendingEnabled {
