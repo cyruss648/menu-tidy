@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.18] - 2026-11-14
+
+Fixed multiple native tray applications disappearing or falling back to “offline and retained records” after restart or login when their startup order differs.
+
+- Every new Menu Tidy process and every desktop resume after locking now performs one protected native tray rebind and settle scan instead of relying only on macOS or Menu Tidy version changes.
+- Every saved hidden or collapsible application stays discoverable during its bounded post-launch window. Once its new process identity is observed, only that application is hidden again; an application that has not started or has no status item remains an offline record with its saved choice.
+- Added regression coverage for multiple startup orders, recovery with unchanged version markers, and temporarily releasing a saved hidden application during launch discovery.
+
+Verification: full gate, dual-architecture public release, signed feeds, and public artifact installation are recorded after completion. Uses the project's self-signed release identity and is not Apple-notarized.
+
 ## [0.7.17] - 2026-11-14
 
 Fixed macOS 27 native tray applications such as BLEUnlock falling back to “offline and retained records” when the application was running but MenuBarAgent had not yet provided actionable geometry.

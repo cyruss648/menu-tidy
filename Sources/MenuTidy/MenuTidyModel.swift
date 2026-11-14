@@ -251,6 +251,10 @@ final class MenuTidyModel: ObservableObject {
     private var nativeStartupRecoveryScheduled = false
     private var nativeStartupRecoveryScanPending = false
     private var nativeStartupRecoveryRebindSucceeded = true
+    /// Keep a relaunching saved application visible while its status item is
+    /// being rediscovered. Reapplying the native assessment first can hide it
+    /// before MenuBarAgent reports its new process identity.
+    private var nativeDiscoveryRevealBundles: Set<String> = []
     private var periodicPendingApplicationDue: TimeInterval?
     private var periodicPendingApplicationGeneration = 0
     @Published private(set) var desktopSessionAvailable = true
@@ -1066,6 +1070,9 @@ final class MenuTidyModel: ObservableObject {
         }
         sessionResumePending = false
         sessionResumeDue = nil
+        if succeeded {
+            scheduleNativeStartupRecoveryIfNeeded()
+        }
         if startupApplyPendingEnabled && !startupPendingApplicationFinished { finishStartupPendingApplication() }
         schedulePeriodicPendingApplication()
         if succeeded, shouldApply, trayPlacementSelectionAllowed {
@@ -1296,6 +1303,11 @@ final class MenuTidyModel: ObservableObject {
 
     func noteApplicationLaunch(_ owner: MenuBarOwner) {
         guard owner.pid > 0, owner.launchTime.isFinite, owner.launchTime > 0 else { return }
+        if usesNativeVisibility, let bundle = owner.bundleIdentifier,
+           nativeTrayChoices.group(bundle: bundle).map({ $0 != .visible }) == true {
+            nativeDiscoveryRevealBundles.insert(bundle)
+            refreshNativeAssessmentIfNeeded()
+        }
         launchDiscovery.register(ScanOwnerKey(owner), at: maintenanceUptime)
         trayDiscoveryNeeded = true
     }
@@ -1313,6 +1325,7 @@ final class MenuTidyModel: ObservableObject {
         let current = Set(valid.map(ScanOwnerKey.init))
         let previous = runningApplicationKeys
         runningApplicationKeys = current
+        nativeDiscoveryRevealBundles.formIntersection(Set(valid.compactMap(\.bundleIdentifier)))
         guard let previous, previous != current else { return }
         let arrivals = valid.filter { !previous.contains(ScanOwnerKey($0)) }
         for owner in arrivals { noteApplicationLaunch(owner) }
@@ -3789,6 +3802,15 @@ final class MenuTidyModel: ObservableObject {
         launchDiscovery.reconcile(current: currentOwnerKeys, observed: Set(snapshots.compactMap { snapshot in
             snapshotOwnerKeys[snapshot.processIdentifier]
         }))
+        let observedBundles = Set(snapshots.compactMap(\.bundleIdentifier))
+        let activeLaunchTargets = Set(launchDiscovery.targets.compactMap(\.bundleIdentifier))
+        let currentBundles = Set(owners.compactMap(\.bundleIdentifier))
+        nativeDiscoveryRevealBundles = nativeDiscoveryRevealBundles.filter { bundle in
+            !observedBundles.contains(bundle) &&
+                currentBundles.contains(bundle) &&
+                activeLaunchTargets.contains(bundle)
+        }
+        refreshNativeAssessmentIfNeeded()
         rememberObservedGroups(scannedOwners: scanOwners)
         rebuildRows()
     }
@@ -5648,6 +5670,12 @@ final class MenuTidyModel: ObservableObject {
         periodicPendingApplicationDue = nil
         periodicPendingApplicationGeneration += 1
         startupPendingApplicationFinished = true
+        nativeStartupRecoveryDue = nil
+        nativeStartupRecoveryAttempt = 0
+        nativeStartupRecoveryScheduled = false
+        nativeStartupRecoveryScanPending = false
+        nativeStartupRecoveryRebindSucceeded = true
+        nativeDiscoveryRevealBundles.removeAll()
         cancelPassiveIconCapture()
         arrangementSequence += 1
         visibilityDiagnosticsStopped = true
@@ -5719,19 +5747,15 @@ private extension MenuTidyModel {
         }
         let environmentChanged = nativeStartupRecoveryEnvironmentChanged
         let releaseChanged = nativeStartupRecoveryReleaseChanged
-        guard environmentChanged || releaseChanged else {
-            nativeStartupRecoveryDue = nil
-            nativeStartupRecoveryScanPending = false
-            nativeStartupRecoveryRebindSucceeded = true
-            return
-        }
         guard !nativeStartupRecoveryScheduled else { return }
         nativeStartupRecoveryScheduled = true
         nativeStartupRecoveryAttempt = 0
         nativeStartupRecoveryDue = maintenanceUptime + Self.nativeStartupInitialDelay
         let reason = environmentChanged && releaseChanged
-            ? "environment-and-release-changed"
-            : (environmentChanged ? "environment-changed" : "release-changed")
+            ? "process-start-environment-and-release-changed"
+            : (environmentChanged
+                ? "process-start-environment-changed"
+                : (releaseChanged ? "process-start-release-changed" : "process-start"))
         Self.diagnosticLogger.notice("nativeStartupRebind scheduled=true reason=\(reason, privacy: .public) due=\(self.nativeStartupRecoveryDue ?? 0)")
     }
 
@@ -5860,7 +5884,7 @@ private extension MenuTidyModel {
         })
         let hidden = NativeMenuBarAssessmentStore.desiredHiddenBundles(
             persisted: persistedHidden,
-            recovering: recovering,
+            recovering: recovering.union(nativeDiscoveryRevealBundles),
             startupRecoveryInProgress: nativeStartupRecoveryScheduled)
         nativeAssessmentStore.syncDesiredHiddenBundles(hidden)
     }

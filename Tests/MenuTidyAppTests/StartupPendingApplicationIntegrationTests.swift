@@ -238,7 +238,7 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    func testEnvironmentChangeKeepsSavedBundleAsDiscoveryHintBeforeRecoveryIsQueued() throws {
+    func testProcessStartKeepsSavedBundleAsDiscoveryHintEvenWithoutVersionChanges() throws {
         let current = ProcessInfo.processInfo.operatingSystemVersion
         let signature = "\(current.majorVersion).\(current.minorVersion).\(current.patchVersion)"
         let release = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String).map { version in
@@ -249,10 +249,8 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
             startupEnvironmentMarker: signature, startupReleaseMarker: release)
         defer { fixture.dispose() }
 
-        XCTAssertEqual(fixture.model.managedHiddenApplicationBundles, [])
-        fixture.defaults.set("previous-environment", forKey: "nativeStartupEnvironment.v1")
-
         XCTAssertEqual(fixture.model.managedHiddenApplicationBundles, [bundle])
+        XCTAssertNotNil(fixture.system.maintenanceTimer)
     }
 
     @MainActor

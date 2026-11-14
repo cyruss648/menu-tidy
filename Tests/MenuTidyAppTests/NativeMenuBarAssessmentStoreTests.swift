@@ -101,4 +101,14 @@ final class NativeMenuBarAssessmentStoreTests: XCTestCase {
             recovering: ["org.example.Other"],
             startupRecoveryInProgress: false), ["org.example.BLEUnlock"])
     }
+
+    @MainActor
+    func testLaunchDiscoveryTemporarilyReleasesOnlyTheRelaunchingSavedBundle() {
+        let persisted: Set<String> = ["org.example.BLEUnlock", "org.example.Other"]
+
+        XCTAssertEqual(NativeMenuBarAssessmentStore.desiredHiddenBundles(
+            persisted: persisted,
+            recovering: ["org.example.BLEUnlock"],
+            startupRecoveryInProgress: false), ["org.example.Other"])
+    }
 }
