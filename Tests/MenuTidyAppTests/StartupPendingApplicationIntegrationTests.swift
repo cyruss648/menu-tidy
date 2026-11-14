@@ -189,6 +189,25 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeStartupRecoveryStillScansWhenRebindFails() async throws {
+        let fixture = try makeFixture(nativeStartupRecovery: true)
+        defer { fixture.dispose() }
+        let (model, system) = (fixture.model, fixture.system)
+        var scans = 0
+        system.beforeScan = { scans += 1 }
+        system.managedBundles = [bundle]
+        system.beforeRestore = { throw MenuBarAccessError.rejected }
+
+        try fireMaintenance(system, at: 110)
+        await model.waitForTestingOperations()
+
+        XCTAssertGreaterThanOrEqual(scans, 1)
+        XCTAssertTrue(model.items.contains { $0.bundleIdentifier == bundle })
+        XCTAssertNil(fixture.defaults.string(forKey: "nativeStartupEnvironment.v1"),
+            "A failed rebind must not be recorded as a completed environment recovery")
+    }
+
+    @MainActor
     func testEnvironmentChangeKeepsSavedBundleAsDiscoveryHintBeforeRecoveryIsQueued() throws {
         let current = ProcessInfo.processInfo.operatingSystemVersion
         let signature = "\(current.majorVersion).\(current.minorVersion).\(current.patchVersion)"

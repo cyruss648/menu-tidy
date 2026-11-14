@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.12] - 2026-11-14
+
+Fixed the startup recovery path ending before discovery when native tray rebinding fails, which could leave applications such as BLEUnlock undiscovered.
+
+- Run one protected menu bar scan after a failed rebind. The scan still requires a live process and a current menu bar identity.
+- Keep bounded retries for the failed rebind; a successful scan never reports the failed native write as recovered.
+- Added an integration regression test covering discovery after a failed startup rebind.
+
+Verification: `./scripts/check.sh --full` passed before release. Uses the project's self-signed release identity and is not Apple-notarized.
+
 ## [0.7.11] - 2026-11-14
 
 Fixed discovery of native tray applications such as BLEUnlock when a macOS environment change occurs before startup rebinding has been queued.

@@ -1597,7 +1597,8 @@ final class MenuTidyModel: ObservableObject {
     func refreshMenuItems(collapseWhenFinished: Bool = false, prepareOverflow: Bool = false,
                           discover: Bool = true, applyStartupPendingWhenFinished: Bool = false,
                           periodicPendingGeneration: Int? = nil, sessionResumeGeneration: Int? = nil,
-                          nativeStartupRecoveryAttempt: Int? = nil) {
+                          nativeStartupRecoveryAttempt: Int? = nil,
+                          nativeStartupRecoveryRebindSucceeded: Bool = true) {
         if isUIPreview { managementMessage = LocalizedMessage("预览：图标列表已更新，当前选择已保留。"); return }
         guard ensureDesktopSessionAvailable() else { return }
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
@@ -1633,7 +1634,8 @@ final class MenuTidyModel: ObservableObject {
                     self.resumePendingPanelAction(succeeded: scanSucceeded && !Task.isCancelled, generation: generation)
                 } else if let attempt = nativeStartupRecoveryAttempt {
                     self.finishNativeStartupRecovery(attempt: attempt,
-                        succeeded: scanSucceeded && !Task.isCancelled)
+                        succeeded: nativeStartupRecoveryRebindSucceeded &&
+                            scanSucceeded && !Task.isCancelled)
                 } else if applyStartupPendingWhenFinished {
                     self.finishStartupPendingRefresh(succeeded: scanSucceeded && !Task.isCancelled,
                         sessionGeneration: refreshSessionGeneration)
@@ -5710,14 +5712,15 @@ private extension MenuTidyModel {
         nativeStartupRecoveryAttempt += 1
         let attempt = nativeStartupRecoveryAttempt
         Self.diagnosticLogger.notice("nativeStartupRebind started=true attempt=\(attempt)")
-        guard restoreAllNativeTargets() else {
-            finishNativeStartupRecovery(attempt: attempt, succeeded: false)
-            return
+        let rebindSucceeded = restoreAllNativeTargets()
+        if !rebindSucceeded {
+            Self.diagnosticLogger.notice("nativeStartupRebind rebindSucceeded=false scanAfterFailure=true")
         }
         nativeVisibilityEvidence.removeAll()
         actualGroups.removeAll()
         rebuildRows()
-        refreshMenuItems(nativeStartupRecoveryAttempt: attempt)
+        refreshMenuItems(nativeStartupRecoveryAttempt: attempt,
+            nativeStartupRecoveryRebindSucceeded: rebindSucceeded)
     }
 
     private func finishNativeStartupRecovery(attempt: Int, succeeded: Bool) {
@@ -6006,9 +6009,13 @@ private extension MenuTidyModel {
     }
     func restoreAllNativeTargets() -> Bool {
         if let testingEnvironment {
-            for bundle in testingEnvironment.managedBundles { try? restoreNativeTarget(.application(bundle: bundle)) }
+            var succeeded = true
+            for bundle in testingEnvironment.managedBundles {
+                do { try restoreNativeTarget(.application(bundle: bundle)) }
+                catch { succeeded = false }
+            }
             interruptedNativePanelRecoveries.removeAll()
-            return true
+            return succeeded
         }
         let reloadsSucceeded = reloadAllNativeRecoveryJournalsIfNeeded()
         nativeAssessmentStore.restoreAll()
