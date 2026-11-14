@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.15] - 2026-11-14
+
+Fixed upgrades from `0.7.14` or earlier skipping one native tray recovery when the macOS environment version had not changed, which left saved hidden applications such as BLEUnlock in offline records.
+
+- Include the application version and build in the startup recovery marker so each upgrade runs one native assessment release, settle wait, and rediscovery pass.
+- Keep the current macOS environment marker to avoid repeating recovery within the same release; record the new release marker only after recovery succeeds.
+- Added regression coverage for a release change with an unchanged environment that still preserves saved bundle identifiers as discovery hints.
+
+Verification: `./scripts/check.sh --full` passed before release. Uses the project's self-signed release identity and is not Apple-notarized.
+
 ## [0.7.14] - 2026-11-14
 
 Fixed startup recovery scanning the MenuBarAgent accessibility tree before it settled after releasing the native tray display assessment on macOS 27, which could make saved hidden applications such as BLEUnlock appear undiscovered and become hidden again.

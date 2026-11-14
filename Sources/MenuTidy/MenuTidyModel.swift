@@ -1324,10 +1324,10 @@ final class MenuTidyModel: ObservableObject {
 
     var managedHiddenApplicationBundles: Set<String> {
         guard usesNativeVisibility else { return [] }
-        let startupEnvironmentChanged = nativeStartupRecoveryIsEnabled &&
-            defaults.string(forKey: Self.nativeStartupEnvironmentKey) != nativeStartupEnvironmentSignature
+        let startupRecoveryChanged = nativeStartupRecoveryIsEnabled &&
+            (nativeStartupRecoveryEnvironmentChanged || nativeStartupRecoveryReleaseChanged)
         let persisted = (nativeStartupRecoveryDue != nil || nativeStartupRecoveryAttempt > 0 ||
-                         startupEnvironmentChanged)
+                         startupRecoveryChanged)
             ? nativeTrayChoices.hiddenBundles : []
         let owned: Set<String> = Set(managedNativeTargets.compactMap { target in
             guard case .application(let bundle) = target, (try? nativeAllowed(target)) == false else { return nil }
@@ -5656,6 +5656,7 @@ final class MenuTidyModel: ObservableObject {
 @MainActor
 private extension MenuTidyModel {
     private static let nativeStartupEnvironmentKey = "nativeStartupEnvironment.v1"
+    private static let nativeStartupRecoveryReleaseKey = "nativeStartupRecoveryRelease.v1"
     private static let nativeStartupInitialDelay: TimeInterval = 10
     private static let nativeStartupRetryDelays: [TimeInterval] = [2, 5, 12]
     private static let nativeStartupReleaseSettleDelay: TimeInterval = 1.25
@@ -5663,6 +5664,22 @@ private extension MenuTidyModel {
     private var nativeStartupEnvironmentSignature: String {
         let version = ProcessInfo.processInfo.operatingSystemVersion
         return "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+    }
+
+    private var nativeStartupRecoveryReleaseSignature: String? {
+        guard let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              !version.isEmpty else { return nil }
+        let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? ""
+        return build.isEmpty ? version : "\(version) (\(build))"
+    }
+
+    private var nativeStartupRecoveryEnvironmentChanged: Bool {
+        defaults.string(forKey: Self.nativeStartupEnvironmentKey) != nativeStartupEnvironmentSignature
+    }
+
+    private var nativeStartupRecoveryReleaseChanged: Bool {
+        guard let release = nativeStartupRecoveryReleaseSignature else { return false }
+        return defaults.string(forKey: Self.nativeStartupRecoveryReleaseKey) != release
     }
 
     private var nativeStartupRecoveryIsEnabled: Bool {
@@ -5678,8 +5695,9 @@ private extension MenuTidyModel {
             nativeStartupRecoveryRebindSucceeded = true
             return
         }
-        let current = nativeStartupEnvironmentSignature
-        guard defaults.string(forKey: Self.nativeStartupEnvironmentKey) != current else {
+        let environmentChanged = nativeStartupRecoveryEnvironmentChanged
+        let releaseChanged = nativeStartupRecoveryReleaseChanged
+        guard environmentChanged || releaseChanged else {
             nativeStartupRecoveryDue = nil
             nativeStartupRecoveryScanPending = false
             nativeStartupRecoveryRebindSucceeded = true
@@ -5689,7 +5707,10 @@ private extension MenuTidyModel {
         nativeStartupRecoveryScheduled = true
         nativeStartupRecoveryAttempt = 0
         nativeStartupRecoveryDue = maintenanceUptime + Self.nativeStartupInitialDelay
-        Self.diagnosticLogger.notice("nativeStartupRebind scheduled=true reason=environment-changed due=\(self.nativeStartupRecoveryDue ?? 0)")
+        let reason = environmentChanged && releaseChanged
+            ? "environment-and-release-changed"
+            : (environmentChanged ? "environment-changed" : "release-changed")
+        Self.diagnosticLogger.notice("nativeStartupRebind scheduled=true reason=\(reason, privacy: .public) due=\(self.nativeStartupRecoveryDue ?? 0)")
     }
 
     private func runNativeStartupRecovery(at now: TimeInterval) {
@@ -5776,6 +5797,9 @@ private extension MenuTidyModel {
         }
 
         defaults.set(nativeStartupEnvironmentSignature, forKey: Self.nativeStartupEnvironmentKey)
+        if let release = nativeStartupRecoveryReleaseSignature {
+            defaults.set(release, forKey: Self.nativeStartupRecoveryReleaseKey)
+        }
         nativeStartupRecoveryDue = nil
         nativeStartupRecoveryScheduled = false
         nativeStartupRecoveryAttempt = 0

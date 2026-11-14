@@ -185,6 +185,9 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
 
         XCTAssertEqual(system.hiddenBundles, [bundle])
         XCTAssertNotNil(fixture.defaults.string(forKey: "nativeStartupEnvironment.v1"))
+        if Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") != nil {
+            XCTAssertNotNil(fixture.defaults.string(forKey: "nativeStartupRecoveryRelease.v1"))
+        }
         XCTAssertNil(system.maintenanceTimer)
     }
 
@@ -211,13 +214,33 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
     func testEnvironmentChangeKeepsSavedBundleAsDiscoveryHintBeforeRecoveryIsQueued() throws {
         let current = ProcessInfo.processInfo.operatingSystemVersion
         let signature = "\(current.majorVersion).\(current.minorVersion).\(current.patchVersion)"
-        let fixture = try makeFixture(nativeStartupRecovery: true, startupEnvironmentMarker: signature)
+        let release = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String).map { version in
+            let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? ""
+            return build.isEmpty ? version : "\(version) (\(build))"
+        }
+        let fixture = try makeFixture(nativeStartupRecovery: true,
+            startupEnvironmentMarker: signature, startupReleaseMarker: release)
         defer { fixture.dispose() }
 
         XCTAssertEqual(fixture.model.managedHiddenApplicationBundles, [])
         fixture.defaults.set("previous-environment", forKey: "nativeStartupEnvironment.v1")
 
         XCTAssertEqual(fixture.model.managedHiddenApplicationBundles, [bundle])
+    }
+
+    @MainActor
+    func testReleaseChangeKeepsSavedBundleAsDiscoveryHintWhenEnvironmentIsUnchanged() throws {
+        guard let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              !version.isEmpty else { return }
+        let current = ProcessInfo.processInfo.operatingSystemVersion
+        let environment = "\(current.majorVersion).\(current.minorVersion).\(current.patchVersion)"
+        let fixture = try makeFixture(nativeStartupRecovery: true,
+            startupEnvironmentMarker: environment,
+            startupReleaseMarker: "previous-release")
+        defer { fixture.dispose() }
+
+        XCTAssertEqual(fixture.model.managedHiddenApplicationBundles, [bundle])
+        XCTAssertNotNil(fixture.system.maintenanceTimer)
     }
 
     @MainActor
@@ -250,7 +273,8 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
     private func makeFixture(enabled: Bool? = nil, completedSetup: Bool = true,
                              choices: [String: ItemVisibility]? = nil,
                              nativeStartupRecovery: Bool = false,
-                             startupEnvironmentMarker: String? = nil) throws -> Fixture {
+                             startupEnvironmentMarker: String? = nil,
+                             startupReleaseMarker: String? = nil) throws -> Fixture {
         let suite = "dev.hdh.MenuTidy.tests.startup.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.set(false, forKey: "periodicApplyPending")
@@ -265,6 +289,9 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
         defaults.set(try JSONEncoder().encode(savedChoices), forKey: "nativeTrayChoices.v1")
         if let startupEnvironmentMarker {
             defaults.set(startupEnvironmentMarker, forKey: "nativeStartupEnvironment.v1")
+        }
+        if let startupReleaseMarker {
+            defaults.set(startupReleaseMarker, forKey: "nativeStartupRecoveryRelease.v1")
         }
         let system = MenuTidyTestEnvironment()
         system.nativeStartupRecoveryEnabled = nativeStartupRecovery
