@@ -5736,15 +5736,20 @@ private extension MenuTidyModel {
                 Self.diagnosticLogger.notice("nativeStartupRebind finished=false reason=\(failure, privacy: .public) retry=\(attempt)")
             } else {
                 nativeStartupRecoveryDue = nil
+                nativeStartupRecoveryScheduled = false
+                nativeStartupRecoveryAttempt = 0
                 Self.diagnosticLogger.notice("nativeStartupRebind exhausted=true reason=\(failure, privacy: .public)")
+                refreshNativeAssessmentIfNeeded()
             }
             return
         }
 
         defaults.set(nativeStartupEnvironmentSignature, forKey: Self.nativeStartupEnvironmentKey)
         nativeStartupRecoveryDue = nil
+        nativeStartupRecoveryScheduled = false
         nativeStartupRecoveryAttempt = 0
         Self.diagnosticLogger.notice("nativeStartupRebind finished=true observedBundles=\(observedBundles.count) expectedRunning=\(expectedRunning.count)")
+        refreshNativeAssessmentIfNeeded()
         if startupApplyPendingEnabled {
             startupPendingApplicationNeedsRefresh = false
             finishStartupPendingApplication()
@@ -5758,7 +5763,7 @@ private extension MenuTidyModel {
 
     func syncNativeAssessmentIntent() {
         guard usesNativeAssessment else { return }
-        let hidden = Set(nativeTrayChoices.choices.compactMap { bundle, group in
+        let persistedHidden = Set(nativeTrayChoices.choices.compactMap { bundle, group in
             group == .visible ? nil : bundle
         })
         // A relaunched hidden application must remain visible through the next
@@ -5768,7 +5773,11 @@ private extension MenuTidyModel {
             if case .application(let bundle) = target { return bundle }
             return nil
         })
-        nativeAssessmentStore.syncDesiredHiddenBundles(hidden.subtracting(recovering))
+        let hidden = NativeMenuBarAssessmentStore.desiredHiddenBundles(
+            persisted: persistedHidden,
+            recovering: recovering,
+            startupRecoveryInProgress: nativeStartupRecoveryScheduled)
+        nativeAssessmentStore.syncDesiredHiddenBundles(hidden)
     }
 
     func refreshNativeAssessmentIfNeeded() {

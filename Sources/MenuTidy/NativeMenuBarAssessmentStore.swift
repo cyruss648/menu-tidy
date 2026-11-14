@@ -241,6 +241,17 @@ final class NativeMenuBarAssessmentStore {
         return candidates.subtracting(hiddenBundles).union(systemOwners).union([ownBundle])
     }
 
+    /// Startup recovery must first expose persisted hidden applications so the
+    /// accessibility scan can reacquire their new macOS menu-bar identities.
+    /// Reapplying the saved assessment before that scan completes hides the
+    /// same applications from MenuBarAgent again and makes recovery impossible.
+    static func desiredHiddenBundles(persisted: Set<String>,
+                                     recovering: Set<String>,
+                                     startupRecoveryInProgress: Bool) -> Set<String> {
+        guard !startupRecoveryInProgress else { return [] }
+        return persisted.subtracting(recovering)
+    }
+
     private func scheduleAssertion() {
         guard canActivate else { return }
         pendingActivation?.cancel()

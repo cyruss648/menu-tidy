@@ -87,4 +87,18 @@ final class NativeMenuBarAssessmentStoreTests: XCTestCase {
         XCTAssertFalse(allowed.contains("org.example.OtherHidden"),
             "Replacing the assertion must preserve every sibling hidden choice")
     }
+
+    @MainActor
+    func testStartupRecoveryTemporarilyReleasesPersistedHiddenBundles() {
+        let persisted: Set<String> = ["org.example.BLEUnlock", "org.example.Other"]
+
+        XCTAssertTrue(NativeMenuBarAssessmentStore.desiredHiddenBundles(
+            persisted: persisted,
+            recovering: [],
+            startupRecoveryInProgress: true).isEmpty)
+        XCTAssertEqual(NativeMenuBarAssessmentStore.desiredHiddenBundles(
+            persisted: persisted,
+            recovering: ["org.example.Other"],
+            startupRecoveryInProgress: false), ["org.example.BLEUnlock"])
+    }
 }

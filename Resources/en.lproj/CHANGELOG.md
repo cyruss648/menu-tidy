@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.13] - 2026-11-14
+
+Fixed startup recovery reapplying saved hidden choices before the macOS 27 native tray scan completed, which made BLEUnlock and similar items disappear from MenuBarAgent again.
+
+- Pause re-hiding saved applications from native assessment release through the recovery scan.
+- Reapply the saved tray classifications after a successful scan; failed recovery remains discoverable during bounded retries.
+- Added a native assessment intent regression test so persisted choices cannot mask recovery discovery.
+
+Verification: `./scripts/check.sh --full` passed before release. Uses the project's self-signed release identity and is not Apple-notarized.
+
 ## [0.7.12] - 2026-11-14
 
 Fixed the startup recovery path ending before discovery when native tray rebinding fails, which could leave applications such as BLEUnlock undiscovered.
