@@ -5908,13 +5908,23 @@ private extension MenuTidyModel {
     private func retainUnobservedRunningNativeBundles(_ bundles: Set<String>) {
         guard !bundles.isEmpty else { return }
         nativeDiscoveryRevealBundles.formUnion(bundles)
-        if testingEnvironment == nil {
-            let owners = currentRunningApplicationOwners()
-            for owner in owners where bundles.contains(owner.bundleIdentifier ?? "") {
-                launchDiscovery.register(ScanOwnerKey(owner), at: maintenanceUptime)
+        let owners: [MenuBarOwner]
+        if let testingEnvironment {
+            owners = testingEnvironment.identities.values.map {
+                MenuBarOwner(pid: $0.pid, bundleIdentifier: $0.bundleIdentifier,
+                    name: "Fixture", launchTime: $0.launchTime)
+            }.filter { bundles.contains($0.bundleIdentifier ?? "") }
+        } else {
+            owners = currentRunningApplicationOwners().filter {
+                bundles.contains($0.bundleIdentifier ?? "")
             }
-            trayDiscoveryNeeded = true
         }
+        for owner in owners {
+            let key = ScanOwnerKey(owner)
+            launchDiscovery.register(key, at: maintenanceUptime)
+            launchDiscovery.registerPersistent(key, at: maintenanceUptime)
+        }
+        trayDiscoveryNeeded = true
     }
 
     var usesNativeAssessment: Bool {

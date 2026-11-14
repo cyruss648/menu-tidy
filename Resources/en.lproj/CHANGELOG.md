@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.22] - 2026-11-15
+
+Fixed a gap after bounded startup recovery retries where a running application that created its status item later had no further discovery opportunity, leaving its saved tray choice unapplied or inconsistent.
+
+- Running startup applications that are still absent from the accessibility inventory now receive low-frequency discovery retries until their current status item is observed or the process exits.
+- The startup window still uses fast retries; after it ends, the application remains visible so Menu Tidy cannot hide an unconfirmed item again.
+- Added persistent discovery regression coverage for the shared startup path used by BLEUnlock, WhatCable, Atoll, InputLock, MenuPiP, Mos, Bob, JetBrains Toolbox, and other login-launched tray applications.
+
+Verification: the full gate, dual architecture builds, signed feeds, public Release, and local installation acceptance will run after commit. Uses the project's self-signed release identity and is not Apple notarized.
+
 ## [0.7.21] - 2026-11-15
 
 Fixed startup recovery reapplying a saved hidden choice after its retry window ended even though the application was still running and its status item had not entered the AX inventory, which could make the icon disappear completely.

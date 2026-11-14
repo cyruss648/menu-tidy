@@ -48,4 +48,28 @@ final class MenuBarLaunchDiscoveryScheduleTests: XCTestCase {
         XCTAssertFalse(schedule.consumeDue(at: .infinity))
         XCTAssertEqual(schedule.nextAttemptAt, 101)
     }
+
+    func testPersistentStartupOwnerRetriesUntilObservedOrTerminated() {
+        var schedule = MenuBarLaunchDiscoverySchedule<String>(persistentRetryInterval: 60)
+        schedule.registerPersistent("late", at: 100, initialDelay: 30)
+        XCTAssertEqual(schedule.nextAttemptAt, 130)
+        XCTAssertFalse(schedule.consumeDue(at: 129.9))
+        XCTAssertTrue(schedule.consumeDue(at: 130))
+        XCTAssertEqual(schedule.nextAttemptAt, 190)
+        XCTAssertTrue(schedule.targets.contains("late"))
+
+        schedule.reconcile(current: ["late"], observed: ["late"])
+        XCTAssertTrue(schedule.targets.isEmpty)
+
+        schedule.registerPersistent("restarted", at: 200)
+        schedule.reconcile(current: [], observed: [])
+        XCTAssertTrue(schedule.targets.isEmpty)
+    }
+
+    func testPersistentRegistrationDoesNotExtendItsDeadline() {
+        var schedule = MenuBarLaunchDiscoverySchedule<String>(persistentRetryInterval: 60)
+        schedule.registerPersistent("late", at: 100, initialDelay: 30)
+        schedule.registerPersistent("late", at: 120, initialDelay: 30)
+        XCTAssertEqual(schedule.nextAttemptAt, 130)
+    }
 }

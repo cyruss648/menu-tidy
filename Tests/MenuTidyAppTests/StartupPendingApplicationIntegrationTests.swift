@@ -221,7 +221,8 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
         try await exhaustNativeStartupRecovery(fixture, startingAt: 110)
 
         XCTAssertNotNil(fixture.defaults.string(forKey: "nativeStartupRecoveryRelease.v1"))
-        XCTAssertNil(fixture.system.maintenanceTimer)
+        XCTAssertNotNil(fixture.system.maintenanceTimer,
+            "A known running owner with an incomplete AX inventory keeps discovery alive")
         XCTAssertTrue(fixture.model.managementItems.contains { $0.bundleIdentifier == "org.example.NoStatusItem" })
         XCTAssertFalse(fixture.model.managementItems.first { $0.bundleIdentifier == "org.example.NoStatusItem" }?.canMove ?? true)
     }
@@ -259,14 +260,36 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
             nativeStartupRecovery: true)
         defer { fixture.dispose() }
         fixture.system.runningBundles = [bundle, lateBundle]
+        fixture.system.identities["late-owner"] = ObservedItemGroupHistory.Identity(
+            id: "late-owner", pid: 10001, bundleIdentifier: lateBundle, launchTime: 100)
 
         try await exhaustNativeStartupRecovery(fixture, startingAt: 110)
 
         XCTAssertNotNil(fixture.defaults.string(forKey: "nativeStartupRecoveryRelease.v1"))
-        XCTAssertNil(fixture.system.maintenanceTimer)
+        XCTAssertNotNil(fixture.system.maintenanceTimer,
+            "A running application missing from AX must retain a low-frequency discovery retry")
         XCTAssertEqual(fixture.system.hiddenBundles, [bundle])
         XCTAssertTrue(fixture.system.allowed[lateBundle] ?? true,
             "A running application missing from the final AX inventory must remain visible")
+
+        fixture.system.uptime = 160
+        try XCTUnwrap(fixture.system.maintenanceTimer).fire()
+        await fixture.model.waitForTestingOperations()
+        XCTAssertNotNil(fixture.system.maintenanceTimer)
+
+        fixture.system.snapshots.append(MenuBarItemSnapshot(
+            id: "session:late-native", processIdentifier: 10001, name: "Fixture",
+            ownerName: "Fixture", bundleIdentifier: lateBundle,
+            frame: CGRect(x: 0, y: 0, width: 22, height: 22),
+            hasReliableGeometry: true, canMove: true, detail: "",
+            persistentIdentity: false, ownIdentifier: nil))
+        fixture.system.identities["session:late-native"] =
+            fixture.system.identities.removeValue(forKey: "late-owner")!
+        fixture.system.uptime = 220
+        try XCTUnwrap(fixture.system.maintenanceTimer).fire()
+        await fixture.model.waitForTestingOperations()
+        XCTAssertNil(fixture.system.maintenanceTimer,
+            "Observing the late status item must retire the persistent retry")
     }
 
     @MainActor
