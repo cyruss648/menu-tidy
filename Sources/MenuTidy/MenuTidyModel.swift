@@ -1316,8 +1316,9 @@ final class MenuTidyModel: ObservableObject {
     func noteApplicationLaunch(_ owner: MenuBarOwner) {
         guard owner.pid > 0, owner.launchTime.isFinite, owner.launchTime > 0 else { return }
         if usesNativeVisibility, let bundle = owner.bundleIdentifier,
-           nativeTrayChoices.group(bundle: bundle).map({ $0 != .visible }) == true {
+           let group = nativeTrayChoices.group(bundle: bundle), group != .visible {
             nativeDiscoveryRevealBundles.insert(bundle)
+            launchDiscovery.registerPersistent(ScanOwnerKey(owner), at: maintenanceUptime)
             refreshNativeAssessmentIfNeeded()
         }
         launchDiscovery.register(ScanOwnerKey(owner), at: maintenanceUptime)

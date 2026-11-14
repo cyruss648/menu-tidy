@@ -22,9 +22,9 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
         f.model.noteRunningApplications([])
         f.model.noteRunningApplications([f.owner])
         for time in [101.0, 103, 107, 115] { try await f.fire(time) }
-        XCTAssertNil(f.system.maintenanceTimer)
+        XCTAssertNotNil(f.system.maintenanceTimer)
         f.model.noteRunningApplications([f.owner])
-        XCTAssertNil(f.system.maintenanceTimer)
+        XCTAssertNotNil(f.system.maintenanceTimer)
     }
 
     @MainActor
@@ -82,11 +82,22 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
         var scans = 0
         f.system.beforeScan = { scans += 1 }
         f.model.noteApplicationLaunch(f.owner)
+        f.model.noteRunningApplications([f.owner])
         for time in [101.0, 103, 107, 115] { try await f.fire(time) }
         XCTAssertEqual(scans, 4)
-        XCTAssertNil(f.system.maintenanceTimer)
+        XCTAssertNotNil(f.system.maintenanceTimer)
         XCTAssertTrue(f.system.visibilityBatches.isEmpty)
         XCTAssertTrue(f.system.hiddenBundles.isEmpty)
+
+        try await f.fire(130)
+        XCTAssertEqual(scans, 5)
+        XCTAssertNotNil(f.system.maintenanceTimer)
+
+        f.model.noteRunningApplications([])
+        XCTAssertNotNil(f.system.maintenanceTimer, "Application exit also schedules one membership refresh")
+        try await f.fire(135)
+        XCTAssertEqual(scans, 6, "Application exit may perform one membership refresh, then must stop retrying")
+        XCTAssertNil(f.system.maintenanceTimer)
     }
 
     @MainActor

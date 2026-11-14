@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.23] - 2026-11-15
+
+Extended startup tray protection to saved tray applications that launch or relaunch after Menu Tidy has already started.
+
+- A saved application set to collapse or always hide now remains visible and receives persistent discovery retries as soon as its current process launches, until its status item is observed or the process exits.
+- Boot login items, delayed login agents, and application relaunches now share the same persistent discovery path instead of falling back to a one-time retry window.
+- Added regression coverage for runtime launches, persistent discovery, and process exit cleanup.
+
+Verification: the full gate, dual architecture builds, signed feeds, public Release, and local installation acceptance will run after commit. Uses the project's self-signed release identity and is not Apple notarized.
+
 ## [0.7.22] - 2026-11-15
 
 Fixed a gap after bounded startup recovery retries where a running application that created its status item later had no further discovery opportunity, leaving its saved tray choice unapplied or inconsistent.
