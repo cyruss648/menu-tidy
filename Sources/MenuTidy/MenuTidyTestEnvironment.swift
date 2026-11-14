@@ -13,6 +13,9 @@ final class MenuTidyTestEnvironment {
     /// absent, the fixture follows the native preference as before.
     var observedVisibility: [String: Bool] = [:]
     var managedBundles: Set<String> = []
+    /// Production derives this from NSWorkspace. Tests can model a running
+    /// application whose status item has not yet been returned by AX.
+    var runningBundles: Set<String> = []
     var visibilityBatches: [[String: Bool]] = []
     var hiddenBundles: [String] = []
     var restoredBundles: [String] = []

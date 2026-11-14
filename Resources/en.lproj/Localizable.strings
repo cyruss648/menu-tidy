@@ -520,6 +520,7 @@
 "应用 {0}" = "Application {0}";
 "应用后台排序" = "Apply background arrangement";
 "应用暂未响应，当前显示状态尚未确认。选择已保留，可以重试。" = "The app has not responded; its visibility is unconfirmed. Your choice is preserved and can be retried.";
+"应用正在运行，但 macOS 尚未提供可操作的菜单栏身份；已保留当前选择，等待刷新确认。" = "The app is running, but macOS has not provided an actionable menu bar identity yet. The current choice is preserved until a refresh confirms it.";
 "应用重新启动后，部分图标的原显示设置尚未恢复。恢复记录已保留，请点击“重试恢复”；不会自动反复重试。" = "Some previous visibility settings remain unrestored after restarting the app. Recovery records are preserved. Click \"Retry Recovery\"; retries will not run repeatedly in the background.";
 "当前 macOS 未提供可用的原生菜单栏隐藏后端。选择已保留。" = "This macOS version does not provide a usable native menu bar hiding backend. Your choices are preserved.";
 "当前图标身份无法确认，选择未执行。请重新检测后再试。" = "The current icon identity is unconfirmed. The choice was not executed. Check again and retry.";

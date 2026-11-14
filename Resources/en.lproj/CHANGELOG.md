@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.17] - 2026-11-14
+
+Fixed macOS 27 native tray applications such as BLEUnlock falling back to “offline and retained records” when the application was running but MenuBarAgent had not yet provided actionable geometry.
+
+- A successful startup recovery scan now records the release as recovered even when part of the running application inventory is absent from that AX round, preventing an endless startup retry loop.
+- Running saved applications receive a safe identity fallback row. It preserves the application-level visibility choice and disables movement until macOS confirms an actionable menu bar identity; a later refresh replaces it with the normal item automatically.
+- Added startup recovery and list regression coverage for a partial AX inventory.
+
+Verification: focused startup recovery integration tests passed; the full gate and public release installation evidence are recorded with the release. Uses the project's self-signed release identity and is not Apple-notarized.
+
 ## [0.7.16] - 2026-11-14
 
 Fixed the third macOS 27 native tray recovery attempt releasing its display assessment without running the corresponding scan, which could return BLEUnlock and similar icons to offline records when the recovery window ended.

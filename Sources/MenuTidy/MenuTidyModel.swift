@@ -3936,6 +3936,21 @@ final class MenuTidyModel: ObservableObject {
                     (item.presentationIdentity ?? MenuBarItemPresentationIdentity.resolve(
                         bundleIdentifier: item.bundleIdentifier, accessibilityIdentifier: nil)) : nil)
         }
+        if usesNativeVisibility {
+            let representedBundles = Set(result.compactMap(\.bundleIdentifier))
+            let runningBundles = testingEnvironment?.runningBundles ??
+                Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+            for (bundle, group) in nativeTrayChoices.choices
+                where group != .visible && runningBundles.contains(bundle) && !representedBundles.contains(bundle) {
+                let name = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
+                    .flatMap { FileManager.default.displayName(atPath: $0.path) } ?? bundle
+                result.append(ManagedItemRow(id: "native-app:" + bundle, name: name, ownerName: name,
+                    bundleIdentifier: bundle, icon: applicationIcon(for: bundle), group: group,
+                    isAvailable: true, canMove: false,
+                    detail: LocalizedMessage("应用正在运行，但 macOS 尚未提供可操作的菜单栏身份；已保留当前选择，等待刷新确认。"),
+                    isPending: false, presentationIdentity: .application(bundle: bundle)))
+            }
+        }
         let boundDraftIDs = Set(rowDraftIDs.values)
         let nextOfflineDrafts = pendingDrafts.records.filter { !boundDraftIDs.contains($0.id) }
             .sorted { $0.rule.name.localizedStandardCompare($1.rule.name) == .orderedAscending }
@@ -5786,12 +5801,13 @@ private extension MenuTidyModel {
     private func finishNativeStartupRecovery(attempt: Int, succeeded: Bool) {
         guard nativeStartupRecoveryScheduled, attempt == nativeStartupRecoveryAttempt else { return }
         nativeStartupRecoveryScanPending = false
-        let runningBundles = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        let runningBundles = testingEnvironment?.runningBundles ??
+            Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         let expectedRunning = nativeTrayChoices.hiddenBundles.intersection(runningBundles)
         let observedBundles = Set(snapshots.compactMap(\.bundleIdentifier))
         let inventoryComplete = expectedRunning.isSubset(of: observedBundles)
-        guard succeeded, inventoryComplete else {
-            let failure = !succeeded ? "scan-failed" : "inventory-incomplete"
+        guard succeeded else {
+            let failure = "scan-failed"
             if attempt < Self.nativeStartupRetryDelays.count {
                 nativeStartupRecoveryDue = maintenanceUptime + Self.nativeStartupRetryDelays[attempt - 1]
                 Self.diagnosticLogger.notice("nativeStartupRebind finished=false reason=\(failure, privacy: .public) retry=\(attempt)")
@@ -5806,6 +5822,9 @@ private extension MenuTidyModel {
             return
         }
 
+        if !inventoryComplete {
+            Self.diagnosticLogger.notice("nativeStartupRebind inventoryIncomplete=true observedBundles=\(observedBundles.count) expectedRunning=\(expectedRunning.count) missing=\(expectedRunning.subtracting(observedBundles).count)")
+        }
         defaults.set(nativeStartupEnvironmentSignature, forKey: Self.nativeStartupEnvironmentKey)
         if let release = nativeStartupRecoveryReleaseSignature {
             defaults.set(release, forKey: Self.nativeStartupRecoveryReleaseKey)

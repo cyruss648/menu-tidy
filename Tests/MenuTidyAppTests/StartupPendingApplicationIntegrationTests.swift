@@ -211,6 +211,23 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeStartupRecoveryCompletesAfterAUsablePartialInventory() async throws {
+        let fixture = try makeFixture(
+            choices: [bundle: .collapsible, "org.example.NoStatusItem": .collapsible],
+            nativeStartupRecovery: true)
+        defer { fixture.dispose() }
+        fixture.system.runningBundles = [bundle, "org.example.NoStatusItem"]
+
+        try fireMaintenance(fixture.system, at: 110)
+        await fixture.model.waitForTestingOperations()
+
+        XCTAssertNotNil(fixture.defaults.string(forKey: "nativeStartupRecoveryRelease.v1"))
+        XCTAssertNil(fixture.system.maintenanceTimer)
+        XCTAssertTrue(fixture.model.managementItems.contains { $0.bundleIdentifier == "org.example.NoStatusItem" })
+        XCTAssertFalse(fixture.model.managementItems.first { $0.bundleIdentifier == "org.example.NoStatusItem" }?.canMove ?? true)
+    }
+
+    @MainActor
     func testThirdNativeStartupAttemptStillRunsItsPendingScan() {
         XCTAssertTrue(MenuTidyModel.nativeStartupRecoveryShouldScan(
             attempt: 3, scanPending: true, retryCount: 3))
