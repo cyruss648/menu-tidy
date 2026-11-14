@@ -3828,12 +3828,10 @@ final class MenuTidyModel: ObservableObject {
             snapshotOwnerKeys[snapshot.processIdentifier]
         }))
         let observedBundles = Set(snapshots.compactMap(\.bundleIdentifier))
-        let activeLaunchTargets = Set(launchDiscovery.targets.compactMap(\.bundleIdentifier))
         let currentBundles = Set(owners.compactMap(\.bundleIdentifier))
         nativeDiscoveryRevealBundles = nativeDiscoveryRevealBundles.filter { bundle in
             !observedBundles.contains(bundle) &&
-                currentBundles.contains(bundle) &&
-                activeLaunchTargets.contains(bundle)
+                currentBundles.contains(bundle)
         }
         refreshNativeAssessmentIfNeeded()
         rememberObservedGroups(scannedOwners: scanOwners)
@@ -5872,7 +5870,8 @@ private extension MenuTidyModel {
         }
 
         if !inventoryComplete {
-            Self.diagnosticLogger.notice("nativeStartupRebind inventoryIncomplete=true observedBundles=\(observedBundles.count) expectedRunning=\(expectedRunning.count) missing=\(expectedRunning.subtracting(observedBundles).count)")
+            let missingRunningBundles = expectedRunning.subtracting(observedBundles)
+            Self.diagnosticLogger.notice("nativeStartupRebind inventoryIncomplete=true observedBundles=\(observedBundles.count) expectedRunning=\(expectedRunning.count) missing=\(missingRunningBundles.count) missingBundles=\(missingRunningBundles.sorted().joined(separator: ","), privacy: .public)")
             if attempt < Self.nativeStartupRetryDelays.count {
                 // A running application can create its status item after the
                 // first post-release scan. Keep native assessment released
@@ -5882,6 +5881,12 @@ private extension MenuTidyModel {
                 Self.diagnosticLogger.notice("nativeStartupRebind retry=true reason=inventory-incomplete attempt=\(attempt) nextDue=\(self.nativeStartupRecoveryDue ?? 0)")
                 return
             }
+            // A running application can still be absent from AX after the
+            // bounded startup retry window. Keep it visible until its status
+            // item is observed or its process exits; reapplying its saved
+            // hidden choice here would make the icon disappear entirely.
+            retainUnobservedRunningNativeBundles(missingRunningBundles)
+            Self.diagnosticLogger.notice("nativeStartupRebind holdVisible=true missingBundles=\(missingRunningBundles.sorted().joined(separator: ","), privacy: .public)")
         }
         defaults.set(nativeStartupEnvironmentSignature, forKey: Self.nativeStartupEnvironmentKey)
         if let release = nativeStartupRecoveryReleaseSignature {
@@ -5897,6 +5902,18 @@ private extension MenuTidyModel {
             startupPendingApplicationNeedsRefresh = false
             finishStartupPendingApplication()
             applyAutomaticPendingTrayPlacements()
+        }
+    }
+
+    private func retainUnobservedRunningNativeBundles(_ bundles: Set<String>) {
+        guard !bundles.isEmpty else { return }
+        nativeDiscoveryRevealBundles.formUnion(bundles)
+        if testingEnvironment == nil {
+            let owners = currentRunningApplicationOwners()
+            for owner in owners where bundles.contains(owner.bundleIdentifier ?? "") {
+                launchDiscovery.register(ScanOwnerKey(owner), at: maintenanceUptime)
+            }
+            trayDiscoveryNeeded = true
         }
     }
 

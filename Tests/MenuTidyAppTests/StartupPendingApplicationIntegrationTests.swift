@@ -252,6 +252,24 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeStartupRecoveryKeepsUnobservedRunningApplicationVisibleAfterRetryBudget() async throws {
+        let lateBundle = "org.example.PersistentlyLateNativeStatusItem"
+        let fixture = try makeFixture(
+            choices: [bundle: .collapsible, lateBundle: .collapsible],
+            nativeStartupRecovery: true)
+        defer { fixture.dispose() }
+        fixture.system.runningBundles = [bundle, lateBundle]
+
+        try await exhaustNativeStartupRecovery(fixture, startingAt: 110)
+
+        XCTAssertNotNil(fixture.defaults.string(forKey: "nativeStartupRecoveryRelease.v1"))
+        XCTAssertNil(fixture.system.maintenanceTimer)
+        XCTAssertEqual(fixture.system.hiddenBundles, [bundle])
+        XCTAssertTrue(fixture.system.allowed[lateBundle] ?? true,
+            "A running application missing from the final AX inventory must remain visible")
+    }
+
+    @MainActor
     func testThirdNativeStartupAttemptStillRunsItsPendingScan() {
         XCTAssertTrue(MenuTidyModel.nativeStartupRecoveryShouldScan(
             attempt: 3, scanPending: true, retryCount: 3))

@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.21] - 2026-11-15
+
+Fixed startup recovery reapplying a saved hidden choice after its retry window ended even though the application was still running and its status item had not entered the AX inventory, which could make the icon disappear completely.
+
+- Saved applications that are running but temporarily absent from the accessibility inventory remain visible until their status item is observed or the application exits.
+- A bounded follow-up discovery remains scheduled for these applications; the saved visible, collapsible, or always hidden choice is reapplied only after the status item is found.
+- Added regression coverage for applications that remain unobserved after the startup retry window, covering the shared path used by BLEUnlock, WhatCable, and other login launched tray applications.
+
+Verification: startup recovery integration tests passed; the full gate, dual architecture builds, signed feeds, and public installation verification will run before release. Uses the project's self signed release identity and is not Apple notarized.
+
 ## [0.7.20] - 2026-11-15
 
 Fixed macOS 27 startup recovery rehiding running native tray applications when their status items were created after the first accessibility scan.
