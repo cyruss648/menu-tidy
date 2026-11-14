@@ -211,6 +211,16 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testThirdNativeStartupAttemptStillRunsItsPendingScan() {
+        XCTAssertTrue(MenuTidyModel.nativeStartupRecoveryShouldScan(
+            attempt: 3, scanPending: true, retryCount: 3))
+        XCTAssertFalse(MenuTidyModel.nativeStartupRecoveryShouldScan(
+            attempt: 3, scanPending: false, retryCount: 3))
+        XCTAssertFalse(MenuTidyModel.nativeStartupRecoveryShouldScan(
+            attempt: 4, scanPending: true, retryCount: 3))
+    }
+
+    @MainActor
     func testEnvironmentChangeKeepsSavedBundleAsDiscoveryHintBeforeRecoveryIsQueued() throws {
         let current = ProcessInfo.processInfo.operatingSystemVersion
         let signature = "\(current.majorVersion).\(current.minorVersion).\(current.patchVersion)"

@@ -4,6 +4,15 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.16] - 2026-11-14
+
+Fixed the third macOS 27 native tray recovery attempt releasing its display assessment without running the corresponding scan, which could return BLEUnlock and similar icons to offline records when the recovery window ended.
+
+- A pending recovery scan now runs before the retry exhaustion check, so the third post-release MenuBarAgent AX scan is executed after its settle delay.
+- Added a boundary regression test for the third startup recovery scan.
+
+Verification: `./scripts/check.sh --full` passed before release. Uses the project's self-signed release identity and is not Apple-notarized.
+
 ## [0.7.15] - 2026-11-14
 
 Fixed upgrades from `0.7.14` or earlier skipping one native tray recovery when the macOS environment version had not changed, which left saved hidden applications such as BLEUnlock in offline records.

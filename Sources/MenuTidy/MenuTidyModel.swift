@@ -66,6 +66,13 @@ private enum MenuTidyManagementError: LocalizedMessageError {
 final class MenuTidyModel: ObservableObject {
     private static let diagnosticLogger = Logger(subsystem: "dev.hdh.MenuTidy", category: "Management")
     private static let ownAnchorIdentifiers = ["menu-tidy-toggle", "menu-tidy-divider", "menu-tidy-always-divider"]
+
+    static func nativeStartupRecoveryShouldScan(attempt: Int,
+                                                scanPending: Bool,
+                                                retryCount: Int) -> Bool {
+        scanPending && attempt > 0 && attempt <= retryCount
+    }
+
     @Published private(set) var isCollapsed = false { didSet { if oldValue != isCollapsed { cancelPassiveIconCapture(); requestPassiveCaptureAfterEvent() }; rescheduleMaintenanceTimer() } }
     @Published private(set) var isArranging = false { didSet { if isArranging { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
     @Published var autoCollapseEnabled: Bool { didSet { defaults.set(autoCollapseEnabled, forKey: "autoCollapse"); resetIdleTime(); rescheduleMaintenanceTimer() } }
@@ -5730,18 +5737,21 @@ private extension MenuTidyModel {
             nativeStartupRecoveryDue = now + BackgroundMaintenanceSchedule.permissionInterval
             return
         }
-        guard nativeStartupRecoveryAttempt < Self.nativeStartupRetryDelays.count else {
-            nativeStartupRecoveryDue = nil
-            Self.diagnosticLogger.notice("nativeStartupRebind exhausted=true")
-            return
-        }
-
-        if nativeStartupRecoveryScanPending {
+        if Self.nativeStartupRecoveryShouldScan(
+            attempt: nativeStartupRecoveryAttempt,
+            scanPending: nativeStartupRecoveryScanPending,
+            retryCount: Self.nativeStartupRetryDelays.count) {
             nativeStartupRecoveryScanPending = false
             let attempt = nativeStartupRecoveryAttempt
             Self.diagnosticLogger.notice("nativeStartupRebind scan=true attempt=\(attempt)")
             refreshMenuItems(nativeStartupRecoveryAttempt: attempt,
                 nativeStartupRecoveryRebindSucceeded: nativeStartupRecoveryRebindSucceeded)
+            return
+        }
+
+        guard nativeStartupRecoveryAttempt < Self.nativeStartupRetryDelays.count else {
+            nativeStartupRecoveryDue = nil
+            Self.diagnosticLogger.notice("nativeStartupRebind exhausted=true")
             return
         }
 
