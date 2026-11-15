@@ -5964,11 +5964,14 @@ private extension MenuTidyModel {
 
     func syncNativeAssessmentIntent() {
         guard usesNativeAssessment else { return }
-        let inventoried = Set(snapshots.compactMap { snapshot -> String? in
+        var inventoried = Set(snapshots.compactMap { snapshot -> String? in
             guard snapshot.canMove, snapshot.ownIdentifier == nil,
                   let identity = observedItemIdentity(snapshot), ownerIsCurrent(identity) else { return nil }
             return snapshot.bundleIdentifier
         })
+        // A reveal may precede the replacement AX source. Keep ownership of
+        // that in-flight reveal so its cleanup can restore the hidden choice.
+        inventoried.formUnion(nativeAssessmentStore.revealedBundles)
         let persistedHidden = Set(nativeTrayChoices.choices.compactMap { bundle, group in
             group == .visible || !inventoried.contains(bundle) ? nil : bundle
         })

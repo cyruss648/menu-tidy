@@ -4,6 +4,8 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.24] - 2026-11-15
+
 - Preserve observed tray inventory for the exact owner process when native assessment removes its AX nodes; discard geometry and replace retained inventory when fresh nodes appear.
 - Show running applications with missing icons as waiting for discovery, including them in outstanding counts rather than reporting them as protected system items.
 
