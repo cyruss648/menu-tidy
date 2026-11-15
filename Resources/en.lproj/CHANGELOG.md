@@ -4,6 +4,9 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+- Preserve observed tray inventory for the exact owner process when native assessment removes its AX nodes; discard geometry and replace retained inventory when fresh nodes appear.
+- Show running applications with missing icons as waiting for discovery, including them in outstanding counts rather than reporting them as protected system items.
+
 ## [0.7.23] - 2026-11-15
 
 Extended startup tray protection to saved tray applications that launch or relaunch after Menu Tidy has already started.

@@ -811,3 +811,6 @@
 "预览：当前权限来自模拟数据。" = "Preview: permissions come from simulated data.";
 "（AX 返回码 {0}）" = " (AX code {0})";
 "；未发送鼠标或键盘事件。" = "; no mouse or keyboard events were sent.";
+/* Discovery is separate from protected system items. */
+"等待发现图标" = "Waiting for icon discovery";
+"应用正在运行，尚未读到菜单栏图标；选择已保留，将继续发现。" = "The app is running, but its menu bar icon has not been found. Your choice is saved and discovery will continue.";

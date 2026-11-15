@@ -76,13 +76,13 @@ struct SettingsView: View {
     private var currentTrayItems: [ManagedItemRow] { model.managementItems }
     private var unavailableItems: [ManagedItemRow] { model.items.filter { !$0.isAvailable } }
     private var attentionCount: Int {
-        currentTrayItems.filter { $0.canMove && ($0.isPending || model.trayPlacementFailure(id: $0.id) != nil) }.count
+        currentTrayItems.filter { $0.isAwaitingDiscovery || ($0.canMove && ($0.isPending || model.trayPlacementFailure(id: $0.id) != nil)) }.count
     }
     private var filteredTrayItems: [ManagedItemRow] {
         let query = presentation.traySearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return currentTrayItems.filter { item in
             let group = model.trayPlacementGroup(id: item.id)
-            let needsAttention = item.canMove && (item.isPending || model.trayPlacementFailure(id: item.id) != nil)
+            let needsAttention = item.isAwaitingDiscovery || (item.canMove && (item.isPending || model.trayPlacementFailure(id: item.id) != nil))
             let matchesFilter = presentation.trayFilter == "all" || presentation.trayFilter == group.id ||
                 (presentation.trayFilter == "attention" && needsAttention)
             let names = model.items.filter { item.underlyingIDs.contains($0.id) }.map(\.name)
@@ -416,6 +416,8 @@ struct SettingsView: View {
                     if pending {
                         ProgressView().controlSize(.small)
                         rowBadge(copy("处理中"), color: accent)
+                    } else if item.isAwaitingDiscovery {
+                        rowBadge(copy("等待发现图标"), color: .orange)
                     } else if !item.canMove {
                         rowBadge(copy("系统保留"), color: .secondary)
                     } else if message != nil {
@@ -432,6 +434,9 @@ struct SettingsView: View {
                 } else if pending {
                     Text(copy("正在按顺序处理，可继续更改选择。"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
+                } else if item.isAwaitingDiscovery {
+                    Text(copy("应用正在运行，尚未读到菜单栏图标；选择已保留，将继续发现。"))
+                        .font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2)
                 } else if item.hasMixedGroups {
                     Text(copy("已有图标分类不一致，请明确选择此应用的显示方式。"))
                         .font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2)

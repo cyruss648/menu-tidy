@@ -154,6 +154,75 @@ final class NativeBatchApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testAssessmentInventorySurvivesEverySourceDisappearingBeforeConfirmation() async throws {
+        let f = try Fixture(); defer { f.dispose() }
+        f.system.nativeAssessmentAuthoritative = true
+        var scans = 0
+        f.system.beforeScan = {
+            scans += 1
+            f.system.managedBundles = [f.a, f.b]
+            f.system.allowed = [f.a: false, f.b: false]
+            if scans > 1 { f.system.snapshots.removeAll() }
+        }
+        f.model.refreshMenuItems()
+        await f.model.waitForTestingOperations()
+        f.system.beforeScan = nil
+        // Reproduce startup intent already hiding an observed application
+        // before its first queued request can confirm individual AX sources.
+        f.system.managedBundles = [f.a, f.b]
+        f.system.allowed = [f.a: false, f.b: false]
+        f.system.snapshots.removeAll()
+        f.model.applyPendingTrayPlacements()
+        await f.model.waitForTestingOperations()
+        XCTAssertEqual(f.model.trayPlacementOutstandingCount, 0)
+        XCTAssertEqual(f.model.panelItems.count, 1)
+        XCTAssertEqual(f.model.items.filter(\.isAvailable).count, 2)
+        XCTAssertTrue(f.model.items.allSatisfy { !$0.isAwaitingDiscovery && !$0.isPending })
+
+        for _ in 0..<3 {
+            f.model.refreshMenuItems()
+            await f.model.waitForTestingOperations()
+            XCTAssertEqual(f.model.panelItems.count, 1, "Repeated scans must retain the hidden tray entry")
+            XCTAssertEqual(f.model.trayPlacementOutstandingCount, 0)
+        }
+        // A replacement process cannot inherit the retained inventory.
+        f.system.identities["session:a"] = ObservedItemGroupHistory.Identity(id: "session:a",
+            pid: 301, bundleIdentifier: f.a, launchTime: 20)
+        f.system.runningBundles = [f.a, f.b]
+        f.model.refreshMenuItems()
+        await f.model.waitForTestingOperations()
+        XCTAssertFalse(f.model.panelItems.contains { $0.bundleIdentifier == f.a })
+        let waiting = try XCTUnwrap(f.model.managementItems.first { $0.bundleIdentifier == f.a })
+        XCTAssertTrue(waiting.isAwaitingDiscovery)
+        XCTAssertFalse(waiting.canMove)
+        XCTAssertEqual(f.model.trayPlacementOutstandingCount, 1)
+    }
+
+    @MainActor
+    func testFreshBundleSourcesReplaceAssessmentInventoryWithoutDuplicateTrayEntries() async throws {
+        let f = try Fixture(); defer { f.dispose() }
+        f.system.nativeAssessmentAuthoritative = true
+        f.model.applyPendingTrayPlacements()
+        await f.model.waitForTestingOperations()
+        let old = try XCTUnwrap(f.system.snapshots.first { $0.bundleIdentifier == f.a })
+        f.system.snapshots.removeAll { $0.bundleIdentifier == f.a }
+        f.model.refreshMenuItems()
+        await f.model.waitForTestingOperations()
+        XCTAssertTrue(f.model.items.contains { $0.id == old.id && $0.isAvailable })
+        let replacement = MenuBarItemSnapshot(id: "session:new-a", processIdentifier: old.processIdentifier,
+            name: old.name, ownerName: old.ownerName, bundleIdentifier: f.a, frame: old.frame,
+            hasReliableGeometry: true, canMove: true, detail: "", persistentIdentity: false, ownIdentifier: nil)
+        f.system.snapshots.append(replacement)
+        f.system.identities[replacement.id] = ObservedItemGroupHistory.Identity(id: replacement.id,
+            pid: old.processIdentifier, bundleIdentifier: f.a, launchTime: 10)
+        f.model.refreshMenuItems()
+        await f.model.waitForTestingOperations()
+        XCTAssertFalse(f.model.items.contains { $0.id == old.id && $0.isAvailable })
+        XCTAssertEqual(f.model.managementItems.filter { $0.bundleIdentifier == f.a }.count, 1)
+        XCTAssertEqual(f.model.panelItems.filter { $0.bundleIdentifier == f.a }.count, 1)
+    }
+
+    @MainActor
     private final class Fixture {
         let a = "org.example.BatchA", b = "org.example.BatchB", c = "org.example.BatchC"
         let suite = "dev.hdh.MenuTidy.tests.native-batch.\(UUID().uuidString)"

@@ -20,6 +20,7 @@ struct ManagedItemRow: Identifiable {
     var presentationIdentity: MenuBarItemPresentationIdentity? = nil
     var sourceIDs: [String] = []
     var hasMixedGroups = false
+    var isAwaitingDiscovery = false
 
     var presentationID: String { presentationIdentity?.id ?? id }
     var underlyingIDs: [String] { sourceIDs.isEmpty ? [id] : sourceIDs }
@@ -29,13 +30,15 @@ struct ManagedItemRow: Identifiable {
             bundleIdentifier == other.bundleIdentifier && icon === other.icon && group == other.group &&
             isAvailable == other.isAvailable && canMove == other.canMove && detail == other.detail &&
             isPending == other.isPending && presentationIdentity == other.presentationIdentity &&
-            sourceIDs == other.sourceIDs && hasMixedGroups == other.hasMixedGroups
+            sourceIDs == other.sourceIDs && hasMixedGroups == other.hasMixedGroups &&
+            isAwaitingDiscovery == other.isAwaitingDiscovery
     }
 
     func replacingGroup(_ group: ItemVisibility) -> ManagedItemRow {
         ManagedItemRow(id: id, name: name, ownerName: ownerName, bundleIdentifier: bundleIdentifier,
             icon: icon, group: group, isAvailable: isAvailable, canMove: canMove, detail: detail, isPending: isPending,
-            presentationIdentity: presentationIdentity, sourceIDs: sourceIDs, hasMixedGroups: hasMixedGroups)
+            presentationIdentity: presentationIdentity, sourceIDs: sourceIDs, hasMixedGroups: hasMixedGroups,
+            isAwaitingDiscovery: isAwaitingDiscovery)
     }
 }
 
@@ -407,7 +410,8 @@ final class MenuTidyModel: ObservableObject {
                 isAvailable: true, canMove: members.allSatisfy(\.canMove),
                 detail: Array(Set(members.map(\.detail).filter { !$0.isEmpty })).sorted { $0.sourceText < $1.sourceText }.joined(separator: " · "),
                 isPending: members.contains(where: \.isPending), presentationIdentity: selected.presentationIdentity,
-                sourceIDs: members.map(\.id).sorted(), hasMixedGroups: Set(members.map { trayPlacementGroup(id: $0.id) }).count > 1)
+                sourceIDs: members.map(\.id).sorted(), hasMixedGroups: Set(members.map { trayPlacementGroup(id: $0.id) }).count > 1,
+                isAwaitingDiscovery: members.contains(where: \.isAwaitingDiscovery))
         }
     }
 
@@ -482,7 +486,8 @@ final class MenuTidyModel: ObservableObject {
         trayPlacementPresentationCount(TrayPlacementPolicy.candidates(trayPlacementCandidates, for: .retryFailed))
     }
     var trayPlacementOutstandingCount: Int {
-        trayPlacementPresentationCount(trayPlacementCandidates.filter(\.isOutstanding))
+        trayPlacementPresentationCount(trayPlacementCandidates.filter(\.isOutstanding)) +
+            managementItems.filter(\.isAwaitingDiscovery).count
     }
 
     private func trayPlacementPresentationCount(_ candidates: [TrayPlacementPolicy.Candidate]) -> Int {
@@ -3788,7 +3793,31 @@ final class MenuTidyModel: ObservableObject {
             guard currentOwnerKeys.contains(ownerKey), !scannedOwnerKeys.contains(ownerKey) else { return false }
             return publishedIDs.insert(snapshot.id).inserted
         }
-        snapshots = retainedSnapshots + newSnapshots
+        // Assessment owns an application, not the lifetime of its AX nodes.
+        // It can remove every source as soon as hiding starts, before the
+        // request has produced NativeVisibilityEvidence. Keep that observed
+        // inventory for this exact process epoch, with no geometry permission.
+        // Fresh sources for the bundle supersede this inventory as a whole.
+        let observedBundlesThisScan = Set(newSnapshots.compactMap(\.bundleIdentifier))
+        let assessmentInventory = previousSnapshots.compactMap { snapshot -> MenuBarItemSnapshot? in
+            guard usesNativeAssessment || testingEnvironment?.nativeAssessmentAuthoritative == true,
+                  snapshot.canMove, snapshot.ownIdentifier == nil,
+                  let bundle = snapshot.bundleIdentifier,
+                  !observedBundlesThisScan.contains(bundle),
+                  !publishedIDs.contains(snapshot.id),
+                  let key = previousSnapshotOwnerKeys[snapshot.processIdentifier],
+                  currentOwnerKeys.contains(key),
+                  nativeTargetIsManaged(.application(bundle: bundle)),
+                  !nativeTargetIsRevealed(.application(bundle: bundle)),
+                  (try? nativeAllowed(.application(bundle: bundle))) == false else { return nil }
+            publishedIDs.insert(snapshot.id)
+            return MenuBarItemSnapshot(id: snapshot.id, processIdentifier: snapshot.processIdentifier,
+                name: snapshot.name, ownerName: snapshot.ownerName, bundleIdentifier: bundle,
+                frame: snapshot.frame, hasReliableGeometry: false, canMove: true, detail: snapshot.detail,
+                persistentIdentity: snapshot.persistentIdentity, ownIdentifier: nil,
+                presentationIdentity: snapshot.presentationIdentity)
+        }
+        snapshots = retainedSnapshots + newSnapshots + assessmentInventory
         snapshotOwnerKeys = Dictionary(snapshots.compactMap { snapshot in
             owners.first(where: { $0.pid == snapshot.processIdentifier }).map {
                 (snapshot.processIdentifier, ScanOwnerKey($0))
@@ -3994,7 +4023,8 @@ final class MenuTidyModel: ObservableObject {
                     bundleIdentifier: bundle, icon: applicationIcon(for: bundle), group: group,
                     isAvailable: true, canMove: false,
                     detail: LocalizedMessage("应用正在运行，但 macOS 尚未提供可操作的菜单栏身份；已保留当前选择，等待刷新确认。"),
-                    isPending: false, presentationIdentity: .application(bundle: bundle)))
+                    isPending: true, presentationIdentity: .application(bundle: bundle),
+                    isAwaitingDiscovery: true))
             }
         }
         let boundDraftIDs = Set(rowDraftIDs.values)
@@ -5934,8 +5964,13 @@ private extension MenuTidyModel {
 
     func syncNativeAssessmentIntent() {
         guard usesNativeAssessment else { return }
+        let inventoried = Set(snapshots.compactMap { snapshot -> String? in
+            guard snapshot.canMove, snapshot.ownIdentifier == nil,
+                  let identity = observedItemIdentity(snapshot), ownerIsCurrent(identity) else { return nil }
+            return snapshot.bundleIdentifier
+        })
         let persistedHidden = Set(nativeTrayChoices.choices.compactMap { bundle, group in
-            group == .visible ? nil : bundle
+            group == .visible || !inventoried.contains(bundle) ? nil : bundle
         })
         // A relaunched hidden application must remain visible through the next
         // discovery scan. Reasserting its persisted choice here would hide the
