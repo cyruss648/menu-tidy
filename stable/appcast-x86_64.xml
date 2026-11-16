@@ -6,20 +6,21 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.7.25</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.25</link>
-      <pubDate>Mon, 16 Nov 2026 04:14:09 +0000</pubDate>
-      <sparkle:version>101</sparkle:version>
-      <sparkle:shortVersionString>0.7.25</sparkle:shortVersionString>
+      <title>Menu Tidy 0.7.26</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.26</link>
+      <pubDate>Mon, 16 Nov 2026 06:54:15 +0000</pubDate>
+      <sparkle:version>102</sparkle:version>
+      <sparkle:shortVersionString>0.7.26</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="plain-text">## [0.7.25] - 2026-11-16
+      <description sparkle:format="plain-text">## [0.7.26] - 2026-11-16
 
-- 修复菜单栏图标实际可见、Menu Tidy 却持续等待发现的读取连接异常：仅在同一应用进程连续读取被拒绝、独立客户端确认原图标可读后，正常重新打开 Menu Tidy 恢复连接；每次开机最多自动恢复一次，并保留手动重新连接入口。
-- 将主动在应用内关闭菜单栏图标等普通缺失情况显示为灰色“当前无图标”，保留原分类，不计入“尚未完成”或“需要处理”，也不触发连接恢复。图标稍后在同一进程中出现时继续低频发现并自动接回。
-- 修复启动补偿释放已确认的隐藏状态后，旧连接尝试记录阻止图标重新接回的问题；补偿窗口内暂缓普通自动连接，仅重新开启已确认成功的连接周期，保留失败项目的重试限制。
-- 启动批量分类遇到已失效的系统图标来源时，仅隔离该来源，继续处理进程身份仍有效的其他应用；应用进程更换仍会停止旧请求。
+- 将“正在读取图标”等短暂加载提示统一延迟 350 毫秒显示，快速完成的操作不再闪现提示；停止操作仍可立即使用。
+- 管理页使用固定底部状态栏，在原位置更新进度、结果与异常摘要；完整原因和处理入口放入“状态详情”，避免提示突然插入列表。
+- 固定行内说明、操作按钮、批量计数、搜索清除按钮、权限检查及软件更新反馈的展示空间，保持刷新和失败重试期间的列表高度与阅读位置。
+- 独立托盘的进度和错误复用底部栏，完整错误与重试在详情浮层中展示；阅读详情时暂停自动收起，重试后正常关闭详情。
+- 修复软件更新区域切换语言后未立即刷新的问题。
 
-验证：本地完整门禁通过 Python 110 项、Swift 核心 540 项和应用集成 180 项测试。macOS arm64 候选实机后台启动后，搜狗等图标自动恢复原分类，邮箱大师的主动关闭状态正常，“需要处理”为 0，原分类、规则和草稿保持不变。双架构发布包与签名 feed 由标签工作流验证；Intel 桌面、整机冷启动和故障触发自动重新打开的原生链路尚未验收。沿用项目自签名发行身份，未经 Apple 公证。详细证据见[读取连接与启动恢复记录](docs/AX-CLIENT-RECOVERY-20261116.md)。
+验证：本地完整门禁通过 Python 110 项、Swift 核心 540 项和应用集成 185 项测试；原生窗口回归覆盖加载防闪、列表滚动位置、错误重试及托盘详情浮层。隔离预览已检查中英文、深浅色和权限反馈。双架构公开发布包、签名 feed 与安装后的原生验收分别记录，不以模拟数据预览替代真实应用验收。沿用项目自签名发行身份，未经 Apple 公证。详细记录见[状态展示与布局稳定性](docs/STATUS-PRESENTATION-20261116.md)。
 
 ### 软件内更新与首次安装
 
@@ -31,8 +32,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.7.25-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.7.25-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.7.26-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.7.26-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -55,12 +56,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.25/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.25/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.25/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.26/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.26/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.26/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.25/Menu-Tidy-0.7.25-macos-x86_64.zip" length="4191544" type="application/octet-stream" sparkle:edSignature="bu4jxriTZQrO3v5lIZRAaYecYD40GI1uopAVmCyCQp0MglAdM05eJQ6FbmX7lkyoPU5jNjxu3pTvCFwN80tfCg=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.26/Menu-Tidy-0.7.26-macos-x86_64.zip" length="4254473" type="application/octet-stream" sparkle:edSignature="qwaNk3oaYoUdC92KS2S2DpaLxuDR8/qBejYZuE8/RztpXVI5n+HPoy4CNVmXL2wPm7q+v0OcgTM6o4DWToXzCg=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: Psdtp1P129N7eaS0jE5Lqv3mC7YPnJzuz4uhsBZH7RFE2fOz7EU4vGpugKEpJan8/i0FjsYYoA4YiL0r+dLaDA==
-length: 6494
+edSignature: CZSoM1zyaKIWryC6llS6y1KXjHHvULswvpCIxjBnCgp4B5uSfZrF7AEWoSZrRBfSOZIEutwSPuSzduIFkAVjCA==
+length: 6204
 -->
