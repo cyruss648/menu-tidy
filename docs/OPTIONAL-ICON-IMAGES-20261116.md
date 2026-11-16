@@ -41,6 +41,24 @@
 
 ## 公开发布与已安装应用验收
 
-本文件随功能提交时，双架构 CI、签名发布、公开附件和 feed 核验、正式应用替换及实际运行验收尚待执行。完整结果以本轮最终安装凭据和后续验收记录为准，不将本地构建或隔离预览视为公开安装包验收。
+正式稳定版 [v0.7.27](https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.27) 已公开，版本为 0.7.27（build 103），源码提交为 `996f9d5947702838cdaf89e5a79669ce63eab3e9`。
 
-沿用项目自签名身份，未经 Apple 公证。arm64 原生验收不能替代 Intel 桌面、旧版 macOS、冷启动或多显示器交互验收。
+- 主线 CI [43824014152](https://github.com/cyruss648/menu-tidy/actions/runs/43824014152)：arm64 与 x86_64 完整检查和打包通过。
+- 标签 CI [43825280036](https://github.com/cyruss648/menu-tidy/actions/runs/43825280036)：两个架构及签名发布/feed 任务全部通过。
+- 实际下载并验证全部八个公开附件。两个架构的归档摘要、二进制摘要、EdDSA、版本/构建号/提交、架构、深度严格代码签名和固定证书要求均通过。
+- 远端服务实际返回的两份 stable feed 已验签，并与 `updates` 分支及公开归档的 URL、大小、签名一致。发行证书和 Sparkle 公钥延续原版本。
+- 2026-11-16 15:47:54（Asia/Shanghai），正常退出旧版后确认无运行进程、无四类活动恢复 journal，通过项目 installer 将已验证的公开 arm64 包安装到 `/Applications/Menu Tidy.app`，保留同文件系统备份。
+- 安装后重新核对版本、代码签名及二进制 SHA-256：`a8d7a9c4b25dccee6b8e95f273655aed0081c469071dca7c273246378f38acab`，与公开 arm64 包一致。
+
+在 macOS 27.2.1 / arm64 的已安装应用中完成以下实际操作：
+
+1. 正常启动并等待既有启动恢复完成；无需手动应用，最终 28 行管理项、待处理 0、失败重试 0。邮箱应用原有“当前无图标”状态和分类保留。
+2. 主动打开权限页的原始图像信息：缓存仍为 **19/21**，另有 18 个未观测记录；底部保持普通“图标显示方式”，未出现“需要处理”或截图不足告警。此次未手动刷新原始截图或清空缓存。
+3. 在列表滚动条 0.35 处使用 ⌘R 刷新，随后两次打开托盘并从托盘设置返回。20 个托盘入口均使用应用图标，后台检查结束后全部可点击；列表滚动位置保持 0.35，底部无图像告警。
+4. 打开“状态详情”，内容仅包含列表刷新结果与常规说明，无原始图像缺失提示。最后返回原截图对应的列表底部，状态正常。
+5. 实机日志记录 `iconImages observed=21 cached=19 fallbackRequests=0 unobserved=18`；两次托盘打开均记录 `items=20 cachedImages=0 originalImageRequests=0`。在本次启动至 15:53 的检查窗口中，未记录原始图像轮询或被动截图采集。
+6. 安装后及上述操作结束后，`nativeTrayChoices.v1`、`itemRules.v1`、`itemDrafts.v1` 的规范化 JSON 哈希均与安装前一致：41 条应用选择、25 条规则、0 条草稿。
+
+最终凭据为 `.local/release-0.7.27-20261116/published-verification.json`、`installed-verification.json`、`installed-runtime-verification.json` 和 `official-native-images.log`。这些文件分别记录公开产物、安装身份、实际界面操作和进程日志；隔离预览不作为正式包验收证据。
+
+本轮没有逐一执行第三方应用的原生菜单动作，也没有重新验收整机冷启动或多显示器。沿用项目自签名身份，未经 Apple 公证；Intel 已完成 CI 和包验证，未做 Intel 桌面交互验收。
