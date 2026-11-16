@@ -192,6 +192,74 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeStartupDiscoveryDoesNotRehideBeforeRebindCompletes() async throws {
+        let fixture = try makeFixture(nativeStartupRecovery: true)
+        defer { fixture.dispose() }
+        fixture.system.runningBundles = [bundle]
+        fixture.model.refreshMenuItems()
+        await fixture.model.waitForTestingOperations()
+        XCTAssertTrue(fixture.system.visibilityBatches.isEmpty,
+            "Ordinary discovery must leave the startup release window open")
+        XCTAssertTrue(fixture.system.hiddenBundles.isEmpty)
+
+        try fireMaintenance(fixture.system, at: 110)
+        await fixture.model.waitForTestingOperations()
+        XCTAssertEqual(fixture.system.hiddenBundles, [bundle])
+        XCTAssertEqual(fixture.model.trayPlacementOutstandingCount, 0)
+    }
+
+    @MainActor
+    func testConfirmedIconReturningAfterStartupReleaseReconnectsInTheSameProcess() async throws {
+        let fixture = try makeFixture(nativeStartupRecovery: true)
+        defer { fixture.dispose() }
+        fixture.system.runningBundles = [bundle]
+        let choice = try JSONDecoder().decode(NativeTrayChoices.self,
+            from: XCTUnwrap(fixture.defaults.data(forKey: "nativeTrayChoices.v1")))
+        fixture.model.applyPendingTrayPlacements()
+        await fixture.model.waitForTestingOperations()
+        XCTAssertEqual(fixture.system.hiddenBundles, [bundle])
+        let original = try XCTUnwrap(fixture.system.snapshots.first)
+        fixture.system.snapshots = []
+
+        try await exhaustNativeStartupRecovery(fixture, startingAt: 110)
+        XCTAssertTrue(fixture.system.allowed[bundle] ?? true)
+        fixture.system.snapshots = [original]
+        try fireMaintenance(fixture.system, at: 220)
+        await fixture.model.waitForTestingOperations()
+
+        XCTAssertEqual(fixture.system.hiddenBundles, [bundle, bundle],
+            "Releasing a confirmed assertion must not consume the later discovery attempt")
+        XCTAssertEqual(fixture.model.trayPlacementOutstandingCount, 0)
+        XCTAssertFalse(try XCTUnwrap(fixture.model.managementItems.first).isPending)
+        XCTAssertEqual(try JSONDecoder().decode(NativeTrayChoices.self,
+            from: XCTUnwrap(fixture.defaults.data(forKey: "nativeTrayChoices.v1"))), choice)
+    }
+
+    @MainActor
+    func testStartupReleaseDoesNotRearmARejectedSameProcessConnection() async throws {
+        let fixture = try makeFixture(enabled: false, nativeStartupRecovery: true)
+        defer { fixture.dispose() }
+        fixture.system.runningBundles = [bundle]
+        fixture.system.beforeVisibilityRead = { throw MenuBarAccessError.rejected }
+        fixture.model.applyPendingTrayPlacements()
+        await fixture.model.waitForTestingOperations()
+        XCTAssertNotNil(fixture.model.trayPlacementFailure(id: "session:startup"))
+        let original = try XCTUnwrap(fixture.system.snapshots.first)
+        fixture.system.snapshots = []
+        fixture.system.beforeVisibilityRead = nil
+
+        try await exhaustNativeStartupRecovery(fixture, startingAt: 110)
+        fixture.system.snapshots = [original]
+        try fireMaintenance(fixture.system, at: 220)
+        await fixture.model.waitForTestingOperations()
+
+        XCTAssertEqual(fixture.system.hiddenBundles, [bundle],
+            "A failed connection still needs explicit retry or the enabled startup apply policy")
+        XCTAssertTrue(try XCTUnwrap(fixture.model.managementItems.first).isPending)
+        XCTAssertNotNil(fixture.model.trayPlacementFailure(id: "session:startup"))
+    }
+
+    @MainActor
     func testNativeStartupRecoveryStillScansWhenRebindFails() async throws {
         let fixture = try makeFixture(nativeStartupRecovery: true)
         defer { fixture.dispose() }

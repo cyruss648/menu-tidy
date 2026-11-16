@@ -151,6 +151,7 @@ final class MenuTidyModel: ObservableObject {
     @Published private(set) var positionRecoveryMessage: LocalizedMessage?
     @Published private(set) var isRecoveringPositions = false { didSet { rescheduleMaintenanceTimer() } }
     @Published private(set) var isRefreshing = false { didSet { if isRefreshing { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
+    @Published private(set) var isReconnectingMenuBarClient = false
     @Published private(set) var isApplying = false { didSet { if isApplying { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
     @Published private(set) var managementMessage: LocalizedMessage?
     @Published private(set) var managementError: LocalizedMessage?
@@ -165,6 +166,7 @@ final class MenuTidyModel: ObservableObject {
     var settingsVisible = false { didSet { resetIdleTime(); rescheduleMaintenanceTimer() } }
     var contextMenuVisible = false { didSet { resetIdleTime(); if contextMenuVisible { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
     var onShowSettings: (() -> Void)?
+    var onReconnectMenuBarClient: ((Bool) -> Bool)?
     var onMemoryPressure: (() -> Void)?
 
     private let defaults: UserDefaults
@@ -308,6 +310,10 @@ final class MenuTidyModel: ObservableObject {
     private var snapshotOwnerKeys: [pid_t: ScanOwnerKey] = [:]
     private var scanSchedule = MenuBarScanSchedule<ScanOwnerKey>()
     private var launchDiscovery = MenuBarLaunchDiscoverySchedule<ScanOwnerKey>()
+    private var clientRecoveryPolicy = MenuBarClientRecoveryPolicy()
+    private var disabledDiscoveryOwners: [String: MenuBarClientRecoveryPolicy.Owner] = [:]
+    private var clientRecoveryTask: Task<Void, Never>?
+    private static let clientRecoveryBootKey = "menuBarClientRecoveryBoot.v1"
     private var actualGroups: [String: ItemVisibility] = [:]
     private var lastKnownObservedGroups = ObservedItemGroupHistory()
     private var workTask: Task<Void, Never>?
@@ -436,6 +442,23 @@ final class MenuTidyModel: ObservableObject {
 
     func trayPlacementFailure(id: String) -> LocalizedMessage? { trayPlacementErrors[id] ?? itemApplicationIssues[id] }
 
+    func trayDiscoveryConnectionFailed(id: String) -> Bool {
+        guard let item = itemsByID[id], item.isAwaitingDiscovery,
+              let bundle = item.bundleIdentifier else { return false }
+        return disabledDiscoveryOwners[bundle] != nil
+    }
+
+    func trayItemNeedsAttention(_ item: ManagedItemRow) -> Bool {
+        trayDiscoveryConnectionFailed(id: item.id) ||
+            (item.canMove && (item.isPending || trayPlacementFailure(id: item.id) != nil))
+    }
+
+    func reconnectMenuBarClient(id: String) {
+        guard let bundle = itemsByID[id]?.bundleIdentifier,
+              let owner = disabledDiscoveryOwners[bundle] else { return }
+        startMenuBarClientRecovery(owner: owner, userInitiated: true)
+    }
+
     func trayPlacementMessage(id: String) -> LocalizedMessage? {
         if let error = trayPlacementFailure(id: id) { return error }
         if itemsByID[id]?.isPending == true && !trayPlacementIsPending(id: id) {
@@ -487,7 +510,7 @@ final class MenuTidyModel: ObservableObject {
     }
     var trayPlacementOutstandingCount: Int {
         trayPlacementPresentationCount(trayPlacementCandidates.filter(\.isOutstanding)) +
-            managementItems.filter(\.isAwaitingDiscovery).count
+            managementItems.filter { trayDiscoveryConnectionFailed(id: $0.id) }.count
     }
 
     private func trayPlacementPresentationCount(_ candidates: [TrayPlacementPolicy.Candidate]) -> Int {
@@ -716,6 +739,7 @@ final class MenuTidyModel: ObservableObject {
     /// the same processes does not restart rejected work or create a retry loop.
     private func reconnectDiscoveredTrayItems() {
         guard ensureDesktopSessionAvailable(), !sessionResumePending,
+              !nativeStartupRecoveryScheduled,
               usesIndependentTray, hasCompletedSetup, !panelInteractionBusy, trayPlacementTask == nil,
               accessibilityGranted, (usesNativeVisibility ? nativeVisibilityAccessAvailable : menuBarPositionAccessAvailable), positionRecoveryMessage == nil,
               !stopping, !preparingToTerminate else { return }
@@ -795,6 +819,7 @@ final class MenuTidyModel: ObservableObject {
 
     func waitForTestingOperations() async {
         await workTask?.value
+        await clientRecoveryTask?.value
         await trayPlacementTask?.value
         await panelActivationTask?.value
         await workTask?.value
@@ -1309,6 +1334,7 @@ final class MenuTidyModel: ObservableObject {
         runStartupPendingApplication(at: now)
         runNativeStartupRecovery(at: now)
         runPeriodicPendingApplication(at: now)
+        scheduleMenuBarClientRecoveryIfNeeded()
         schedulePassiveIconCapture()
         rescheduleMaintenanceTimer()
     }
@@ -1684,6 +1710,7 @@ final class MenuTidyModel: ObservableObject {
                 } else if scanSucceeded && !Task.isCancelled {
                     self.reconnectDiscoveredTrayItems()
                 }
+                self.scheduleMenuBarClientRecoveryIfNeeded()
             }
             do {
                 await self.passiveIconCaptureTask?.value
@@ -3745,10 +3772,12 @@ final class MenuTidyModel: ObservableObject {
         let previousSnapshots = snapshots
         let previousSnapshotOwnerKeys = snapshotOwnerKeys
         let newSnapshots: [MenuBarItemSnapshot]
+        let ownerReadFailures: [MenuBarOwnerReadFailure]
         do {
             if let testingEnvironment {
                 try await testingEnvironment.beforeScan?()
                 newSnapshots = testingEnvironment.snapshots
+                ownerReadFailures = testingEnvironment.ownerReadFailures
             } else {
                 newSnapshots = try await access.scan(owners: owners, menuBands: bands,
                 positions: usesNativeVisibility && !needsLegacyPositionRecovery ? [:] : ((try? positionStore.readPositions()) ?? [:]),
@@ -3757,6 +3786,7 @@ final class MenuTidyModel: ObservableObject {
                 }.keys),
                 hiddenApplicationBundles: managedHiddenApplicationBundles,
                 enumerationOwners: scanOwners)
+                ownerReadFailures = await access.ownerReadFailures()
             }
         } catch {
             logOwnAnchors(nil, scanID: scanID)
@@ -3854,15 +3884,29 @@ final class MenuTidyModel: ObservableObject {
         }
         try requireDesktopSession(generation: sessionGeneration)
         published = true
-        launchDiscovery.reconcile(current: currentOwnerKeys, observed: Set(snapshots.compactMap { snapshot in
+        let observedOwnerKeys = Set(snapshots.compactMap { snapshot in
             snapshotOwnerKeys[snapshot.processIdentifier]
-        }))
+        })
+        // An app may intentionally omit its icon or enable it later in the
+        // same process. Preserve intent without pending work, and check only
+        // at the passive interval after the bounded launch window.
+        if usesNativeVisibility {
+            for owner in owners where !observedOwnerKeys.contains(ScanOwnerKey(owner)) {
+                guard owner.pid > 0, owner.launchTime.isFinite, owner.launchTime > 0,
+                      let bundle = owner.bundleIdentifier,
+                      nativeTrayChoices.group(bundle: bundle) != nil else { continue }
+                launchDiscovery.registerPersistent(ScanOwnerKey(owner), at: maintenanceUptime,
+                    initialDelay: launchDiscovery.persistentRetryInterval)
+            }
+        }
+        launchDiscovery.reconcile(current: currentOwnerKeys, observed: observedOwnerKeys)
         let observedBundles = Set(snapshots.compactMap(\.bundleIdentifier))
         let currentBundles = Set(owners.compactMap(\.bundleIdentifier))
         nativeDiscoveryRevealBundles = nativeDiscoveryRevealBundles.filter { bundle in
             !observedBundles.contains(bundle) &&
                 currentBundles.contains(bundle)
         }
+        reconcileMenuBarClientFailures(owners: owners, scannedOwners: scanOwners, failures: ownerReadFailures)
         refreshNativeAssessmentIfNeeded()
         rememberObservedGroups(scannedOwners: scanOwners)
         rebuildRows()
@@ -4016,14 +4060,16 @@ final class MenuTidyModel: ObservableObject {
             let runningBundles = testingEnvironment?.runningBundles ??
                 Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
             for (bundle, group) in nativeTrayChoices.choices
-                where group != .visible && runningBundles.contains(bundle) && !representedBundles.contains(bundle) {
+                where runningBundles.contains(bundle) && !representedBundles.contains(bundle) {
                 let name = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
                     .flatMap { FileManager.default.displayName(atPath: $0.path) } ?? bundle
                 result.append(ManagedItemRow(id: "native-app:" + bundle, name: name, ownerName: name,
                     bundleIdentifier: bundle, icon: applicationIcon(for: bundle), group: group,
                     isAvailable: true, canMove: false,
-                    detail: LocalizedMessage("应用正在运行，但 macOS 尚未提供可操作的菜单栏身份；已保留当前选择，等待刷新确认。"),
-                    isPending: true, presentationIdentity: .application(bundle: bundle),
+                    detail: disabledDiscoveryOwners[bundle] == nil
+                        ? LocalizedMessage("当前未读到菜单栏图标，可能已在应用内关闭。分类已保留，图标出现后会自动接回。")
+                        : LocalizedMessage("Menu Tidy 暂时无法读取此应用的菜单栏图标。选择已保留，可重新连接后恢复。"),
+                    isPending: disabledDiscoveryOwners[bundle] != nil, presentationIdentity: .application(bundle: bundle),
                     isAwaitingDiscovery: true))
             }
         }
@@ -5730,6 +5776,9 @@ final class MenuTidyModel: ObservableObject {
         nativeStartupRecoveryScanPending = false
         nativeStartupRecoveryRebindSucceeded = true
         nativeDiscoveryRevealBundles.removeAll()
+        clientRecoveryTask?.cancel()
+        clientRecoveryTask = nil
+        isReconnectingMenuBarClient = false
         cancelPassiveIconCapture()
         arrangementSequence += 1
         visibilityDiagnosticsStopped = true
@@ -5856,6 +5905,16 @@ private extension MenuTidyModel {
         nativeStartupRecoveryRebindSucceeded = rebindSucceeded
         if !rebindSucceeded {
             Self.diagnosticLogger.notice("nativeStartupRebind rebindSucceeded=false scanAfterFailure=true")
+        } else {
+            // Releasing our own confirmed assertion starts a new connection
+            // cycle even when the application process and AX ID stay the same.
+            // Retire only successful attempts; rejected work still needs its
+            // explicit retry policy and must not loop on ordinary discovery.
+            for (id, evidence) in nativeVisibilityEvidence
+                where evidence.target != nil && ownerIsCurrent(evidence.identity) &&
+                    trayConnectionAttempts[id] == evidence.identity {
+                trayConnectionAttempts.removeValue(forKey: id)
+            }
         }
         nativeVisibilityEvidence.removeAll()
         actualGroups.removeAll()
@@ -5933,6 +5992,8 @@ private extension MenuTidyModel {
             startupPendingApplicationNeedsRefresh = false
             finishStartupPendingApplication()
             applyAutomaticPendingTrayPlacements()
+        } else {
+            reconnectDiscoveredTrayItems()
         }
     }
 
@@ -6327,6 +6388,13 @@ private extension MenuTidyModel {
             }
             applicationScopes[bundle] = (group, owners)
         }
+        let unscopedOriginalRules = originalRules.filter { rule in
+            guard let bundle = rule.bundleIdentifier else { return true }
+            return applicationScopes[bundle] == nil
+        }
+        let unscopedIdentities = Dictionary(unscopedOriginalRules.compactMap { rule in
+            snapshots.first(where: { $0.id == rule.id }).flatMap(observedItemIdentity).map { (rule.id, $0) }
+        }, uniquingKeysWith: { first, _ in first })
         var appConflicts: Set<String> = []
         var systemConflicts: Set<String> = []
         // An empty unrelated backend owns nothing to recover and must not
@@ -6342,9 +6410,20 @@ private extension MenuTidyModel {
             throw MenuBarAccessError.rejected
         }
         try await scanNow()
-        let unscopedRules = originalRules.filter { rule in
-            guard let bundle = rule.bundleIdentifier else { return true }
-            return !applicationScopes.keys.contains(bundle)
+        // A system source may disappear or be replaced while this scan is
+        // suspended. It cannot inherit a new identity, but its stale ID must
+        // not reject independently pinned application owners in the batch.
+        let unscopedRules = unscopedOriginalRules.filter { rule in
+            guard let expected = unscopedIdentities[rule.id], ownerIsCurrent(expected),
+                  let current = snapshots.first(where: { $0.id == rule.id && $0.canMove }),
+                  observedItemIdentity(current) == expected else {
+                recordNativeApplicationFailure(MenuBarAccessError.disappeared, ids: [rule.id])
+                return false
+            }
+            return true
+        }
+        if unscopedRules.count != unscopedOriginalRules.count {
+            Self.diagnosticLogger.notice("nativeVisibility staleSourceSkipped=true count=\(unscopedOriginalRules.count - unscopedRules.count)")
         }
         var effectiveIDs = unscopedRules.map(\.id)
         var effectiveRules = unscopedRules
@@ -6908,5 +6987,117 @@ extension MenuTidyModel {
             (!retryOnly || itemApplicationIssues[$0.id] != nil || trayPlacementErrors[$0.id] != nil) }
         for row in targets { previewSetGroup(id: row.id, group: row.group) }
         managementMessage = LocalizedMessage("预览：已模拟确认 \(targets.count) 项；离线选择继续保留。")
+    }
+}
+
+@MainActor
+private extension MenuTidyModel {
+    func clientRecoveryOwner(_ owner: MenuBarOwner) -> MenuBarClientRecoveryPolicy.Owner? {
+        guard let bundle = owner.bundleIdentifier,
+              owner.pid > 0, owner.launchTime.isFinite, owner.launchTime > 0,
+              NativeTrayChoices.acceptsObserved(bundle: bundle),
+              let group = nativeTrayChoices.group(bundle: bundle), group != .visible else { return nil }
+        return .init(pid: owner.pid, bundleIdentifier: bundle, launchTime: owner.launchTime)
+    }
+
+    func reconcileMenuBarClientFailures(owners: [MenuBarOwner], scannedOwners: [MenuBarOwner],
+                                       failures: [MenuBarOwnerReadFailure]) {
+        let current = Set(owners.compactMap(clientRecoveryOwner))
+        let observed = Set(current.filter { owner in
+            snapshots.contains { $0.processIdentifier == owner.pid && $0.bundleIdentifier == owner.bundleIdentifier }
+        })
+        let errors = Dictionary(failures.compactMap { failure in
+            clientRecoveryOwner(failure.owner).map { ($0, failure.error) }
+        }, uniquingKeysWith: { first, _ in first })
+        clientRecoveryPolicy.reconcile(current: current, observed: observed,
+            queried: Set(scannedOwners.compactMap(clientRecoveryOwner)).union(errors.keys), errors: errors)
+        disabledDiscoveryOwners = Dictionary(current.filter {
+            clientRecoveryPolicy.hasDisabledConnection($0)
+        }.sorted { $0.pid < $1.pid }.map { ($0.bundleIdentifier, $0) },
+            uniquingKeysWith: { first, _ in first })
+    }
+
+    var clientRecoveryBootIdentifier: String? {
+        testingEnvironment?.clientRecoveryBootIdentifier ?? MenuBarClientRecovery.bootIdentifier
+    }
+
+    func clientRecoveryIsSafe(userInitiated: Bool) -> Bool {
+        started && !stopping && !preparingToTerminate && !isUIPreview && !demoMode &&
+            usesNativeVisibility && accessibilityGranted && hasCompletedSetup &&
+            desktopSessionAvailable && !sessionResumePending && !nativeStartupRecoveryScheduled &&
+            !automaticPendingApplicationBusy && !isArranging && positionRecoveryMessage == nil &&
+            (userInitiated || !settingsVisible)
+    }
+
+    func scheduleMenuBarClientRecoveryIfNeeded() {
+        guard let boot = clientRecoveryBootIdentifier,
+              defaults.string(forKey: Self.clientRecoveryBootKey) != boot,
+              let owner = clientRecoveryPolicy.nextAutomaticCandidate else { return }
+        startMenuBarClientRecovery(owner: owner, userInitiated: false)
+    }
+
+    func clientRecoveryOwnerIsCurrent(_ owner: MenuBarClientRecoveryPolicy.Owner) -> Bool {
+        if let testingEnvironment {
+            return testingEnvironment.identities.values.contains {
+                $0.pid == owner.pid && $0.bundleIdentifier == owner.bundleIdentifier &&
+                    $0.launchTime == owner.launchTime
+            }
+        }
+        guard let app = NSRunningApplication(processIdentifier: owner.pid), !app.isTerminated else { return false }
+        return app.bundleIdentifier == owner.bundleIdentifier &&
+            MenuBarProcessIdentity.launchTime(for: app) == owner.launchTime
+    }
+
+    func startMenuBarClientRecovery(owner: MenuBarClientRecoveryPolicy.Owner, userInitiated: Bool) {
+        guard clientRecoveryTask == nil, clientRecoveryIsSafe(userInitiated: userInitiated),
+              ensureDesktopSessionAvailable(), clientRecoveryOwnerIsCurrent(owner),
+              disabledDiscoveryOwners[owner.bundleIdentifier] == owner else { return }
+        let generation = desktopSessionGeneration
+        isReconnectingMenuBarClient = true
+        clientRecoveryTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.clientRecoveryTask = nil
+                self.isReconnectingMenuBarClient = false
+            }
+            let confirmed: Bool
+            if let testingEnvironment = self.testingEnvironment {
+                confirmed = await testingEnvironment.probeFreshMenuBarClient?(owner) ?? false
+            } else {
+                confirmed = await MenuBarClientRecovery.freshClientSeesItem(owner)
+            }
+            guard !Task.isCancelled, generation == self.desktopSessionGeneration,
+                  self.ensureDesktopSessionAvailable(), self.clientRecoveryIsSafe(userInitiated: userInitiated),
+                  self.clientRecoveryOwnerIsCurrent(owner),
+                  self.disabledDiscoveryOwners[owner.bundleIdentifier] == owner,
+                  !self.snapshots.contains(where: { $0.bundleIdentifier == owner.bundleIdentifier }) else { return }
+            self.clientRecoveryPolicy.markChecked(owner)
+            guard confirmed else {
+                if userInitiated {
+                    self.managementMessage = LocalizedMessage("尚未取得可见图标的独立确认，已保留选择并继续发现。")
+                }
+                return
+            }
+            guard userInitiated || self.clientRecoveryBootIdentifier.map({
+                self.defaults.string(forKey: Self.clientRecoveryBootKey) != $0
+            }) == true else { return }
+            // terminateNow can exit inside the callback. Persist the budget
+            // before handing off so a replacement client cannot restart again.
+            let previousBoot = self.defaults.string(forKey: Self.clientRecoveryBootKey)
+            if let boot = self.clientRecoveryBootIdentifier {
+                self.defaults.set(boot, forKey: Self.clientRecoveryBootKey)
+                guard self.defaults.synchronize() || userInitiated else {
+                    self.defaults.set(previousBoot, forKey: Self.clientRecoveryBootKey)
+                    return
+                }
+            }
+            Self.diagnosticLogger.notice("menuBarClientRecovery relaunchRequested=true freshClientConfirmed=true automatic=\(!userInitiated)")
+            if self.onReconnectMenuBarClient?(self.settingsVisible) == true {
+                Self.diagnosticLogger.notice("menuBarClientRecovery relaunchScheduled=true freshClientConfirmed=true automatic=\(!userInitiated)")
+            } else {
+                self.defaults.set(previousBoot, forKey: Self.clientRecoveryBootKey)
+                self.managementError = LocalizedMessage("读取连接需要重新建立；请正常退出并重新打开 Menu Tidy，已保存的选择会保留。")
+            }
+        }
     }
 }

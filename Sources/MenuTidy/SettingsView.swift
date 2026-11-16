@@ -76,13 +76,13 @@ struct SettingsView: View {
     private var currentTrayItems: [ManagedItemRow] { model.managementItems }
     private var unavailableItems: [ManagedItemRow] { model.items.filter { !$0.isAvailable } }
     private var attentionCount: Int {
-        currentTrayItems.filter { $0.isAwaitingDiscovery || ($0.canMove && ($0.isPending || model.trayPlacementFailure(id: $0.id) != nil)) }.count
+        currentTrayItems.filter { model.trayItemNeedsAttention($0) }.count
     }
     private var filteredTrayItems: [ManagedItemRow] {
         let query = presentation.traySearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return currentTrayItems.filter { item in
             let group = model.trayPlacementGroup(id: item.id)
-            let needsAttention = item.isAwaitingDiscovery || (item.canMove && (item.isPending || model.trayPlacementFailure(id: item.id) != nil))
+            let needsAttention = model.trayItemNeedsAttention(item)
             let matchesFilter = presentation.trayFilter == "all" || presentation.trayFilter == group.id ||
                 (presentation.trayFilter == "attention" && needsAttention)
             let names = model.items.filter { item.underlyingIDs.contains($0.id) }.map(\.name)
@@ -405,6 +405,7 @@ struct SettingsView: View {
 
     private func trayItemRow(_ item: ManagedItemRow) -> some View {
         let pending = model.trayPlacementIsPending(id: item.id)
+        let connectionFailed = model.trayDiscoveryConnectionFailed(id: item.id)
         let message = model.trayPlacementFailure(id: item.id).map(copy)
         let needsConfirmation = item.isPending && !pending && message == nil
         let retryTitle = message == nil ? copy("应用") : copy(model.trayPlacementRetryTitle(id: item.id))
@@ -417,7 +418,8 @@ struct SettingsView: View {
                         ProgressView().controlSize(.small)
                         rowBadge(copy("处理中"), color: accent)
                     } else if item.isAwaitingDiscovery {
-                        rowBadge(copy("等待发现图标"), color: .orange)
+                        rowBadge(connectionFailed ? copy("读取连接异常") : copy("当前无图标"),
+                            color: connectionFailed ? .orange : .secondary)
                     } else if !item.canMove {
                         rowBadge(copy("系统保留"), color: .secondary)
                     } else if message != nil {
@@ -435,8 +437,9 @@ struct SettingsView: View {
                     Text(copy("正在按顺序处理，可继续更改选择。"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 } else if item.isAwaitingDiscovery {
-                    Text(copy("应用正在运行，尚未读到菜单栏图标；选择已保留，将继续发现。"))
-                        .font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2)
+                    Text(copy(item.detail))
+                        .font(.system(size: 11))
+                        .foregroundStyle(connectionFailed ? Color.orange : Color.secondary).lineLimit(2)
                 } else if item.hasMixedGroups {
                     Text(copy("已有图标分类不一致，请明确选择此应用的显示方式。"))
                         .font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2)
@@ -448,7 +451,13 @@ struct SettingsView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if !pending && (message != nil || needsConfirmation) && item.canMove {
+            if connectionFailed {
+                Button(model.isReconnectingMenuBarClient ? copy("正在检查…") : copy("重新连接")) {
+                    model.reconnectMenuBarClient(id: item.id)
+                }
+                .controlSize(.small).disabled(trayControlsDisabled || model.isReconnectingMenuBarClient)
+                .help(copy("检查独立读取连接；确认连接失效后，正常重新打开 Menu Tidy 并恢复已保存的分类。"))
+            } else if !pending && (message != nil || needsConfirmation) && item.canMove {
                 Button(retryTitle) { model.retryTrayPlacement(id: item.id) }
                     .controlSize(.small).disabled(trayControlsDisabled)
                     .accessibilityLabel("\(retryTitle)\(item.name)")

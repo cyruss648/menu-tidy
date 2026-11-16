@@ -31,6 +31,34 @@ final class MenuTidyLaunchPlanTests: XCTestCase {
         }
     }
 
+    func testFreshClientCheckCannotStartNormalUIOrAnInputProbe() {
+        XCTAssertEqual(MenuTidyLaunchPlan.parse(["--check-menu-bar-owner", "example.App"]), .ownerCheck("example.App"))
+        XCTAssertEqual(MenuTidyLaunchPlan.parse(["--check-menu-bar-owner", "single_component"]), .ownerCheck("single_component"))
+        for flags in [["--check-menu-bar-owner"], ["example.App", "--check-menu-bar-owner"],
+                      ["--check-menu-bar-owner", "bad/path"],
+                      ["--check-menu-bar-owner", "example.App", "--settings"],
+                      ["--check-menu-bar-owner", "example.App", "--observe-menu-bar-owner"],
+                      ["--check-menu-bar-owner", "example.App", "--probe-private-record"]] {
+            XCTAssertEqual(MenuTidyLaunchPlan.parse(flags), .rejected)
+        }
+    }
+
+    func testRelaunchHelperNeedsAnExactFiniteParentIdentityAndPresentation() {
+        XCTAssertEqual(MenuTidyLaunchPlan.parse(["--relaunch-after-exit", "42", "42", "background"]),
+            .relaunchAfterExit(pid: 42, launchTime: 42, showSettings: false))
+        XCTAssertEqual(MenuTidyLaunchPlan.parse(["--relaunch-after-exit", "42", "100.5", "settings"]),
+            .relaunchAfterExit(pid: 42, launchTime: 100.5, showSettings: true))
+        for flags in [
+            ["--relaunch-after-exit", "0", "100", "background"],
+            ["--relaunch-after-exit", "42", "nan", "background"],
+            ["--relaunch-after-exit", "42", "inf", "background"],
+            ["--relaunch-after-exit", "42", "-1", "background"],
+            ["--relaunch-after-exit", "42", "100", "other"],
+            ["--relaunch-after-exit", "42", "100"],
+            ["--relaunch-after-exit", "42", "100", "background", "--settings"]
+        ] { XCTAssertEqual(MenuTidyLaunchPlan.parse(flags), .rejected) }
+    }
+
     func testEachInputModeNeedsItsOwnExactSelection() {
         XCTAssertEqual(MenuTidyLaunchPlan.parse(["--probe-legacy-no-cursor"]), .legacyNoCursor)
         XCTAssertEqual(MenuTidyLaunchPlan.parse(["--probe-private-record"]), .privateRecord)

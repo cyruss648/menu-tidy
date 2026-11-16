@@ -4,6 +4,15 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.25] - 2026-11-16
+
+- Recover when an icon is visible in the menu bar but Menu Tidy keeps waiting for discovery. An orderly relaunch requires repeated denied reads for the same application process and independent confirmation that the original icon is readable. Automatic recovery is limited to once per boot, with an explicit reconnect action available.
+- Treat ordinary icon absence, including an icon disabled inside its application, as a neutral “No icon” state. Preserve its category, exclude it from outstanding and attention counts, and keep low-frequency discovery so an icon enabled later in the same process reconnects automatically.
+- Fix successful connection attempts blocking rediscovery after startup recovery releases their confirmed hiding state. Ordinary automatic connections wait for the startup recovery window, and rejected connections retain their retry restrictions.
+- Isolate an expired system icon source during startup batch application so other applications with valid process identities can continue. A changed application process still stops the old request.
+
+Verification: the local full gate passed 110 Python, 540 Swift core, and 180 application integration tests. Native macOS arm64 candidate acceptance confirmed automatic category restoration for Sogou and other icons, a neutral state for the intentionally disabled mail icon, zero attention items, and unchanged categories, rules, and drafts. The tag workflow validates both architecture packages and signed feeds. Intel desktop interaction, a system cold boot, and the complete fault-triggered automatic relaunch path remain unverified. Uses the project's self-signed release identity and is not Apple notarized.
+
 ## [0.7.24] - 2026-11-15
 
 - Preserve observed tray inventory for the exact owner process when native assessment removes its AX nodes; discard geometry and replace retained inventory when fresh nodes appear.

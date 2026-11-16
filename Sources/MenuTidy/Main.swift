@@ -18,6 +18,12 @@ enum MenuTidyApp {
         case .ownerObserver(let bundleIdentifier):
             runMenuBarVisibilityObserver(bundleIdentifier: bundleIdentifier)
             return
+        case .ownerCheck(let bundleIdentifier):
+            runMenuBarVisibilityObserver(bundleIdentifier: bundleIdentifier, singleSample: true)
+            return
+        case .relaunchAfterExit(let pid, let launchTime, let showSettings):
+            relaunchMenuTidyAfterExit(pid: pid, launchTime: launchTime, showSettings: showSettings)
+            return
         case .statusItems:
             runTargetedStatusItemProbe()
             return
@@ -64,7 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if !CommandLine.arguments.contains("--demo-items"),
            let id = Bundle.main.bundleIdentifier,
            let existing = NSRunningApplication.runningApplications(withBundleIdentifier: id)
-            .first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+            .first(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier &&
+                $0.activationPolicy != .prohibited }) {
             existing.activate(options: [.activateAllWindows])
             logLifecycle("activateExistingInstance")
             NSApp.terminate(nil)
@@ -85,6 +92,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             self, selector: #selector(systemAppearanceChanged),
             name: Notification.Name("AppleInterfaceThemeChangedNotification"), object: nil)
         model.onShowSettings = { [weak self] in self?.showSettings() }
+        model.onReconnectMenuBarClient = { [weak self] showSettings in
+            guard let self, self.terminationTask == nil,
+                  MenuBarClientRecovery.scheduleRelaunch(showSettings: showSettings) else { return false }
+            NSApp.terminate(nil)
+            return true
+        }
         model.onMemoryPressure = { [weak self] in self?.releaseClosedSettingsContent() }
         model.start()
         if !model.hasCompletedSetup || !model.accessibilityGranted || CommandLine.arguments.contains("--settings") || CommandLine.arguments.contains("--demo-items") || model.isUIPreview {

@@ -75,6 +75,7 @@ final class ItemPresentationIntegrationTests: XCTestCase {
         let row = try XCTUnwrap(fixture.model.managementItems.first)
         XCTAssertEqual(fixture.model.managementItems.count, 1)
         XCTAssertTrue(row.isPending)
+        XCTAssertTrue(fixture.model.trayItemNeedsAttention(row))
         XCTAssertNotNil(fixture.model.trayPlacementFailure(id: row.id))
         XCTAssertEqual(Set(row.underlyingIDs), ["session:a", "session:b"])
         XCTAssertEqual(fixture.model.trayPlacementOutstandingCount, 1)

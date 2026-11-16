@@ -109,6 +109,23 @@ final class NativeBatchApplicationIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testVanishedSystemSourceDoesNotRejectUnchangedApplicationPeers() async throws {
+        let f = try Fixture(includeTransientSystem: true); defer { f.dispose() }
+        f.system.beforeScan = {
+            f.system.snapshots.removeAll { $0.id == "session:system" }
+        }
+        f.model.applyPendingTrayPlacements()
+        await f.model.waitForTestingOperations()
+
+        XCTAssertEqual(f.system.visibilityBatches, [[f.a: true, f.b: true]])
+        for bundle in [f.a, f.b] {
+            XCTAssertFalse(try XCTUnwrap(f.model.items.first { $0.bundleIdentifier == bundle }).isPending)
+        }
+        XCTAssertEqual(f.model.trayPlacementGroup(id: "session:system"), .collapsible)
+        XCTAssertNotNil(f.model.trayPlacementFailure(id: "session:system"))
+    }
+
+    @MainActor
     func testHiddenOwnerRelaunchIsDiscoveredAndReconnected() async throws {
         let f = try Fixture(); defer { f.dispose() }
         f.model.applyPendingTrayPlacements()
@@ -195,7 +212,9 @@ final class NativeBatchApplicationIntegrationTests: XCTestCase {
         let waiting = try XCTUnwrap(f.model.managementItems.first { $0.bundleIdentifier == f.a })
         XCTAssertTrue(waiting.isAwaitingDiscovery)
         XCTAssertFalse(waiting.canMove)
-        XCTAssertEqual(f.model.trayPlacementOutstandingCount, 1)
+        XCTAssertFalse(waiting.isPending)
+        XCTAssertFalse(f.model.trayItemNeedsAttention(waiting))
+        XCTAssertEqual(f.model.trayPlacementOutstandingCount, 0)
     }
 
     @MainActor
@@ -230,7 +249,7 @@ final class NativeBatchApplicationIntegrationTests: XCTestCase {
         let system = MenuTidyTestEnvironment()
         let model: MenuTidyModel
 
-        init(includeVisible: Bool = false) throws {
+        init(includeVisible: Bool = false, includeTransientSystem: Bool = false) throws {
             defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
             defaults.set(true, forKey: "hasCompletedSetup")
             defaults.set(false, forKey: "startupApplyPending")
@@ -245,6 +264,17 @@ final class NativeBatchApplicationIntegrationTests: XCTestCase {
                     ownerName: bundle, bundleIdentifier: bundle, frame: CGRect(x: 20 * offset, y: 0, width: 22, height: 22),
                     hasReliableGeometry: true, canMove: true, detail: "", persistentIdentity: false, ownIdentifier: nil))
                 system.identities[id] = ObservedItemGroupHistory.Identity(id: id, pid: pid, bundleIdentifier: bundle, launchTime: 10)
+            }
+            if includeTransientSystem {
+                let id = "session:system", bundle = "com.apple.fixture"
+                system.snapshots.append(MenuBarItemSnapshot(id: id, processIdentifier: 401, name: "System",
+                    ownerName: "System", bundleIdentifier: bundle, frame: CGRect(x: 80, y: 0, width: 22, height: 22),
+                    hasReliableGeometry: true, canMove: true, detail: "", persistentIdentity: false, ownIdentifier: nil))
+                system.identities[id] = ObservedItemGroupHistory.Identity(id: id, pid: 401,
+                    bundleIdentifier: bundle, launchTime: 10)
+                var saved = ItemRuleBook()
+                saved.set(ItemRule(id: id, name: "System", bundleIdentifier: bundle, visibility: .collapsible))
+                defaults.set(try JSONEncoder().encode(saved), forKey: "itemRules.v1")
             }
             model = MenuTidyModel(testing: system, defaults: defaults)
         }

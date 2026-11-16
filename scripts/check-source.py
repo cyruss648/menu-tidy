@@ -179,6 +179,12 @@ return
 case .ownerObserver(let bundleIdentifier):
 runMenuBarVisibilityObserver(bundleIdentifier: bundleIdentifier)
 return
+case .ownerCheck(let bundleIdentifier):
+runMenuBarVisibilityObserver(bundleIdentifier: bundleIdentifier, singleSample: true)
+return
+case .relaunchAfterExit(let pid, let launchTime, let showSettings):
+relaunchMenuTidyAfterExit(pid: pid, launchTime: launchTime, showSettings: showSettings)
+return
 case .statusItems:
 runTargetedStatusItemProbe()
 return

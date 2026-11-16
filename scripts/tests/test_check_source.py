@@ -474,6 +474,17 @@ const char *example = "CGPostKeyboardEvent(0, key, true)";
         errors = CHECKS.diagnostic_input_violations(changed, path)
         self.assertTrue(any('complete launch plan before app setup' in reason for _, reason in errors))
 
+    def test_read_check_and_relaunch_cannot_dispatch_an_input_probe(self):
+        path = Path('Sources/MenuTidy/Main.swift')
+        source = (SCRIPT.parents[1] / path).read_text()
+        for call in (
+            'runMenuBarVisibilityObserver(bundleIdentifier: bundleIdentifier, singleSample: true)',
+            'relaunchMenuTidyAfterExit(pid: pid, launchTime: launchTime, showSettings: showSettings)',
+        ):
+            changed = source.replace(call, 'runLegacyNoCursorEventProbe()')
+            errors = CHECKS.diagnostic_input_violations(changed, path)
+            self.assertTrue(any('complete launch plan before app setup' in reason for _, reason in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

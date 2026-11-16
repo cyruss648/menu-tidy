@@ -5,6 +5,8 @@ import Foundation
 public enum MenuTidyLaunchPlan: Equatable, Sendable {
     case normal
     case ownerObserver(String)
+    case ownerCheck(String)
+    case relaunchAfterExit(pid: Int32, launchTime: Double, showSettings: Bool)
     case statusItems
     case targetedEvents
     case legacyNoCursor
@@ -16,16 +18,26 @@ public enum MenuTidyLaunchPlan: Equatable, Sendable {
         // A retired input mode remains inert even in a mixed command line.
         if arguments.contains("--probe-private-record-command") { return .disabledCommand }
         let flags = Set(arguments)
-        guard flags.count == arguments.count else { return .rejected }
+        let options = arguments.filter { $0.hasPrefix("--") }
+        guard Set(options).count == options.count else { return .rejected }
         if flags.contains("--preview-ui") {
             return flags.isSubset(of: ["--preview-ui", "--preview-permissions"]) ? .normal : .rejected
         }
-        if flags.contains("--observe-menu-bar-owner") {
-            guard arguments.count == 2, arguments[0] == "--observe-menu-bar-owner",
+        if flags.contains("--observe-menu-bar-owner") || flags.contains("--check-menu-bar-owner") {
+            guard arguments.count == 2,
+                  ["--observe-menu-bar-owner", "--check-menu-bar-owner"].contains(arguments[0]),
                   arguments[1].count <= 255,
-                  arguments[1].range(of: #"^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"#,
+                  arguments[1].range(of: #"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$"#,
                     options: .regularExpression) != nil else { return .rejected }
-            return .ownerObserver(arguments[1])
+            return arguments[0] == "--check-menu-bar-owner"
+                ? .ownerCheck(arguments[1]) : .ownerObserver(arguments[1])
+        }
+        if flags.contains("--relaunch-after-exit") {
+            guard arguments.count == 4, arguments[0] == "--relaunch-after-exit",
+                  let pid = Int32(arguments[1]), pid > 0,
+                  let launchTime = Double(arguments[2]), launchTime.isFinite, launchTime > 0,
+                  ["background", "settings"].contains(arguments[3]) else { return .rejected }
+            return .relaunchAfterExit(pid: pid, launchTime: launchTime, showSettings: arguments[3] == "settings")
         }
         if flags.isSubset(of: ["--settings", "--demo-items"]) { return .normal }
         if flags == ["--probe-legacy-no-cursor"] { return .legacyNoCursor }

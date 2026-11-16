@@ -520,7 +520,7 @@
 "应用 {0}" = "Application {0}";
 "应用后台排序" = "Apply background arrangement";
 "应用暂未响应，当前显示状态尚未确认。选择已保留，可以重试。" = "The app has not responded; its visibility is unconfirmed. Your choice is preserved and can be retried.";
-"应用正在运行，但 macOS 尚未提供可操作的菜单栏身份；已保留当前选择，等待刷新确认。" = "The app is running, but macOS has not provided an actionable menu bar identity yet. The current choice is preserved until a refresh confirms it.";
+"当前未读到菜单栏图标，可能已在应用内关闭。分类已保留，图标出现后会自动接回。" = "No menu bar icon is currently available. It may be disabled in the app. Your category is saved and will reconnect automatically when the icon appears.";
 "应用重新启动后，部分图标的原显示设置尚未恢复。恢复记录已保留，请点击“重试恢复”；不会自动反复重试。" = "Some previous visibility settings remain unrestored after restarting the app. Recovery records are preserved. Click \"Retry Recovery\"; retries will not run repeatedly in the background.";
 "当前 macOS 未提供可用的原生菜单栏隐藏后端。选择已保留。" = "This macOS version does not provide a usable native menu bar hiding backend. Your choices are preserved.";
 "当前图标身份无法确认，选择未执行。请重新检测后再试。" = "The current icon identity is unconfirmed. The choice was not executed. Check again and retry.";
@@ -812,5 +812,11 @@
 "（AX 返回码 {0}）" = " (AX code {0})";
 "；未发送鼠标或键盘事件。" = "; no mouse or keyboard events were sent.";
 /* Discovery is separate from protected system items. */
-"等待发现图标" = "Waiting for icon discovery";
-"应用正在运行，尚未读到菜单栏图标；选择已保留，将继续发现。" = "The app is running, but its menu bar icon has not been found. Your choice is saved and discovery will continue.";
+"当前无图标" = "No icon currently";
+"Menu Tidy 暂时无法读取此应用的菜单栏图标。选择已保留，可重新连接后恢复。" = "Menu Tidy temporarily cannot read this app's menu bar icon. Your choice is saved and can be restored after reconnecting.";
+"读取连接异常" = "Read connection unavailable";
+"重新连接" = "Reconnect";
+"正在检查…" = "Checking…";
+"检查独立读取连接；确认连接失效后，正常重新打开 Menu Tidy 并恢复已保存的分类。" = "Check with an independent read connection. If the current connection has failed, reopen Menu Tidy normally and restore your saved choices.";
+"尚未取得可见图标的独立确认，已保留选择并继续发现。" = "The visible icon has not been independently confirmed. Your choice is saved and discovery will continue.";
+"读取连接需要重新建立；请正常退出并重新打开 Menu Tidy，已保存的选择会保留。" = "The read connection needs to be reestablished. Quit and reopen Menu Tidy normally; your saved choices will be preserved.";

@@ -12,6 +12,11 @@ struct MenuBarOwner: Sendable {
     let launchTime: TimeInterval
 }
 
+struct MenuBarOwnerReadFailure: Sendable {
+    let owner: MenuBarOwner
+    let error: Int32
+}
+
 struct MenuBarItemSnapshot: Identifiable, Sendable {
     let id: String
     let processIdentifier: pid_t
@@ -341,6 +346,8 @@ actor MenuBarAccessibility {
     }
     private var entries: [String: Entry] = [:]
     private var scanReadBudget: AccessibilityScanBudget?
+    private var scanDisabledOwnerPIDs: Set<pid_t> = []
+    private var lastOwnerReadFailures: [MenuBarOwnerReadFailure] = []
     private var scanHiddenApplicationBundles: Set<String> = []
     private var scanApplicationMenuBarRoots: [pid_t: AXUIElement] = [:]
     private var scanRemoteWindowRoots: [pid_t: [AXUIElement]] = [:]
@@ -410,6 +417,7 @@ actor MenuBarAccessibility {
         self.menuBands = menuBands
         scanHiddenApplicationBundles = hiddenApplicationBundles
         scanReadBudget = AccessibilityScanBudget(startedAt: ProcessInfo.processInfo.systemUptime)
+        scanDisabledOwnerPIDs.removeAll(keepingCapacity: true)
         let scanStartedAt = ProcessInfo.processInfo.systemUptime
         scanApplicationMenuBarRoots.removeAll(keepingCapacity: true)
         scanRemoteWindowRoots.removeAll(keepingCapacity: true)
@@ -418,6 +426,7 @@ actor MenuBarAccessibility {
         var published = false
         defer {
             scanReadBudget = nil
+            scanDisabledOwnerPIDs.removeAll(keepingCapacity: true)
             scanHiddenApplicationBundles.removeAll()
             scanApplicationMenuBarRoots.removeAll(keepingCapacity: true)
             scanRemoteWindowRoots.removeAll(keepingCapacity: true)
@@ -450,6 +459,7 @@ actor MenuBarAccessibility {
             let application = AXUIElementCreateApplication(owner.pid)
             AXUIElementSetMessagingTimeout(application, 0.12)
             let (extrasResult, extrasValue) = copyAttribute(application, kAXExtrasMenuBarAttribute)
+            if extrasResult == .apiDisabled { scanDisabledOwnerPIDs.insert(owner.pid) }
             if owner.pid == ProcessInfo.processInfo.processIdentifier {
                 let elementPresent = element(extrasValue) != nil
                 Self.logger.notice("ownExtras pid=\(owner.pid) axError=\(extrasResult.rawValue) elementPresent=\(elementPresent)")
@@ -752,6 +762,12 @@ actor MenuBarAccessibility {
             }
         }
         published = true
+        lastOwnerReadFailures = scanDisabledOwnerPIDs.compactMap { pid in
+            ownersByPID[pid].map { MenuBarOwnerReadFailure(owner: $0, error: AXError.apiDisabled.rawValue) }
+        }
+        for failure in lastOwnerReadFailures {
+            Self.logger.notice("scanOwnerReadFailure ownerPID=\(failure.owner.pid) axError=\(failure.error) globalPermissionGranted=true")
+        }
         var observed: [MenuBarItemSnapshot] = []
         for candidate in unique {
             for entry in updated.values {
@@ -765,6 +781,8 @@ actor MenuBarAccessibility {
         for snapshot in observed { result[snapshot.id] = snapshot }
         return result.values.sorted { $0.frame.minX < $1.frame.minX }
     }
+
+    func ownerReadFailures() -> [MenuBarOwnerReadFailure] { lastOwnerReadFailures }
 
     /// Diagnose stable-key collisions using only already-read structural data.
     /// Bucket ordinals are local to this scan: never log names, real identifiers,
@@ -5585,6 +5603,7 @@ actor MenuBarAccessibility {
         // Other processes keep their bounded AX messaging off the UI thread.
         var value: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+        if scanReadBudget != nil, error == .apiDisabled { scanDisabledOwnerPIDs.insert(pid) }
         return (error, value)
     }
     private nonisolated static func copyOwnAttributeOnMainThread(

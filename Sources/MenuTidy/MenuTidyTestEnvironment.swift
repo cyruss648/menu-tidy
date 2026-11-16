@@ -22,6 +22,9 @@ final class MenuTidyTestEnvironment {
     var beforeScan: (() async throws -> Void)?
     /// Root processes queried this round; host results may belong to other owners.
     var enumerationOwners: [MenuBarOwner]?
+    var ownerReadFailures: [MenuBarOwnerReadFailure] = []
+    var clientRecoveryBootIdentifier = "test-boot"
+    var probeFreshMenuBarClient: ((MenuBarClientRecoveryPolicy.Owner) async -> Bool)?
     var beforeVisibilityReadForItem: ((String) async throws -> Void)?
     var beforeVisibilityRead: (() async throws -> Void)?
     var uptime: TimeInterval = 0

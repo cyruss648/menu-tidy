@@ -14,6 +14,7 @@ private final class MenuBarVisibilityObserver {
     }
 
     private let bundleIdentifier: String
+    private let singleSample: Bool
     private let started = ProcessInfo.processInfo.systemUptime
     // Leave half a second for the bounded final AX reply and JSON flush.
     private var deadline: TimeInterval { started + 89.5 }
@@ -25,8 +26,9 @@ private final class MenuBarVisibilityObserver {
     private var sequence = 0
     private let system = AXUIElementCreateSystemWide()
 
-    init(bundleIdentifier: String) {
+    init(bundleIdentifier: String, singleSample: Bool) {
         self.bundleIdentifier = bundleIdentifier
+        self.singleSample = singleSample
         // This changes only this client's AX request timeout, not an attribute
         // of any observed application. No AX actions or attribute writes exist.
         AXUIElementSetMessagingTimeout(system, 0.1)
@@ -35,6 +37,15 @@ private final class MenuBarVisibilityObserver {
     func run() {
         guard AXIsProcessTrusted() else {
             emit(["event": "unavailable", "reason": "accessibility-not-granted"])
+            return
+        }
+        if singleSample {
+            guard DesktopSessionMonitor.sessionIsAvailable(CGSessionCopyCurrentDictionary() as? [String: Any]),
+                  CGDisplayIsAsleep(CGMainDisplayID()) == 0 else {
+                emit(["event": "unavailable", "reason": "desktop-session-inactive"])
+                return
+            }
+            sample()
             return
         }
         emit(["event": "started", "intervalMilliseconds": 500, "maximumSeconds": 90])
@@ -71,6 +82,9 @@ private final class MenuBarVisibilityObserver {
         record["ownerPID"] = pid
         record["ownerEpoch"] = epoch
         record["ownerCurrent"] = ownerCurrent
+        record["inWorkspaceInventory"] = NSWorkspace.shared.runningApplications.contains {
+            $0.processIdentifier == pid
+        }
         // A restarted process is a different observation subject. Keep its
         // lifecycle record, but never reuse original elements against its PID.
         guard ownerCurrent, ProcessInfo.processInfo.systemUptime < deadline else {
@@ -82,6 +96,11 @@ private final class MenuBarVisibilityObserver {
         let extrasRead = attribute(root, kAXExtrasMenuBarAttribute)
         record["extrasError"] = extrasRead.0.rawValue
         let extras = asElement(extrasRead.1)
+        let menuBarRead = attribute(root, kAXMenuBarAttribute)
+        record["menuBarError"] = menuBarRead.0.rawValue
+        if let extras, let menuBar = asElement(menuBarRead.1) {
+            record["extrasIsApplicationMenuBar"] = CFEqual(extras, menuBar)
+        }
         let census: [AXUIElement]?
         if extrasRead.0 == .success, let extras, ownerMatches(extras, pid: pid) {
             if originalExtras == nil { originalExtras = extras }
@@ -106,6 +125,8 @@ private final class MenuBarVisibilityObserver {
             let raw = rawFrame(source.element)
             let frame = raw.frame
             var item: [String: Any] = ["sourceOrdinal": source.ordinal,
+                "role": attribute(source.element, kAXRoleAttribute).1 as? String ?? "unavailable",
+                "identifierPresent": attribute(source.element, kAXIdentifierAttribute).1 != nil,
                 "sameAsInitialObject": source.initial,
                 "inCurrentChildren": census.map { list -> Any in list.contains { CFEqual($0, source.element) } } ?? NSNull(),
                 "sourceOwnerMatches": ownerMatches(source.element, pid: pid),
@@ -119,6 +140,11 @@ private final class MenuBarVisibilityObserver {
                 item["frameStable"] = stable
                 item["centerHit"] = hit.map { ($0 && stable) as Any } ?? NSNull()
             } else { item["centerHit"] = NSNull() }
+            if singleSample {
+                let proofFields: Set<String> = ["role", "sourceOwnerMatches", "inCurrentChildren",
+                    "positiveSize", "frameStable", "centerHit"]
+                item = item.filter { proofFields.contains($0.key) }
+            }
             items.append(item)
         }
         record["items"] = items
@@ -221,8 +247,8 @@ private final class MenuBarVisibilityObserver {
 }
 
 @MainActor
-func runMenuBarVisibilityObserver(bundleIdentifier: String) {
+func runMenuBarVisibilityObserver(bundleIdentifier: String, singleSample: Bool = false) {
     let app = NSApplication.shared
     app.setActivationPolicy(.prohibited)
-    MenuBarVisibilityObserver(bundleIdentifier: bundleIdentifier).run()
+    MenuBarVisibilityObserver(bundleIdentifier: bundleIdentifier, singleSample: singleSample).run()
 }
