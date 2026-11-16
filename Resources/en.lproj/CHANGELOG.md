@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.27] - 2026-11-16
+
+- Stop treating missing optional original images as persistent “Needs attention” errors. The tray remains usable with app icons or names; snapshot gaps, offline records, and disabled screen recording no longer become global failures.
+- Move original image counts to an explicit “View Original Image Status” action on the permissions page. They no longer appear automatically in the status bar or status details, or ask users to expand system overflow for normal use.
+- Skip screenshot polling and background capture for entries that already have app icons. Grouped application sources only request fallback images for the displayed entry, reducing unnecessary reads.
+- Image checks no longer clear independent operation errors or carry preparation issues across later checks. Grouping, permission recovery, and native menu failures retain their recovery actions.
+- Correct the permission description to explain that verified original images may be cached locally.
+
+Verification: the local full gate, dual architecture publication, and native acceptance of the installed public package are recorded separately in the repository's optional image status report. Uses the project's self-signed release identity and is not Apple notarized.
+
 ## [0.7.26] - 2026-11-16
 
 - Delay transient activity indicators by 350 milliseconds so quick operations do not flash a loading message. Cancellation remains available immediately.

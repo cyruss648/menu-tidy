@@ -30,7 +30,7 @@ final class StatusPresentationIntegrationTests: XCTestCase {
         XCTAssertFalse(state.renderedActive, "Completed work must not retain a stale loading indicator")
     }
 
-    func testRefreshErrorsAndImageWarningsPreserveTheListViewportAndScrollOffset() async throws {
+    func testRefreshErrorsAndOptionalImageDiagnosticsPreserveTheListViewportAndScrollOffset() async throws {
         let fixture = try await makeFixture()
         defer { fixture.dispose() }
         let state = SettingsViewState()
@@ -67,11 +67,46 @@ final class StatusPresentationIntegrationTests: XCTestCase {
         await settle()
         XCTAssertNotNil(fixture.model.managementError)
         try assertLayout(original, scroll: scroll, host: host)
-        fixture.model.updateIconImageWarning(summary: ImageAvailabilitySummary(
+        fixture.model.updateIconImageDiagnostics(summary: ImageAvailabilitySummary(
             requested: ["one", "two"], available: ["one"]), unobservedConfiguredCount: 0)
         await settle()
-        XCTAssertNotNil(fixture.model.iconImageWarning)
+        XCTAssertNotNil(fixture.model.iconImageDiagnostics)
         try assertLayout(original, scroll: scroll, host: host)
+    }
+
+    func testOptionalImageGapsNeverBecomeGlobalErrorsOrClearRealOperationFailures() async throws {
+        let fixture = try await makeFixture(screenCaptureGranted: true)
+        defer { fixture.dispose() }
+        let view = SettingsView(model: fixture.model, updates: UpdateController(model: fixture.model, enabled: false),
+                                presentation: SettingsViewState(), preferences: fixture.preferences)
+        for available in [Set(["one"]), Set<String>()] {
+            fixture.model.updateIconImageDiagnostics(summary: ImageAvailabilitySummary(
+                requested: ["one", "two"], available: available), unobservedConfiguredCount: 18,
+                issues: [MenuBarIconCapture.CaptureError.noIndependentWindows.localizedMessage])
+            XCTAssertNotNil(fixture.model.iconImageDiagnostics)
+            XCTAssertNil(view.statusAttentionMessage, "Missing optional snapshots must not request user intervention")
+        }
+        fixture.model.updateIconImageDiagnostics(summary: ImageAvailabilitySummary(requested: [], available: []),
+                                                unobservedConfiguredCount: 18)
+        XCTAssertNil(view.statusAttentionMessage, "Offline choices are not image errors")
+        XCTAssertFalse(try XCTUnwrap(fixture.model.iconImageDiagnostics).sourceText.contains(
+            MenuBarIconCapture.CaptureError.noIndependentWindows.localizedMessage.sourceText),
+                       "A new recount must not carry a previous attempt's preparation failure")
+        fixture.model.recordPanelItemFailure(id: "one", message: MenuBarAccessError.permission.localizedMessage)
+        fixture.model.updateIconImageDiagnostics(summary: ImageAvailabilitySummary(
+            requested: ["one", "two"], available: ["one", "two"]), unobservedConfiguredCount: 0)
+        XCTAssertEqual(fixture.model.panelActivationError, MenuBarAccessError.permission.localizedMessage)
+        XCTAssertEqual(view.statusAttentionMessage, fixture.preferences.localized(MenuBarAccessError.permission.localizedMessage))
+    }
+
+    func testOptionalScreenshotPermissionIsNotRequiredForTheTray() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.dispose() }
+        fixture.model.refreshIconImageDiagnostics()
+        XCTAssertTrue(try XCTUnwrap(fixture.model.iconImageDiagnostics).sourceText.contains("增强未启用"))
+        let view = SettingsView(model: fixture.model, updates: UpdateController(model: fixture.model, enabled: false),
+                                presentation: SettingsViewState(), preferences: fixture.preferences)
+        XCTAssertNil(view.statusAttentionMessage)
     }
 
     func testRowFailureAndPendingStateKeepTheSameContentHeight() async throws {
@@ -171,7 +206,7 @@ final class StatusPresentationIntegrationTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(100))
     }
 
-    private func makeFixture() async throws -> Fixture {
+    private func makeFixture(screenCaptureGranted: Bool = false) async throws -> Fixture {
         let suite = "dev.hdh.MenuTidy.tests.status.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.set(true, forKey: "hasCompletedSetup")
@@ -179,6 +214,7 @@ final class StatusPresentationIntegrationTests: XCTestCase {
             defaults.set(false, forKey: key)
         }
         let system = MenuTidyTestEnvironment()
+        system.screenCaptureGranted = screenCaptureGranted
         for index in 0..<24 {
             let id = "item:status.\(index)"
             let bundle = "org.example.MenuTidyStatusFixture\(index)"

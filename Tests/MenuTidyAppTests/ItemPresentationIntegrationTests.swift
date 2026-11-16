@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import MenuTidyCore
 import XCTest
 @testable import MenuTidy
@@ -178,6 +178,40 @@ final class ItemPresentationIntegrationTests: XCTestCase {
         XCTAssertEqual(fixture.model.items.filter { !$0.isAvailable }.count, 1)
     }
 
+    @MainActor
+    func testApplicationIconsAvoidBackgroundScreenshotRequestsEvenWithEmptyCaptureCache() throws {
+        let sources = [snapshot("item:a", bundle: application), snapshot("item:b", bundle: application)]
+        let rules = sources.map { ItemRule(id: $0.id, name: "Fixture", bundleIdentifier: application, visibility: .collapsible) }
+        let fixture = try makeFixture(sources, rules: rules,
+                                      applicationIcons: [application: NSImage(size: NSSize(width: 32, height: 32))])
+        defer { fixture.dispose() }
+        let coverage = fixture.model.hiddenImageCoverage()
+        XCTAssertEqual(coverage.requested, ["item:a", "item:b"])
+        XCTAssertNotNil(fixture.model.managementItems.first?.icon)
+        XCTAssertTrue(fixture.model.missingFallbackImageIDs(
+            summary: ImageAvailabilitySummary(requested: coverage.requested, available: [])).isEmpty)
+    }
+
+    @MainActor
+    func testBackgroundCaptureRequestsOnlyTheDisplayedSourceWithoutAnApplicationIcon() throws {
+        let sources = [snapshot("item:a", bundle: application), snapshot("item:b", bundle: application),
+                       snapshot("item:other", bundle: application + ".helper")]
+        let rules = sources.map { ItemRule(id: $0.id, name: "Fixture", bundleIdentifier: $0.bundleIdentifier, visibility: .collapsible) }
+        let fixture = try makeFixture(sources, rules: rules)
+        defer { fixture.dispose() }
+        let coverage = fixture.model.hiddenImageCoverage()
+        let displayedIDs = Set(fixture.model.managementItems.map(\.id))
+        XCTAssertEqual(displayedIDs.count, 2)
+        XCTAssertEqual(fixture.model.missingFallbackImageIDs(
+            summary: ImageAvailabilitySummary(requested: coverage.requested, available: [])), displayedIDs)
+        XCTAssertTrue(fixture.model.missingFallbackImageIDs(
+            summary: ImageAvailabilitySummary(requested: coverage.requested, available: displayedIDs)).isEmpty,
+                      "A hidden sibling projection does not need another image")
+        XCTAssertTrue(fixture.model.missingFallbackImageIDs(
+            summary: ImageAvailabilitySummary(requested: [], available: [])).isEmpty,
+                      "Rows outside accepted hidden coverage must not be captured")
+    }
+
     private func snapshot(_ id: String, bundle: String, identifier: String? = nil) -> MenuBarItemSnapshot {
         MenuBarItemSnapshot(id: id, processIdentifier: bundle == host ? 10002 : (bundle == application ? 10001 : 10003),
             name: "Fixture", ownerName: "Fixture", bundleIdentifier: bundle,
@@ -187,7 +221,8 @@ final class ItemPresentationIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    private func makeFixture(_ sources: [MenuBarItemSnapshot], rules: [ItemRule] = []) throws -> Fixture {
+    private func makeFixture(_ sources: [MenuBarItemSnapshot], rules: [ItemRule] = [],
+                             applicationIcons: [String: NSImage] = [:]) throws -> Fixture {
         let suite = "dev.hdh.MenuTidy.tests.presentation.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.set(true, forKey: "hasCompletedSetup")
@@ -198,6 +233,7 @@ final class ItemPresentationIntegrationTests: XCTestCase {
         defaults.set(try JSONEncoder().encode(ItemRuleBook(rules: Dictionary(uniqueKeysWithValues: rules.map { ($0.id, $0) }))),
             forKey: "itemRules.v1")
         let system = MenuTidyTestEnvironment()
+        system.applicationIcons = applicationIcons
         system.snapshots = sources
         system.identities = Dictionary(uniqueKeysWithValues: sources.map { item in
             (item.id, ObservedItemGroupHistory.Identity(id: item.id, pid: item.processIdentifier,

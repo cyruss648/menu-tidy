@@ -17,6 +17,7 @@ final class LocalizationIntegrationTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources")
         let preferences = AppPreferences(defaults: defaults, resourceBundle: try XCTUnwrap(Bundle(path: resources.path)))
         let system = MenuTidyTestEnvironment()
+        system.screenCaptureGranted = true
         system.snapshots = [MenuBarItemSnapshot(id: "session:sogou", processIdentifier: 501, name: "搜狗输入法",
             ownerName: "搜狗输入法", bundleIdentifier: "org.example.Sogou", frame: CGRect(x: 20, y: 0, width: 22, height: 22),
             hasReliableGeometry: true, canMove: true, detail: "", persistentIdentity: false, ownIdentifier: nil)]
@@ -30,25 +31,22 @@ final class LocalizationIntegrationTests: XCTestCase {
         model.refreshMenuItems()
         await model.waitForTestingOperations()
         let result = try XCTUnwrap(model.managementMessage)
-        model.updateIconImageWarning(summary: ImageAvailabilitySummary(
+        model.updateIconImageDiagnostics(summary: ImageAvailabilitySummary(
             requested: Set((0..<21).map(String.init)), available: Set((0..<18).map(String.init))),
             unobservedConfiguredCount: 2)
-        let warning = try XCTUnwrap(model.iconImageWarning)
-        let details = try XCTUnwrap(model.iconImageWarningDetails)
+        let details = try XCTUnwrap(model.iconImageDiagnostics)
 
         XCTAssertTrue(preferences.localized(result).contains("列表已更新，共 1 个项目"))
         preferences.language = .english
         XCTAssertEqual(preferences.localized(result), "List refreshed: 1 items. Existing groups and pending choices are preserved.")
-        XCTAssertEqual(preferences.localized(warning), "Some icon images are not available yet (3/21)")
         XCTAssertFalse(preferences.localized(details).contains("图标"))
-        XCTAssertTrue(preferences.localized(details).contains("21"))
-        XCTAssertTrue(preferences.localized(details).contains("18"))
+        XCTAssertTrue(preferences.localized(details).contains("Original icon snapshots cached: 18/21."))
         XCTAssertEqual(model.managementItems.first?.name, "搜狗输入法")
         XCTAssertEqual(model.managementMessage, result)
-        XCTAssertEqual(model.iconImageWarning, warning)
+        XCTAssertEqual(model.iconImageDiagnostics, details)
 
         preferences.language = .chinese
-        XCTAssertTrue(preferences.localized(warning).contains("部分图标图像尚未获取"))
+        XCTAssertTrue(preferences.localized(details).contains("已缓存 18/21 个原始图标图像"))
         XCTAssertTrue(preferences.localized(result).contains("现有分组与待应用选择已保留"))
     }
 

@@ -20,7 +20,6 @@ final class SettingsViewState: ObservableObject {
     @Published var trayFilter = "all"
     @Published var savedRecordsExpanded = false
     @Published var permissionHelpExpanded = false
-    @Published var imageWarningDetailsExpanded = false
     @Published var managementErrorDetailsExpanded = false
     @Published var recoveryDetailsExpanded = false
     @Published var offlineDraftsExpanded = false
@@ -37,6 +36,7 @@ struct SettingsView: View {
     @State private var associationTargetID = ""
     @State private var associationIssue: LocalizedMessage?
     @State private var showsStatusDetails = false
+    @State private var showsImageDiagnostics = false
     @State private var lastCompletedMessage: LocalizedMessage?
     @Environment(\.colorScheme) private var colorScheme
 
@@ -195,10 +195,10 @@ struct SettingsView: View {
         if !isBusy { lastCompletedMessage = model.managementMessage }
     }
 
-    private var statusAttentionMessage: String? {
+    var statusAttentionMessage: String? {
         [model.positionRecoveryMessage, model.managementError, model.panelActivationError,
          model.panelError, model.draftPersistenceIssue, model.shortcutIssue, model.loginIssue,
-         model.environmentIssue, model.layoutIssue, model.iconImageWarning]
+         model.environmentIssue, model.layoutIssue]
             .compactMap { $0.map(copy) }.first
     }
 
@@ -946,23 +946,6 @@ struct SettingsView: View {
                 detailedIssueNotice(error, symbol: "exclamationmark.triangle.fill",
                                     title: copy("查看完整原因"), isExpanded: $presentation.managementErrorDetailsExpanded)
             }
-            if let warning = model.iconImageWarning.map(copy) {
-                VStack(alignment: .leading, spacing: 5) {
-                    issueNotice(warning, symbol: "photo")
-                    if let details = model.iconImageWarningDetails.map(copy) {
-                        DisclosureGroup(copy("查看图像获取详情"), isExpanded: $presentation.imageWarningDetailsExpanded) {
-                            Text(details)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.top, 5)
-                        }
-                        .font(.system(size: 11))
-                        .padding(.leading, 24)
-                    }
-                }
-            }
             if let error = model.panelActivationError.map(copy) {
                 issueNotice(format("图标操作：%@", error), symbol: "cursorarrow.click", isError: true)
             }
@@ -1279,7 +1262,7 @@ struct SettingsView: View {
                     Text(copy("不开启也能使用托盘，优先显示应用身份图标；应用图标不可用时显示名称。开启后可在应用图标不可用时使用原始菜单栏图标回退；这项权限不会增加应用操作的兼容性。"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(copy("只采集已确认的图标窗口或小块区域，不上传、不保存到磁盘，也不采集声音。原始图标是最近的快照，隐藏期间可能不会及时反映状态变化。"))
+                    Text(copy("只采集已确认的图标窗口或小块区域，不上传、不采集声音。已验证的图像可缓存在本机；原始图标是最近的快照，隐藏期间可能不会及时反映状态变化。"))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1302,6 +1285,24 @@ struct SettingsView: View {
                 Button(copy("打开系统设置")) { model.openScreenCaptureSettings() }
                     .help(copy("打开屏幕录制权限设置，选择当前安装的 Menu Tidy。"))
                 Button(copy("重新检测")) { model.refreshPermissions() }
+                Button(copy("查看原始图像状态")) {
+                    model.refreshIconImageDiagnostics()
+                    showsImageDiagnostics = true
+                }
+                .popover(isPresented: $showsImageDiagnostics, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(copy("原始图像（可选增强）"))
+                            .font(.system(size: 13, weight: .semibold))
+                        if let diagnostics = model.iconImageDiagnostics {
+                            Text(copy(diagnostics))
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(16)
+                    .frame(width: 380, alignment: .leading)
+                }
                 Spacer(minLength: 0)
             }
             .disabled(isBusy)
@@ -1442,7 +1443,7 @@ struct SettingsView: View {
     private var footer: some View {
         HStack(alignment: .bottom, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
-                Label(copy("图标栏画面只在内存中显示，不上传、不存盘、不采集声音"), systemImage: "lock.shield")
+                Label(copy("图标图像仅在本机显示与缓存，不上传、不采集声音"), systemImage: "lock.shield")
                     .font(.system(size: 10, weight: .medium))
                 Text(copy("点击菜单栏箭头打开独立托盘，右键打开设置。没有原始图像时显示应用身份图标；原生菜单栏的可见容量仍受屏幕宽度限制。"))
                     .font(.system(size: 10)).fixedSize(horizontal: false, vertical: true).lineSpacing(2)

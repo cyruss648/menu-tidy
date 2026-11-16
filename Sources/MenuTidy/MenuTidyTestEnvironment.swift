@@ -16,6 +16,9 @@ final class MenuTidyTestEnvironment {
     /// Production derives this from NSWorkspace. Tests can model a running
     /// application whose status item has not yet been returned by AX.
     var runningBundles: Set<String> = []
+    /// Display metadata from NSWorkspace, independent of screenshot permission.
+    var applicationIcons: [String: NSImage] = [:]
+    var screenCaptureGranted = false
     var visibilityBatches: [[String: Bool]] = []
     var hiddenBundles: [String] = []
     var restoredBundles: [String] = []

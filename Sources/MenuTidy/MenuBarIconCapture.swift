@@ -15,15 +15,15 @@ final class MenuBarIconCapture {
         var localizedMessage: LocalizedMessage {
             switch self {
             case .unsupportedSystem:
-                return LocalizedMessage("独立图标栏需要 macOS 14 或更新版本。")
+                return LocalizedMessage("原始图标图像采集需要 macOS 14 或更新版本；托盘仍可使用应用图标或名称。")
             case .unsupportedSnapshotSystem:
                 return LocalizedMessage("原始图标快照需要 macOS 15.2 或更新版本。")
             case .permissionRequired:
                 return LocalizedMessage("请先允许 Menu Tidy 录制屏幕，以读取菜单栏图标的原始图像。")
             case .noIndependentWindows:
-                return LocalizedMessage("系统没有提供独立图标窗口，且尚无原始图标快照。请先在图标可见时采集，再打开独立图标栏。")
+                return LocalizedMessage("系统当前未提供可单独采集的图标窗口；托盘将继续使用应用图标或名称。")
             case .noCapturedImages:
-                return LocalizedMessage("未能取得实时图像或已确认的图标快照，请在图标可见时重新采集。")
+                return LocalizedMessage("本轮未取得新的原始图标图像；仍可使用应用图标或名称。")
             }
         }
     }

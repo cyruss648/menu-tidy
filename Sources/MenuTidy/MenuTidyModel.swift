@@ -135,8 +135,9 @@ final class MenuTidyModel: ObservableObject {
     @Published private var trayOwnershipConflictIDs: Set<String> = []
     @Published private var trayReconnectIDs: Set<String> = []
     @Published private var itemsNeedingPositionKeyResolution: Set<String> = []
-    @Published private(set) var iconImageWarning: LocalizedMessage?
-    @Published private(set) var iconImageWarningDetails: LocalizedMessage?
+    /// Optional appearance diagnostics, shown only when explicitly requested.
+    /// Missing original screenshots do not prevent the labelled tray from working.
+    @Published private(set) var iconImageDiagnostics: LocalizedMessage?
     @Published private(set) var panelImages: [String: NSImage] = [:]
     @Published private(set) var panelUsesCachedImages = false
     @Published private(set) var panelLastCaptureDate: Date?
@@ -355,7 +356,6 @@ final class MenuTidyModel: ObservableObject {
     private var passiveOverflowRebindAttempts = 0
     private var lastPassiveOverflowRebind = -Double.infinity
     private var passiveOverflowRebindNeedsRetry = false
-    private var iconImagePreparationIssues: [LocalizedMessage] = []
     private var preparingToTerminate = false { didSet { rescheduleMaintenanceTimer() } }
     var isPanelItemOperationRunning: Bool { panelActivationTask != nil }
     var panelInteractionBusy: Bool {
@@ -886,7 +886,7 @@ final class MenuTidyModel: ObservableObject {
         }
         if let testingEnvironment {
             accessibilityGranted = true
-            screenCaptureGranted = false
+            screenCaptureGranted = testingEnvironment.screenCaptureGranted
             nativeVisibilityAccessAvailable = true
             snapshots = testingEnvironment.snapshots
             lastAutoCollapseCheck = testingEnvironment.uptime
@@ -1761,7 +1761,7 @@ final class MenuTidyModel: ObservableObject {
                         inventoryIssues.append(LocalizedMessage("检查可用图像：\(error.localizedMessage)"))
                     }
                     try self.checkImageRefreshCancellation()
-                    self.updateIconImageWarning(
+                    self.updateIconImageDiagnostics(
                         summary: ImageAvailabilitySummary(requested: coverage.requested, available: available),
                         unobservedConfiguredCount: coverage.unobservedConfiguredCount,
                         issues: inventoryIssues)
@@ -1965,55 +1965,58 @@ final class MenuTidyModel: ObservableObject {
         return (requested, unobserved.count)
     }
 
-    func updateIconImageWarning(summary: ImageAvailabilitySummary,
-                                        unobservedConfiguredCount: Int, issues: [LocalizedMessage]? = nil,
-                                        clearPanelError: Bool = true) {
-        if let issues { iconImagePreparationIssues = issues }
-        passiveCaptureSchedule.updateMissingIDs(summary.missing, at: ProcessInfo.processInfo.systemUptime)
+    /// Only request images that can actually be displayed. Application icons
+    /// take precedence in the tray, and grouped projections share one entry.
+    func missingFallbackImageIDs(summary: ImageAvailabilitySummary) -> Set<String> {
+        let rows = presentationRows(from: items.filter { summary.requested.contains($0.id) })
+        return Set(rows.filter { $0.icon == nil }.map(\.id)).intersection(summary.missing)
+    }
+
+    func updateIconImageDiagnostics(summary: ImageAvailabilitySummary,
+                                   unobservedConfiguredCount: Int, issues: [LocalizedMessage] = []) {
+        passiveCaptureSchedule.updateMissingIDs(missingFallbackImageIDs(summary: summary),
+            at: ProcessInfo.processInfo.systemUptime)
         rescheduleMaintenanceTimer()
-        // A preparation failure is not a missing image when a valid snapshot
-        // already supplies every requested item. Do not retain that false alarm.
-        if clearPanelError && panelError != nil { panelError = nil }
-        guard summary.hasMissingImages || (summary.requested.isEmpty && unobservedConfiguredCount > 0) else {
-            if iconImageWarning != nil { iconImageWarning = nil }
-            if iconImageWarningDetails != nil { iconImageWarningDetails = nil }
-            return
-        }
-        let warning: LocalizedMessage
         var details: [LocalizedMessage]
-        if summary.requested.isEmpty {
-            warning = LocalizedMessage("本次未能核对隐藏图标图像")
-            details = [LocalizedMessage("已保存的 \(unobservedConfiguredCount) 个隐藏图标本次均未能确认；应用可能未运行，或图标暂时无法唯一读取。本次检查范围为 0，不代表这些图标的图像已经齐全。")]
+        if !screenCaptureGranted {
+            details = [LocalizedMessage("原始图像增强未启用；托盘继续使用应用图标或名称。")]
+        } else if summary.requested.isEmpty {
+            details = [LocalizedMessage("当前没有可核对原始图像的隐藏图标。")]
         } else {
-            warning = LocalizedMessage("部分图标图像尚未获取（\(summary.missing.count)/\(summary.requested.count)）")
-            details = [LocalizedMessage("仅统计本次读取到的 \(summary.requested.count) 个「收起后隐藏」或「始终隐藏」图标，其中 \(summary.captured.count) 个已有可用图像；不包含常驻显示、系统保护项或未读取到的项目。")]
-            if unobservedConfiguredCount > 0 {
-                details.append(LocalizedMessage("另有 \(unobservedConfiguredCount) 个已保存的隐藏图标本次未能确认，不计入上述范围。"))
+            details = [LocalizedMessage("已缓存 \(summary.captured.count)/\(summary.requested.count) 个原始图标图像。")]
+            if summary.hasMissingImages {
+                details.append(LocalizedMessage("隐藏中的图标可能暂时无法获取原始图像；已有应用图标的项目无需补采。"))
             }
         }
-        for issue in iconImagePreparationIssues where !details.contains(issue) { details.append(issue) }
-        details.append(LocalizedMessage("可展开系统溢出区并保持片刻；应用会在图标可见且身份确认后自动补采，不会移动鼠标。图像获取结果不代表分类是否已应用。"))
-        let warningDetails = details.joined(separator: "\n")
-        if iconImageWarning != warning { iconImageWarning = warning }
-        if iconImageWarningDetails != warningDetails { iconImageWarningDetails = warningDetails }
+        if unobservedConfiguredCount > 0 {
+            details.append(LocalizedMessage("另有 \(unobservedConfiguredCount) 个已保存的隐藏图标当前未读到，不计入图像统计。"))
+        }
+        details.append(LocalizedMessage("托盘优先显示应用图标，没有原始图像时使用应用图标或名称；图像统计不代表分类或点击操作失败。"))
+        // Preparation issues belong to this explicit attempt only. Never let a
+        // later background recount retain them or clear a real operation error.
+        for issue in issues where !details.contains(issue) { details.append(issue) }
+        let diagnostics = details.joined(separator: "\n")
+        if iconImageDiagnostics != diagnostics {
+            iconImageDiagnostics = diagnostics
+            Self.diagnosticLogger.notice("iconImages observed=\(summary.requested.count) cached=\(summary.captured.count) fallbackRequests=\(self.missingFallbackImageIDs(summary: summary).count) unobserved=\(unobservedConfiguredCount)")
+        }
     }
 
     /// A failed owner census cannot establish image coverage. Keep the last
     /// successful snapshots and make the skipped check explicit instead of
     /// reporting the cached state as a new image-missing result.
     private func markIconImageCheckSkippedAfterScanFailure() {
-        iconImageWarning = LocalizedMessage("因菜单栏扫描未完成，本轮未执行图像核验")
-        iconImageWarningDetails = LocalizedMessage("本轮未完成菜单栏身份读取，未重新判断隐藏图标图像；上一轮已缓存的图像和分类选择仍保留。扫描成功后再刷新图像。")
+        iconImageDiagnostics = LocalizedMessage("本轮未完成菜单栏身份读取，未重新判断隐藏图标图像；上一轮已缓存的图像和分类选择仍保留。扫描成功后再刷新图像。")
     }
 
     /// Derive coverage after the capture checkpoint has accepted or restored
     /// its images. A prior missing-count message is never an availability source.
     /// This read-only recount must not clear a separate panel operation error.
-    private func recomputeIconImageWarning() {
+    func refreshIconImageDiagnostics() {
         let coverage = hiddenImageCoverage()
         let available = (try? iconCapture.availableCachedImageIDs(matching: snapshots)) ?? []
-        updateIconImageWarning(summary: ImageAvailabilitySummary(requested: coverage.requested, available: available),
-            unobservedConfiguredCount: coverage.unobservedConfiguredCount, clearPanelError: false)
+        updateIconImageDiagnostics(summary: ImageAvailabilitySummary(requested: coverage.requested, available: available),
+            unobservedConfiguredCount: coverage.unobservedConfiguredCount)
         if panelLastCaptureDate != iconCapture.lastCacheDate { panelLastCaptureDate = iconCapture.lastCacheDate }
     }
 
@@ -2990,7 +2993,7 @@ final class MenuTidyModel: ObservableObject {
         persistDrafts()
         scope.confirmedIDs = Set(scope.requestedRules.map(\.id))
         rebuildRows()
-        recomputeIconImageWarning()
+        refreshIconImageDiagnostics()
         Self.diagnosticLogger.notice("positionHiding applicationVerified=true committed=\(scope.confirmedIDs.count) bootstrap=\(scope.bootstrap)")
     }
 
@@ -4111,7 +4114,8 @@ final class MenuTidyModel: ObservableObject {
         if !demoMode && testingEnvironment == nil {
             let coverage = hiddenImageCoverage()
             let available = (try? iconCapture.availableCachedImageIDs(matching: snapshots)) ?? []
-            passiveCaptureSchedule.updateMissingIDs(coverage.requested.subtracting(available),
+            passiveCaptureSchedule.updateMissingIDs(missingFallbackImageIDs(
+                summary: ImageAvailabilitySummary(requested: coverage.requested, available: available)),
                 at: ProcessInfo.processInfo.systemUptime)
             rescheduleMaintenanceTimer()
         }
@@ -4120,8 +4124,8 @@ final class MenuTidyModel: ObservableObject {
     /// Repeated layout observations rebuild rows frequently. App icons are
     /// display metadata; looking them up again must not lengthen each check.
     private func applicationIcon(for bundleIdentifier: String?) -> NSImage? {
-        guard testingEnvironment == nil else { return nil }
         guard let bundleIdentifier else { return nil }
+        if let testingEnvironment { return testingEnvironment.applicationIcons[bundleIdentifier] }
         if let cached = applicationIcons.value(for: bundleIdentifier) { return cached }
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else { return nil }
         // Keep just the 32-point, 2x presentation bitmap, not an application's
@@ -4260,12 +4264,13 @@ final class MenuTidyModel: ObservableObject {
         let coverage = hiddenImageCoverage()
         let available = (try? iconCapture.availableCachedImageIDs(matching: snapshots)) ?? []
         let summary = ImageAvailabilitySummary(requested: coverage.requested, available: available)
-        passiveCaptureSchedule.updateMissingIDs(summary.missing, at: now)
-        guard summary.hasMissingImages else { return }
+        let missing = missingFallbackImageIDs(summary: summary)
+        passiveCaptureSchedule.updateMissingIDs(missing, at: now)
+        guard !missing.isEmpty else { return }
         let attemptGeneration = passiveCaptureSchedule.generation
         let id = UUID()
         passiveIconCaptureID = id
-        let candidates = snapshots.filter { summary.missing.contains($0.id) }
+        let candidates = snapshots.filter { missing.contains($0.id) }
         passiveIconCaptureTask = Task { [weak self] in
             guard let self else { return }
             var madeProgress = false
@@ -4308,11 +4313,12 @@ final class MenuTidyModel: ObservableObject {
                 let currentCoverage = self.hiddenImageCoverage()
                 let currentAvailable = try self.iconCapture.availableCachedImageIDs(matching: self.snapshots)
                 let currentSummary = ImageAvailabilitySummary(requested: currentCoverage.requested, available: currentAvailable)
-                madeProgress = currentSummary.missing.count < summary.missing.count
-                self.updateIconImageWarning(summary: currentSummary,
+                let remaining = self.missingFallbackImageIDs(summary: currentSummary)
+                madeProgress = remaining.count < missing.count
+                self.updateIconImageDiagnostics(summary: currentSummary,
                     unobservedConfiguredCount: currentCoverage.unobservedConfiguredCount)
                 if self.panelLastCaptureDate != self.iconCapture.lastCacheDate { self.panelLastCaptureDate = self.iconCapture.lastCacheDate }
-                Self.diagnosticLogger.notice("passiveIconCapture candidates=\(visible.count) captured=\(captured.count) remaining=\(currentSummary.missing.count)")
+                Self.diagnosticLogger.notice("passiveIconCapture candidates=\(visible.count) captured=\(captured.count) remaining=\(remaining.count)")
             } catch is CancellationError {
                 // Cancellation never removes a previously valid cached image.
                 cancelled = true
@@ -4373,7 +4379,7 @@ final class MenuTidyModel: ObservableObject {
 
     @discardableResult
     private func prepareIconImages(for target: NativeVisibilityTarget? = nil) async throws -> Set<String> {
-        defer { recomputeIconImageWarning() }
+        defer { refreshIconImageDiagnostics() }
         cancelPassiveIconCapture()
         await passiveIconCaptureTask?.value
         try Task.checkCancellation()
@@ -4585,7 +4591,7 @@ final class MenuTidyModel: ObservableObject {
         var invalid = requested
         defer {
             iconCapture.finishVisibleCaptureValidation(checkpoint, invalidIDs: invalid)
-            recomputeIconImageWarning()
+            refreshIconImageDiagnostics()
         }
         let captured = try await iconCapture.captureVisibleIcons(snapshots: confirmed)
         // Capture commits an uncancelled batch. Complete its read-only identity
@@ -4635,8 +4641,10 @@ final class MenuTidyModel: ObservableObject {
         guard testingEnvironment == nil else { return }
         // Cache lookup never captures or enumerates windows. Without screen
         // permission the tray still opens using labelled application icons.
-        setPanelImages((try? iconCapture.cachedImages(matching: snapshots)) ?? [:])
-        recomputeIconImageWarning()
+        let imageIDs = Set(panelItems.filter { $0.icon == nil }.map(\.id))
+        setPanelImages(((try? iconCapture.cachedImages(matching: snapshots)) ?? [:])
+            .filter { imageIDs.contains($0.key) })
+        refreshIconImageDiagnostics()
         statusBar?.apply(collapsed: true, arranging: false)
         let controller = iconPanel ?? HiddenItemsPanelController()
         iconPanel = controller
@@ -4646,21 +4654,22 @@ final class MenuTidyModel: ObservableObject {
             }
         }
         controller.show(model: self, anchor: anchor, clickPoint: clickPoint)
-        Self.diagnosticLogger.notice("tray presented=true items=\(self.panelItems.count) cachedImages=\(self.panelImages.count)")
-        guard screenCaptureGranted, !panelInteractionBusy else { return }
+        Self.diagnosticLogger.notice("tray presented=true items=\(self.panelItems.count) cachedImages=\(self.panelImages.count) originalImageRequests=\(imageIDs.count)")
+        guard screenCaptureGranted, !panelInteractionBusy, !imageIDs.isEmpty else { return }
         panelTask = Task { [weak self] in
             guard let self else { return }
             do {
                 await self.passiveIconCaptureTask?.value
                 try Task.checkCancellation()
                 while self.isPanelPresented && !Task.isCancelled {
-                    let ids = self.panelItems.map(\.id)
+                    let ids = self.panelItems.filter { $0.icon == nil }.map(\.id)
+                    guard !ids.isEmpty else { self.setPanelImages([:]); return }
                     let images = try await self.iconCapture.capture(ids: ids, snapshots: self.snapshots)
                     try Task.checkCancellation()
                     let imagesChanged = self.setPanelImages(images)
                     let cacheStateChanged = self.panelLastCaptureDate != self.iconCapture.lastCacheDate ||
                         self.panelUsesCachedImages != self.iconCapture.usesCachedImages
-                    if imagesChanged || cacheStateChanged { self.recomputeIconImageWarning() }
+                    if imagesChanged || cacheStateChanged { self.refreshIconImageDiagnostics() }
                     if self.panelUsesCachedImages != self.iconCapture.usesCachedImages {
                         self.panelUsesCachedImages = self.iconCapture.usesCachedImages
                     }
@@ -4672,7 +4681,7 @@ final class MenuTidyModel: ObservableObject {
             } catch {
                 guard self.isPanelPresented && !Task.isCancelled else { return }
                 if self.setPanelImages((try? self.iconCapture.cachedImages(matching: self.snapshots)) ?? [:]) {
-                    self.recomputeIconImageWarning()
+                    self.refreshIconImageDiagnostics()
                 }
                 if self.panelError != nil { self.panelError = nil }
             }

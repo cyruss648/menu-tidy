@@ -823,3 +823,17 @@
 /* Stable status presentation */
 "状态详情" = "Status Details";
 "查看状态与处理建议" = "View status and suggested actions";
+/* Original snapshots are optional display metadata, not tray failures. */
+"原始图像增强未启用；托盘继续使用应用图标或名称。" = "Original image enhancement is off; the tray continues to use app icons or names.";
+"当前没有可核对原始图像的隐藏图标。" = "There are currently no observed hidden icons whose original images can be checked.";
+"已缓存 {0}/{1} 个原始图标图像。" = "Original icon snapshots cached: {0}/{1}.";
+"隐藏中的图标可能暂时无法获取原始图像；已有应用图标的项目无需补采。" = "Original images may be unavailable while icons are hidden. Items with app icons do not need additional capture.";
+"另有 {0} 个已保存的隐藏图标当前未读到，不计入图像统计。" = "Another {0} saved hidden icons are not currently observed and are excluded from the image count.";
+"托盘优先显示应用图标，没有原始图像时使用应用图标或名称；图像统计不代表分类或点击操作失败。" = "The tray prefers app icons and uses app icons or names when original images are unavailable. Image counts do not indicate a grouping or click failure.";
+"查看原始图像状态" = "View Original Image Status";
+"原始图像（可选增强）" = "Original Images (Optional)";
+"只采集已确认的图标窗口或小块区域，不上传、不采集声音。已验证的图像可缓存在本机；原始图标是最近的快照，隐藏期间可能不会及时反映状态变化。" = "Only verified icon windows or small regions are captured, with no uploads or audio. Verified images may be cached locally. Original icons are recent snapshots and may not reflect changes while hidden.";
+"原始图标图像采集需要 macOS 14 或更新版本；托盘仍可使用应用图标或名称。" = "Original icon image capture requires macOS 14 or later; the tray can still use app icons or names.";
+"系统当前未提供可单独采集的图标窗口；托盘将继续使用应用图标或名称。" = "The system is not currently exposing individually capturable icon windows; the tray continues to use app icons or names.";
+"本轮未取得新的原始图标图像；仍可使用应用图标或名称。" = "No new original icon images were obtained in this attempt; app icons or names remain available.";
+"图标图像仅在本机显示与缓存，不上传、不采集声音" = "Icon images are displayed and cached locally, with no uploads or audio capture";
