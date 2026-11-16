@@ -40,7 +40,7 @@ final class HiddenItemsPanelLayoutIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    func testSecondaryDisplayPresentationStaysOnThatDisplayWhenContentResizes() async throws {
+    func testSecondaryDisplayPresentationStaysFixedWhenAnErrorArrives() async throws {
         let screens = NSScreen.screens
         guard screens.count >= 2 else { throw XCTSkip("Display selection requires two connected screens") }
         let screen = screens[1]
@@ -55,7 +55,8 @@ final class HiddenItemsPanelLayoutIntegrationTests: XCTestCase {
         let itemID = try XCTUnwrap(fixture.model.panelItems.first?.id)
         fixture.model.recordPanelItemFailure(id: itemID, message: "The fixture application did not open. Please retry.")
 
-        try await waitForLayout { panel.frame.height > self.fourRowPanelHeight + 12 }
+        try await allowLayoutToSettle()
+        XCTAssertEqual(panel.frame, firstFrame, "An error belongs in the existing footer, without resizing the tray")
         XCTAssertTrue(screen.frame.contains(panel.frame))
         XCTAssertEqual(panel.screen, screen)
         XCTAssertEqual(panel.frame.minX, firstFrame.minX, accuracy: 0.5)
@@ -137,7 +138,7 @@ final class HiddenItemsPanelLayoutIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    func testOperationFailureResizesAndClearingItRestoresTheOriginalHeight() async throws {
+    func testOperationFailureAndRetryKeepTheOriginalFrame() async throws {
         let fixture = try await makeFixture(itemCount: 19)
         defer { fixture.dispose() }
 
@@ -151,17 +152,48 @@ final class HiddenItemsPanelLayoutIntegrationTests: XCTestCase {
         fixture.model.recordPanelItemFailure(id: itemID, message: "The fixture application did not open. Please retry.")
         fixture.model.finishPanelItemOperation()
 
-        try await waitForLayout { panel.frame.height > self.fourRowPanelHeight + 12 }
-        XCTAssertGreaterThan(panel.frame.height, fourRowPanelHeight + 12)
-        XCTAssertEqual(panel.frame.maxY, firstFrame.maxY, accuracy: 0.5,
-            "An error must expand the panel downward from its menu bar anchor")
+        try await allowLayoutToSettle()
+        XCTAssertNotNil(fixture.model.trayItemErrors[itemID], "The failure must remain available for details and retry")
+        XCTAssertEqual(panel.frame, firstFrame,
+            "An error must use the existing footer without moving the icons or resizing the tray")
         try assertContentFits(panel)
 
         fixture.model.beginPanelItemOperation(id: itemID, progress: "Retrying fixture item")
         fixture.model.finishPanelItemOperation()
-        try await waitForLayout { abs(panel.frame.height - self.fourRowPanelHeight) < 0.5 }
+        try await allowLayoutToSettle()
+        XCTAssertEqual(panel.frame, firstFrame)
         XCTAssertEqual(panel.frame.height, fourRowPanelHeight, accuracy: 0.5)
         XCTAssertEqual(panel.frame.maxY, firstFrame.maxY, accuracy: 0.5)
+        try assertContentFits(panel)
+    }
+
+    @MainActor
+    func testErrorDetailsKeepTheTrayStableAndDismissWhenRetryStarts() async throws {
+        let fixture = try await makeFixture(itemCount: 19)
+        defer { fixture.dispose() }
+        fixture.controller.show(model: fixture.model, anchor: fixture.anchor)
+        let panel = try presentedPanel()
+        let originalFrame = panel.frame
+        let itemID = try XCTUnwrap(fixture.model.panelItems.first?.id)
+        fixture.model.recordPanelItemFailure(id: itemID,
+            message: "The fixture application did not open. Its settings were preserved. Retry the operation to confirm the result.")
+        try await allowLayoutToSettle()
+        let originalWindows = Set(NSApplication.shared.windows.filter(\.isVisible).map(\.windowNumber))
+        fixture.controller.presentation.showsErrorDetails = true
+        try await allowLayoutToSettle()
+        XCTAssertTrue(NSApplication.shared.windows.contains { $0.isVisible && !originalWindows.contains($0.windowNumber) },
+            "Details must open a real native popover, without replacing the tray")
+        XCTAssertEqual(panel.frame, originalFrame)
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertTrue(fixture.controller.contains(CGPoint(x: -10000, y: -10000)),
+            "Reading details must pause idle collapse and let the popover handle outside clicks")
+        fixture.model.beginPanelItemOperation(id: itemID, progress: "Retrying fixture item")
+        try await allowLayoutToSettle()
+        XCTAssertFalse(fixture.controller.presentation.showsErrorDetails)
+        XCTAssertFalse(fixture.controller.contains(CGPoint(x: -10000, y: -10000)),
+            "Retry must release the popover's interaction hold")
+        fixture.model.finishPanelItemOperation()
+        XCTAssertEqual(panel.frame, originalFrame)
         try assertContentFits(panel)
     }
 

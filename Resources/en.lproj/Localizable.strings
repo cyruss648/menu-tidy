@@ -820,3 +820,6 @@
 "检查独立读取连接；确认连接失效后，正常重新打开 Menu Tidy 并恢复已保存的分类。" = "Check with an independent read connection. If the current connection has failed, reopen Menu Tidy normally and restore your saved choices.";
 "尚未取得可见图标的独立确认，已保留选择并继续发现。" = "The visible icon has not been independently confirmed. Your choice is saved and discovery will continue.";
 "读取连接需要重新建立；请正常退出并重新打开 Menu Tidy，已保存的选择会保留。" = "The read connection needs to be reestablished. Quit and reopen Menu Tidy normally; your saved choices will be preserved.";
+/* Stable status presentation */
+"状态详情" = "Status Details";
+"查看状态与处理建议" = "View status and suggested actions";

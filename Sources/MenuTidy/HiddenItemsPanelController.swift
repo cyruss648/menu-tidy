@@ -3,6 +3,11 @@ import Combine
 import MenuTidyCore
 import SwiftUI
 
+@MainActor
+final class TrayPanelPresentation: ObservableObject {
+    @Published var showsErrorDetails = false
+}
+
 /// An independent tray whose contents are available before optional image capture.
 @MainActor
 final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
@@ -14,11 +19,13 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
     private var modelObservation: AnyCancellable?
     private var preferencesObservation: AnyCancellable?
     private var isSuspendedForNativePresentation = false
+    private(set) var presentation = TrayPanelPresentation()
     private var applicationObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
 
     func show(model: MenuTidyModel, anchor: CGRect?, clickPoint: NSPoint? = nil) {
         close()
+        presentation = TrayPanelPresentation()
         self.model = model
         let screens = NSScreen.screens
         let fallbackIndex = NSScreen.main.flatMap { screens.firstIndex(of: $0) } ?? 0
@@ -45,7 +52,7 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         panel.isReleasedWhenClosed = false
         panel.delegate = self
         self.panel = panel
-        let hostingView = NSHostingView(rootView: HiddenItemsPanelView(model: model,
+        let hostingView = NSHostingView(rootView: HiddenItemsPanelView(model: model, presentation: presentation,
             width: width, maximumGridHeight: maxGridHeight) { [weak self] height in
                 self?.scheduleResize(height: height, token: token, screen: screen)
             })
@@ -79,6 +86,8 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             let consumed = MainActor.assumeIsolated {
                 if event.keyCode == 53, self?.presentationToken == token {
+                    // Let the popover consume Escape before closing its tray.
+                    if self?.presentation.showsErrorDetails == true { return false }
                     self?.model?.closeIconPanel()
                     return true
                 }
@@ -100,7 +109,9 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
     }
 
     func contains(_ point: NSPoint) -> Bool {
-        panel?.isVisible == true && panel?.frame.contains(point) == true
+        // The popover owns outside-click dismissal while it is open. Treat it
+        // as tray interaction so idle collapse cannot remove readable details.
+        panel?.isVisible == true && (presentation.showsErrorDetails || panel?.frame.contains(point) == true)
     }
 
     /// Keep this presentation's view and local state while removing its window
@@ -158,7 +169,7 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        guard !isSuspendedForNativePresentation,
+        guard !isSuspendedForNativePresentation, !presentation.showsErrorDetails,
               let window = notification.object as? NSWindow, window === panel,
               let token = presentationToken else { return }
         dismissForFocusChange(token: token)
@@ -179,6 +190,7 @@ final class HiddenItemsPanelController: NSObject, NSWindowDelegate {
         resizeTask = nil
         presentationToken = nil
         isSuspendedForNativePresentation = false
+        if presentation.showsErrorDetails { presentation.showsErrorDetails = false }
         panel?.delegate = nil
         panel?.orderOut(nil)
         panel = nil
@@ -224,6 +236,7 @@ private struct TrayPanelError {
 
 private struct HiddenItemsPanelView: View {
     @ObservedObject var model: MenuTidyModel
+    @ObservedObject var presentation: TrayPanelPresentation
     let width: CGFloat
     let maximumGridHeight: CGFloat
     let onHeightChange: (CGFloat) -> Void
@@ -292,21 +305,6 @@ private struct HiddenItemsPanelView: View {
             } else {
                 iconGrid
             }
-            if let error = displayedError {
-                errorNotice(error)
-            } else if let progress = model.panelRecoveryProgress.map(copy) {
-                Text(progress)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            } else if let id = lastInteractedItemID, model.trayPlacementIsPending(id: id) {
-                let message = model.trayPlacementMessage(id: id).map(copy) ?? copy("正在调整图标位置…")
-                Text(message)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .help(message)
-            }
             Rectangle()
                 .fill(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.08))
                 .frame(height: 1)
@@ -323,6 +321,12 @@ private struct HiddenItemsPanelView: View {
             Color.clear.preference(key: TrayPanelHeightKey.self, value: geometry.size.height)
         })
         .onPreferenceChange(TrayPanelHeightKey.self, perform: onHeightChange)
+        .task(id: displayedError != nil) {
+            guard displayedError == nil, presentation.showsErrorDetails else { return }
+            await Task.yield()
+            guard !Task.isCancelled, displayedError == nil else { return }
+            presentation.showsErrorDetails = false
+        }
         .tint(MenuTidyPalette.accent(for: colorScheme))
         .environment(\.locale, preferences.locale)
         .preferredColorScheme(preferences.resolvedColorScheme)
@@ -396,13 +400,14 @@ private struct HiddenItemsPanelView: View {
                         .lineLimit(1)
                 }
                 Text(error.message)
-                    .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
             Spacer(minLength: 0)
             if let id = error.itemID, let action = error.retryAction {
                 Button(action == .placement ? copy(model.trayPlacementRetryTitle(id: id)) : copy("重试")) {
+                    presentation.showsErrorDetails = false
                     switch action {
                     case .placement:
                         lastInteractedItemID = id
@@ -426,28 +431,78 @@ private struct HiddenItemsPanelView: View {
         .help(error.message)
     }
 
-    private var footer: some View {
-        HStack(spacing: 8) {
-            Text(hoveredItemID.flatMap { id in model.panelItems.first(where: { $0.id == id })?.name }
-                ?? format("%lld 个图标", Int64(model.panelItems.count)))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 4)
-            Text(copy("Esc 收起"))
-                .fixedSize()
-                .accessibilityHidden(true)
-            Button { model.openTraySettings() } label: {
-                Image(systemName: "gearshape")
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(copy("托盘设置"))
-            .accessibilityLabel(copy("托盘设置"))
+    private var footerProgress: String? {
+        if let progress = model.panelRecoveryProgress { return copy(progress) }
+        if let id = lastInteractedItemID, model.trayPlacementIsPending(id: id) {
+            return model.trayPlacementMessage(id: id).map(copy) ?? copy("正在调整图标位置…")
         }
-        .font(.system(size: 11))
-        .foregroundStyle(.secondary)
-        .frame(height: 20)
+        return nil
+    }
+
+    private var footer: some View {
+        let error = displayedError
+        let progress = footerProgress
+        return DeferredActivity(isActive: progress != nil) { showsActivity in
+            HStack(spacing: 8) {
+                Text(error?.message ?? (showsActivity ? progress : nil) ??
+                    hoveredItemID.flatMap { id in model.panelItems.first(where: { $0.id == id })?.name }
+                    ?? format("%lld 个图标", Int64(model.panelItems.count)))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(error == nil ? Color.secondary : .orange)
+                    .help(error?.message ?? progress ?? "")
+                Spacer(minLength: 4)
+                ZStack {
+                    // Keep the popover's anchor alive when an error clears.
+                    // Removing a presented anchor would mutate its binding
+                    // during SwiftUI's layout update.
+                    Button { presentation.showsErrorDetails.toggle() } label: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(copy("查看完整原因"))
+                    .accessibilityIdentifier("tray.errorDetails")
+                    .disabled(error == nil)
+                    .opacity(error == nil ? 0 : 1)
+                    .accessibilityHidden(error == nil)
+                    .popover(isPresented: Binding(get: { presentation.showsErrorDetails }, set: { visible in
+                        // AppKit can report dismissal during a SwiftUI update.
+                        // Publish it on the next main-actor turn, and avoid
+                        // sending a redundant change after retry already hid it.
+                        Task { @MainActor [presentation] in
+                            if presentation.showsErrorDetails != visible {
+                                presentation.showsErrorDetails = visible
+                            }
+                        }
+                    })) {
+                        ScrollView {
+                            if let error = displayedError {
+                                errorNotice(error).padding(12)
+                            }
+                        }
+                        .frame(width: 320, height: 220)
+                    }
+                    ActivityIndicator(isVisible: error == nil && showsActivity, label: copy("操作进行中"))
+                        .allowsHitTesting(false)
+                }
+                .frame(width: 16, height: 16)
+                Text(copy("Esc 收起"))
+                    .fixedSize()
+                    .accessibilityHidden(true)
+                Button { model.openTraySettings() } label: {
+                    Image(systemName: "gearshape")
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(copy("托盘设置"))
+                .accessibilityLabel(copy("托盘设置"))
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .frame(height: 20)
+        }
     }
 }
 
@@ -473,49 +528,48 @@ private struct HiddenPanelIconButton: View {
 
     var body: some View {
         Button(action: action) {
-            ZStack {
-                Group {
-                    if let displayedImage {
-                        Image(nsImage: displayedImage)
-                            .renderingMode(displayedImage.isTemplate ? .template : .original)
-                            .resizable()
-                            .scaledToFit()
-                            .foregroundStyle(.primary)
-                    } else {
-                        Group {
-                            let initial = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1))
-                            if initial.isEmpty {
-                                Image(systemName: "app.fill")
-                            } else {
-                                Text(initial.uppercased())
+            DeferredActivity(isActive: isWorking) { showsActivity in
+                ZStack {
+                    Group {
+                        if let displayedImage {
+                            Image(nsImage: displayedImage)
+                                .renderingMode(displayedImage.isTemplate ? .template : .original)
+                                .resizable()
+                                .scaledToFit()
+                                .foregroundStyle(.primary)
+                        } else {
+                            Group {
+                                let initial = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1))
+                                if initial.isEmpty {
+                                    Image(systemName: "app.fill")
+                                } else {
+                                    Text(initial.uppercased())
+                                }
                             }
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 26, height: 26)
+                                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
                         }
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 26, height: 26)
-                            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    .frame(width: displayedImage == nil ? 26 : 22, height: displayedImage == nil ? 26 : 22)
+                    .opacity(showsActivity ? 0.22 : 1)
+                    ActivityIndicator(isVisible: showsActivity,
+                                      label: preferences.localizedFormat("正在处理 %@", name))
+                }
+                .frame(width: TrayPanelLayout.cellSize, height: TrayPanelLayout.cellSize)
+                .background(Color.primary.opacity(isHovered ? 0.07 : 0),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(alignment: .bottomTrailing) {
+                    if hasError, !isWorking {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.orange)
+                            .padding(3)
                     }
                 }
-                .frame(width: displayedImage == nil ? 26 : 22, height: displayedImage == nil ? 26 : 22)
-                .opacity(isWorking ? 0.22 : 1)
-                if isWorking {
-                    ProgressView()
-                        .controlSize(.small)
-                        .accessibilityLabel(AppPreferences.shared.localizedFormat("正在处理 %@", name))
-                }
+                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
-            .frame(width: TrayPanelLayout.cellSize, height: TrayPanelLayout.cellSize)
-            .background(Color.primary.opacity(isHovered ? 0.07 : 0),
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(alignment: .bottomTrailing) {
-                if hasError, !isWorking {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.orange)
-                        .padding(3)
-                }
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)

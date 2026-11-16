@@ -36,6 +36,8 @@ struct SettingsView: View {
     @State private var draftToAssociate: PendingDraftRecord?
     @State private var associationTargetID = ""
     @State private var associationIssue: LocalizedMessage?
+    @State private var showsStatusDetails = false
+    @State private var lastCompletedMessage: LocalizedMessage?
     @Environment(\.colorScheme) private var colorScheme
 
     private var accent: Color { MenuTidyPalette.accent(for: colorScheme) }
@@ -111,8 +113,11 @@ struct SettingsView: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 16)
             Divider()
-            if isBusy { operationStatus }
             if presentation.page == .items { managementPage } else { settingsPage }
+            Divider()
+            DeferredActivity(isActive: isBusy) { showsActivity in
+                operationStatus(showsActivity: showsActivity)
+            }
         }
         .background(MenuTidyPalette.canvas(for: colorScheme))
         .tint(accent)
@@ -132,8 +137,9 @@ struct SettingsView: View {
         } message: {
             Text(format("将删除“%@”全部离线显示规则和待应用草稿。应用下次启动时，不再沿用这些选择；其他应用的记录保留。", itemToForget?.name ?? copy("此应用")))
         }
-        .onChange(of: model.managementError) { _ in presentation.managementErrorDetailsExpanded = false }
-        .onChange(of: model.positionRecoveryMessage) { _ in presentation.recoveryDetailsExpanded = false }
+        .onAppear { rememberCompletedMessage() }
+        .onChange(of: isBusy) { _ in rememberCompletedMessage() }
+        .onChange(of: model.managementMessage) { _ in rememberCompletedMessage() }
     }
 
     private var header: some View {
@@ -152,9 +158,11 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
-            Text(statusText)
+            Text(copy(model.isPanelPresented ? LocalizedMessage("托盘已打开") : LocalizedMessage("托盘已收起")))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(accent)
+                .lineLimit(1)
+                .frame(width: 94)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -183,49 +191,114 @@ struct SettingsView: View {
         return copy(model.isPanelPresented ? LocalizedMessage("托盘已打开") : LocalizedMessage("托盘已收起"))
     }
 
-    /// Keep progress outside the scrolling list so that a long list never hides
-    /// the current phase or the action that stops a system operation.
-    private var operationStatus: some View {
-        HStack(alignment: .center, spacing: 12) {
-            ProgressView().controlSize(.small)
-                .accessibilityLabel(copy("操作进行中"))
+    private func rememberCompletedMessage() {
+        if !isBusy { lastCompletedMessage = model.managementMessage }
+    }
+
+    private var statusAttentionMessage: String? {
+        [model.positionRecoveryMessage, model.managementError, model.panelActivationError,
+         model.panelError, model.draftPersistenceIssue, model.shortcutIssue, model.loginIssue,
+         model.environmentIssue, model.layoutIssue, model.iconImageWarning]
+            .compactMap { $0.map(copy) }.first
+    }
+
+    /// One permanent status area serves both pages. Progress, results and
+    /// warnings replace its contents without moving the user's scroll position.
+    private func operationStatus(showsActivity: Bool) -> some View {
+        let attention = statusAttentionMessage
+        let showsProgress = showsActivity || model.operationCancellationRequested
+        let detail = attention ?? (showsProgress ? operationDetail :
+            (lastCompletedMessage.map(copy) ?? copy("三项选择，即改即用 · 未完成时可统一应用或重试")))
+        return HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                Image(systemName: attention == nil ? "info.circle" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(attention == nil ? accent : .orange)
+                    .opacity(showsProgress ? 0 : 1)
+                    .accessibilityHidden(true)
+                ActivityIndicator(isVisible: showsProgress, label: copy("操作进行中"))
+            }
+            .frame(width: 18)
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.operationCancellationRequested ? copy("正在停止并恢复临时改动") : statusText)
+                Text(showsProgress ? statusText : (attention == nil ? copy("图标显示方式") : copy("需要处理")))
                     .font(.system(size: 12, weight: .semibold))
-                Text(operationDetail)
+                    .lineLimit(1)
+                Text(detail)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .help(operationDetail)
+                    .foregroundStyle(attention == nil ? Color.secondary : .orange)
+                    .lineLimit(1)
+                    .help(detail)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if model.operationStartedAt != nil {
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    Text(format("已用 %lld 秒", Int64(model.operationElapsedSeconds)))
-                        .font(.system(size: 11, design: .monospaced))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel(format("已用时 %lld 秒", Int64(model.operationElapsedSeconds)))
+            ZStack {
+                if showsProgress, model.operationStartedAt != nil {
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(format("已用 %lld 秒", Int64(model.operationElapsedSeconds)))
+                            .font(.system(size: 11, design: .monospaced))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .accessibilityLabel(format("已用时 %lld 秒", Int64(model.operationElapsedSeconds)))
+                    }
                 }
             }
-            if model.canCancelCurrentOperation || model.operationCancellationRequested {
-                Button(model.operationCancellationRequested ? copy("正在停止…") : copy("停止")) {
-                    model.cancelCurrentOperation()
-                }
-                .disabled(!model.canCancelCurrentOperation || model.operationCancellationRequested)
-                .keyboardShortcut(.cancelAction)
-                .help(copy("停止后续处理，先恢复本次临时改动；未完成的选择会保留。快捷键 Esc。"))
-                .accessibilityLabel(copy("停止当前操作"))
-            } else if model.isActivatingPanelItem {
-                Button(copy("停止")) { model.cancelPanelItemActivation() }
+            .frame(width: 82)
+            // Cancellation remains available immediately, even during the
+            // presentation delay. Only its reserved slot changes contents.
+            ZStack {
+                if model.canCancelCurrentOperation || model.operationCancellationRequested {
+                    Button(model.operationCancellationRequested ? copy("正在停止…") : copy("停止")) {
+                        model.cancelCurrentOperation()
+                    }
+                    .disabled(!model.canCancelCurrentOperation || model.operationCancellationRequested)
                     .keyboardShortcut(.cancelAction)
-                    .accessibilityLabel(copy("停止图标操作"))
+                    .help(copy("停止后续处理，先恢复本次临时改动；未完成的选择会保留。快捷键 Esc。"))
+                    .accessibilityLabel(copy("停止当前操作"))
+                } else if model.isActivatingPanelItem {
+                    Button(copy("停止")) { model.cancelPanelItemActivation() }
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityLabel(copy("停止图标操作"))
+                }
             }
+            .frame(width: 86)
+            Button(copy("状态详情")) { showsStatusDetails.toggle() }
+                .popover(isPresented: $showsStatusDetails, arrowEdge: .top) {
+                    statusDetails
+                }
+                .accessibilityLabel(copy("查看状态与处理建议"))
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 24)
+        .frame(height: 62)
         .background(MenuTidyPalette.accentWash(for: colorScheme, amount: 0.055))
+        .accessibilityIdentifier("settings.status")
+    }
+
+    private var statusDetails: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(copy("状态详情")).font(.system(size: 14, weight: .semibold))
+                if isBusy { issueNotice(operationDetail, symbol: "info.circle", tint: accent) }
+                managementNotices
+                if let issue = model.draftPersistenceIssue.map(copy) {
+                    issueNotice(issue, symbol: "exclamationmark.triangle", isError: true)
+                }
+                if currentTrayItems.contains(where: { model.trayPlacementNeedsIdentification(id: $0.id) }) {
+                    issueNotice(copy("需要确认身份的图标，请逐项“识别并连接”；批量操作会跳过这些项目。"),
+                                symbol: "person.crop.circle.badge.questionmark")
+                }
+                if let issue = model.shortcutIssue.map(copy) { issueNotice(issue, symbol: "keyboard") }
+                if let issue = model.loginIssue.map(copy) {
+                    issueNotice(issue, symbol: "person.crop.circle.badge.exclamationmark")
+                    Button(copy("打开系统登录项设置")) { model.showSystemLoginSettings() }
+                }
+                Text(copy("三项选择，即改即用 · 未完成时可统一应用或重试"))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+        }
+        .frame(width: 480, height: 360)
+        .environment(\.locale, preferences.locale)
     }
 
     private var operationDetail: String {
@@ -250,17 +323,11 @@ struct SettingsView: View {
                     if model.usesNativeVisibility && !model.nativeVisibilityAccessAvailable { nativeVisibilityAccessCard(compact: true) }
                     if model.nativeSystemVisibilityAccessNeeded { nativeSystemVisibilityAccessCard }
                     if showsPositionAccessCard && !model.menuBarPositionAccessAvailable { menuBarPositionAccessCard(compact: true) }
-                    recoveryNotice
                     if model.isArranging { arrangementNotice }
-                    compatibilityNotices
                     HStack(spacing: 10) {
                         ForEach(ItemVisibility.allCases) { groupSummary($0) }
                     }
                     trayListToolbar
-                    if currentTrayItems.contains(where: { model.trayPlacementNeedsIdentification(id: $0.id) }) {
-                        Label(copy("需要确认身份的图标，请逐项“识别并连接”；批量操作会跳过这些项目。"), systemImage: "person.crop.circle.badge.questionmark")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
-                    }
                     trayItemList
                     HStack(alignment: .top, spacing: 7) {
                         Image(systemName: "info.circle").accessibilityHidden(true)
@@ -272,10 +339,6 @@ struct SettingsView: View {
                         }
                     }
                     .font(.system(size: 11)).foregroundStyle(.secondary)
-                    if let issue = model.draftPersistenceIssue.map(copy) {
-                        Label(issue, systemImage: "exclamationmark.triangle")
-                            .font(.system(size: 11)).foregroundStyle(.orange)
-                    }
                     savedRecords
                     if !model.isArranging && !model.usesNativeVisibility { arrangementEntry }
                     if !usesPanelVisibility && model.temporarilyRevealingAll && !model.isArranging { temporaryRevealNotice }
@@ -293,21 +356,36 @@ struct SettingsView: View {
                 Text(copy("图标显示方式")).font(.system(size: 15, weight: .semibold))
                 Text(managementSummary)
                     .font(.system(size: 11)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2, reservesSpace: true)
+                    .help(managementSummary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button(model.trayRetryCount > 0 ? format("重试失败项 · %lld", Int64(model.trayRetryCount)) : copy("重试失败项")) {
+            Button {
                 model.retryFailedTrayPlacements()
+            } label: {
+                stableCountedTitle(format("重试失败项 · %lld", Int64(model.trayRetryCount)),
+                                   sizing: format("重试失败项 · %lld", Int64(999)))
             }
             .disabled(!model.trayPlacementBatchActionsAllowed || model.trayRetryCount == 0)
             .help(copy("仅重试当前可处理的失败项，保留各自的三项选择；归属待修复项不参与批量重试；需要单独识别的图标请使用行内按钮。范围不受搜索与筛选影响。"))
-            Button(model.trayPendingApplicationCount > 0 ? format("应用全部待处理 · %lld", Int64(model.trayPendingApplicationCount)) : copy("应用全部待处理")) {
+            Button {
                 model.applyPendingTrayPlacements()
+            } label: {
+                stableCountedTitle(format("应用全部待处理 · %lld", Int64(model.trayPendingApplicationCount)),
+                                   sizing: format("应用全部待处理 · %lld", Int64(999)))
             }
             .buttonStyle(.borderedProminent)
             .disabled(!model.trayPlacementBatchActionsAllowed || model.trayPendingApplicationCount == 0)
             .help(copy("继续处理所有可直接应用的未完成选择，包括失败项。已确认、离线、归属待修复和需要单独识别的图标不重复处理。范围不受搜索与筛选影响。"))
         }
+    }
+
+    private func stableCountedTitle(_ title: String, sizing: String) -> some View {
+        Text(sizing)
+            .hidden()
+            .overlay { Text(title).lineLimit(1) }
+            .monospacedDigit()
+            .accessibilityLabel(title)
     }
 
     private var managementSummary: String {
@@ -324,12 +402,13 @@ struct SettingsView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
                 TextField(copy("搜索应用或图标"), text: $presentation.traySearchText)
                     .textFieldStyle(.plain).accessibilityLabel(copy("搜索应用或图标"))
-                if !presentation.traySearchText.isEmpty {
-                    Button { presentation.traySearchText = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain).accessibilityLabel(copy("清除搜索"))
+                Button { presentation.traySearchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain).accessibilityLabel(copy("清除搜索"))
+                .opacity(presentation.traySearchText.isEmpty ? 0 : 1)
+                .disabled(presentation.traySearchText.isEmpty)
+                .accessibilityHidden(presentation.traySearchText.isEmpty)
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
             .background(MenuTidyPalette.controlSurface(for: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -379,13 +458,17 @@ struct SettingsView: View {
                     if !presentation.traySearchText.isEmpty || presentation.trayFilter != "all" {
                         Button(copy("显示全部图标")) { presentation.traySearchText = ""; presentation.trayFilter = "all" }.buttonStyle(.link)
                     } else {
-                        Text(model.accessibilityGranted ? copy("确认对应应用已运行，再点击上方“刷新”。") : copy("完成上方授权后即可读取和管理图标。"))
+                        Text(model.isRefreshing ? copy("正在读取最新状态；列表中的选择会保留。") :
+                            (model.accessibilityGranted ? copy("确认对应应用已运行，再点击上方“刷新”。") : copy("完成上方授权后即可读取和管理图标。")))
                             .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .lineLimit(2, reservesSpace: true)
                     }
                 }
                 .frame(maxWidth: .infinity, minHeight: 130).padding(16)
             } else {
-                LazyVStack(spacing: 0) {
+                // A menu-bar inventory is small. Measure every row so lazy
+                // height estimates cannot move the scrollbar during refresh.
+                VStack(spacing: 0) {
                     ForEach(filteredTrayItems, id: \.presentationID) { item in
                         trayItemRow(item)
                         Divider().padding(.leading, 60)
@@ -411,58 +494,67 @@ struct SettingsView: View {
         let retryTitle = message == nil ? copy("应用") : copy(model.trayPlacementRetryTitle(id: item.id))
         return HStack(spacing: 12) {
             itemIcon(item)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 7) {
-                    Text(item.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                    if pending {
-                        ProgressView().controlSize(.small)
-                        rowBadge(copy("处理中"), color: accent)
-                    } else if item.isAwaitingDiscovery {
-                        rowBadge(connectionFailed ? copy("读取连接异常") : copy("当前无图标"),
-                            color: connectionFailed ? .orange : .secondary)
-                    } else if !item.canMove {
-                        rowBadge(copy("系统保留"), color: .secondary)
-                    } else if message != nil {
-                        rowBadge(model.trayPlacementNeedsOwnershipRepair(id: item.id) ? copy("归属待修复") : copy("需处理"), color: .orange)
-                    } else if needsConfirmation {
-                        rowBadge(copy("待应用"), color: .secondary)
+            DeferredActivity(isActive: pending) { showsActivity in
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 7) {
+                        Text(item.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        if showsActivity {
+                            ActivityIndicator(isVisible: true, label: copy("处理中"))
+                            rowBadge(copy("处理中"), color: accent)
+                        } else if item.isAwaitingDiscovery {
+                            rowBadge(connectionFailed ? copy("读取连接异常") : copy("当前无图标"),
+                                color: connectionFailed ? .orange : .secondary)
+                        } else if !item.canMove {
+                            rowBadge(copy("系统保留"), color: .secondary)
+                        } else if message != nil && !pending {
+                            rowBadge(model.trayPlacementNeedsOwnershipRepair(id: item.id) ? copy("归属待修复") : copy("需处理"), color: .orange)
+                        } else if needsConfirmation {
+                            rowBadge(copy("待应用"), color: .secondary)
+                        }
                     }
-                }
-                if let message, !pending {
-                    Text(model.trayPlacementNeedsOwnershipRepair(id: item.id) ? message : issueSummary(message))
-                        .font(.system(size: 11)).foregroundStyle(.orange)
-                        .lineLimit(model.trayPlacementNeedsOwnershipRepair(id: item.id) ? 4 : 2).help(message)
-                        .accessibilityLabel(format("需要处理：%@", message))
-                } else if pending {
-                    Text(copy("正在按顺序处理，可继续更改选择。"))
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                } else if item.isAwaitingDiscovery {
-                    Text(copy(item.detail))
-                        .font(.system(size: 11))
-                        .foregroundStyle(connectionFailed ? Color.orange : Color.secondary).lineLimit(2)
-                } else if item.hasMixedGroups {
-                    Text(copy("已有图标分类不一致，请明确选择此应用的显示方式。"))
-                        .font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2)
-                } else {
-                    Text(needsConfirmation ? copy("选择已保留，等待应用并确认。") :
-                            (!item.canMove ? copy("由系统管理，保持显示。") :
-                                (item.ownerName.isEmpty || item.ownerName == item.name ? copy("更改后自动处理") : item.ownerName)))
-                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    .frame(height: 18, alignment: .leading)
+                    Group {
+                        if let message, !pending {
+                            Text(issueSummary(message)).foregroundStyle(.orange)
+                                .help(message).accessibilityLabel(format("需要处理：%@", message))
+                        } else if showsActivity {
+                            Text(copy("正在按顺序处理，可继续更改选择。")).foregroundStyle(.secondary)
+                        } else if item.isAwaitingDiscovery {
+                            Text(copy(item.detail))
+                                .foregroundStyle(connectionFailed ? Color.orange : Color.secondary)
+                                .help(copy(item.detail))
+                        } else if item.hasMixedGroups {
+                            Text(copy("已有图标分类不一致，请明确选择此应用的显示方式。")).foregroundStyle(.orange)
+                        } else {
+                            Text(needsConfirmation ? copy("选择已保留，等待应用并确认。") :
+                                    (!item.canMove ? copy("由系统管理，保持显示。") :
+                                        (item.ownerName.isEmpty || item.ownerName == item.name ? copy("更改后自动处理") : item.ownerName)))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .lineLimit(2, reservesSpace: true)
+                    .frame(height: 30, alignment: .topLeading)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if connectionFailed {
-                Button(model.isReconnectingMenuBarClient ? copy("正在检查…") : copy("重新连接")) {
-                    model.reconnectMenuBarClient(id: item.id)
+            ZStack {
+                if connectionFailed {
+                    Button(model.isReconnectingMenuBarClient ? copy("正在检查…") : copy("重新连接")) {
+                        model.reconnectMenuBarClient(id: item.id)
+                    }
+                    .disabled(trayControlsDisabled || model.isReconnectingMenuBarClient)
+                    .help(copy("检查独立读取连接；确认连接失效后，正常重新打开 Menu Tidy 并恢复已保存的分类。"))
+                } else if !pending && (message != nil || needsConfirmation) && item.canMove {
+                    Button(retryTitle) { model.retryTrayPlacement(id: item.id) }
+                        .disabled(trayControlsDisabled)
+                        .accessibilityLabel("\(retryTitle)\(item.name)")
+                        .help(message ?? copy("应用并确认此前保存的选择。"))
                 }
-                .controlSize(.small).disabled(trayControlsDisabled || model.isReconnectingMenuBarClient)
-                .help(copy("检查独立读取连接；确认连接失效后，正常重新打开 Menu Tidy 并恢复已保存的分类。"))
-            } else if !pending && (message != nil || needsConfirmation) && item.canMove {
-                Button(retryTitle) { model.retryTrayPlacement(id: item.id) }
-                    .controlSize(.small).disabled(trayControlsDisabled)
-                    .accessibilityLabel("\(retryTitle)\(item.name)")
-                    .help(message ?? copy("应用并确认此前保存的选择。"))
             }
+            .controlSize(.small)
+            .lineLimit(1)
+            .frame(width: 106)
             Picker(format("%@的显示方式", item.name), selection: Binding(
                 get: { model.trayPlacementGroup(id: item.id) },
                 set: { model.requestTrayPlacement(id: item.id, group: $0) }
@@ -646,7 +738,7 @@ struct SettingsView: View {
                 Text(groupDescription(group))
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2, reservesSpace: true)
                 Text(pendingCount > 0 ? format("%lld 项尚待确认", Int64(pendingCount)) : copy("无待处理选择"))
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(pendingCount > 0 ? .orange : .secondary)
@@ -777,10 +869,7 @@ struct SettingsView: View {
                 Text(copy("当前没有可关联的图标。请返回列表刷新后重试。"))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            if let issue = associationIssue {
-                Text(copy(issue)).font(.system(size: 11)).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            stableNotice(associationIssue.map(copy), tint: .orange)
             HStack {
                 Spacer()
                 Button(copy("取消")) { draftToAssociate = nil }.keyboardShortcut(.cancelAction)
@@ -939,15 +1028,6 @@ struct SettingsView: View {
                     preferencesCard
                 }
                 UpdateSettingsView(updates: updates)
-                managementNotices
-                if let issue = model.shortcutIssue.map(copy) { issueNotice(issue, symbol: "keyboard") }
-                if let issue = model.loginIssue.map(copy) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        issueNotice(issue, symbol: "person.crop.circle.badge.exclamationmark")
-                        Button(copy("打开系统登录项设置")) { model.showSystemLoginSettings() }
-                            .buttonStyle(.link).padding(.leading, 24)
-                    }
-                }
                 footer
             }
             .padding(20)
@@ -1046,9 +1126,7 @@ struct SettingsView: View {
                 }
             }
 
-            if let message = model.permissionCheckMessage.map(copy) {
-                issueNotice(message, symbol: "info.circle", tint: accent)
-            }
+            stableNotice(model.permissionCheckMessage.map(copy), tint: accent)
 
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -1117,9 +1195,8 @@ struct SettingsView: View {
                 if compact { Button(copy("权限说明")) { presentation.page = .settings }.buttonStyle(.link) }
             }
             .disabled(groupingControlsDisabled)
-            if let message = model.nativeVisibilityAccessMessage.map(copy) {
-                issueNotice(message, symbol: "info.circle", tint: model.nativeVisibilityAccessAvailable ? accent : .orange)
-            }
+            stableNotice(model.nativeVisibilityAccessMessage.map(copy),
+                         tint: model.nativeVisibilityAccessAvailable ? accent : .orange)
         }
         .padding(compact ? 12 : 16)
         .modifier(SettingsCardStyle())
@@ -1133,9 +1210,7 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Button(copy("授权系统图标显示设置…")) { model.requestNativeSystemVisibilityAccess() }
                 .disabled(groupingControlsDisabled)
-            if let message = model.nativeSystemVisibilityAccessMessage.map(copy) {
-                issueNotice(message, symbol: "info.circle", tint: .orange)
-            }
+            stableNotice(model.nativeSystemVisibilityAccessMessage.map(copy), tint: .orange)
         }
         .padding(12)
         .modifier(SettingsCardStyle())
@@ -1185,10 +1260,8 @@ struct SettingsView: View {
                 }
             }
             .disabled(groupingControlsDisabled)
-            if let message = model.menuBarPositionAccessMessage.map(copy) {
-                issueNotice(message, symbol: "info.circle",
-                            tint: model.menuBarPositionAccessAvailable ? accent : .orange)
-            }
+            stableNotice(model.menuBarPositionAccessMessage.map(copy),
+                         tint: model.menuBarPositionAccessAvailable ? accent : .orange)
         }
         .padding(compact ? 12 : 16)
         .modifier(SettingsCardStyle())
@@ -1344,6 +1417,18 @@ struct SettingsView: View {
         }
         .padding(.vertical, 13)
     }
+    /// Permission checks update in place, including the empty state.
+    private func stableNotice(_ text: String?, tint: Color) -> some View {
+        Label(text ?? " ", systemImage: "info.circle")
+            .font(.system(size: 11))
+            .foregroundStyle(tint)
+            .lineLimit(2, reservesSpace: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(text ?? "")
+            .opacity(text == nil ? 0 : 1)
+            .accessibilityHidden(text == nil)
+    }
+
     private func issueNotice(_ text: String, symbol: String, isError: Bool = false,
                              tint: Color = .orange) -> some View {
         HStack(alignment: .top, spacing: 8) {

@@ -4,6 +4,16 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.26] - 2026-11-16
+
+- Delay transient activity indicators by 350 milliseconds so quick operations do not flash a loading message. Cancellation remains available immediately.
+- Keep progress, results, and warning summaries in a fixed bottom status bar. Full explanations and recovery actions open in Status details without inserting content into the list.
+- Reserve space for row details, actions, batch counts, search clearing, permission checks, and update feedback to preserve list height and reading position during refreshes and retries.
+- Reuse the tray footer for progress and errors. Full error details and retry actions open in a popover; automatic collapse pauses while reading it, and retry dismisses it normally.
+- Update the software update section immediately when the interface language changes.
+
+Verification: the local full gate passed 110 Python, 540 Swift core, and 185 application integration tests. Native window regression tests cover delayed loading, scroll position, retries, and tray error popovers. The isolated preview was checked in Chinese and English, light and dark appearances, and permission feedback states. Public packages for both architectures, signed feeds, and installed-app acceptance are recorded separately; simulated preview data does not establish production acceptance. Uses the project's self-signed release identity and is not Apple notarized.
+
 ## [0.7.25] - 2026-11-16
 
 - Recover when an icon is visible in the menu bar but Menu Tidy keeps waiting for discovery. An orderly relaunch requires repeated denied reads for the same application process and independent confirmation that the original icon is readable. Automatic recovery is limited to once per boot, with an explicit reconnect action available.

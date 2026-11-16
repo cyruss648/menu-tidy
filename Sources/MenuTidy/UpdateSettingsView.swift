@@ -4,7 +4,7 @@ import SwiftUI
 /// Content only: the parent settings page owns the single vertical scroll view.
 struct UpdateSettingsView: View {
     @ObservedObject var updates: UpdateController
-    private let preferences = AppPreferences.shared
+    @ObservedObject private var preferences = AppPreferences.shared
     @State private var showsHistory = false
 
     var body: some View {
@@ -51,7 +51,8 @@ struct UpdateSettingsView: View {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(copy(updates.statusMessage))
                             .font(.system(size: 11, weight: .medium))
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(2, reservesSpace: true)
+                            .help(copy(updates.statusMessage))
                         if let date = updates.lastUpdateCheckDate {
                             Text(format("最近检查：%@", date.formatted(
                                 Date.FormatStyle(date: .abbreviated, time: .shortened).locale(preferences.locale))))
@@ -60,26 +61,29 @@ struct UpdateSettingsView: View {
                             Text(copy("尚无检查记录"))
                                 .font(.system(size: 10)).foregroundStyle(.secondary)
                         }
-                        if updates.operationInProgress {
+                        DeferredActivity(isActive: updates.operationInProgress) { showsActivity in
                             Text(copy("当前菜单栏操作结束后可检查或安装更新。"))
                                 .font(.system(size: 10)).foregroundStyle(.secondary)
+                                .lineLimit(2, reservesSpace: true)
+                                .opacity(showsActivity ? 1 : 0)
+                                .accessibilityHidden(!showsActivity)
                         }
                     }
                     Spacer(minLength: 0)
-                    if updates.sessionInProgress {
-                        ProgressView().controlSize(.small)
-                            .accessibilityLabel(copy("正在处理软件更新"))
+                    DeferredActivity(isActive: updates.sessionInProgress) { showsActivity in
+                        ActivityIndicator(isVisible: showsActivity, label: copy("正在处理软件更新"))
                     }
                     Button(copy("检查更新…")) { updates.checkForUpdates() }
                         .disabled(!updates.canCheckForUpdates)
                 }
                 .padding(.vertical, 13)
-                if let issue = updates.issue.map(copy) {
-                    Label(issue, systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 11)).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.bottom, 13)
-                }
+                Label(updates.issue.map(copy) ?? " ", systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11)).foregroundStyle(.orange)
+                    .lineLimit(2, reservesSpace: true)
+                    .help(updates.issue.map(copy) ?? "")
+                    .opacity(updates.issue == nil ? 0 : 1)
+                    .accessibilityHidden(updates.issue == nil)
+                    .padding(.bottom, 13)
                 Divider()
                 HStack(spacing: 16) {
                     Button { showsHistory = true } label: {
