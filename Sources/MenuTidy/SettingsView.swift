@@ -486,7 +486,7 @@ struct SettingsView: View {
         return currentTrayItems.isEmpty ? copy("暂未发现菜单栏图标") : copy("没有匹配的图标")
     }
 
-    private func trayItemRow(_ item: ManagedItemRow) -> some View {
+    func trayItemRow(_ item: ManagedItemRow) -> some View {
         let pending = model.trayPlacementIsPending(id: item.id)
         let connectionFailed = model.trayDiscoveryConnectionFailed(id: item.id)
         let message = model.trayPlacementFailure(id: item.id).map(copy)
@@ -495,7 +495,7 @@ struct SettingsView: View {
         return HStack(spacing: 12) {
             itemIcon(item)
             DeferredActivity(isActive: pending) { showsActivity in
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 7) {
                         Text(item.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
                         if showsActivity {
@@ -513,29 +513,21 @@ struct SettingsView: View {
                         }
                     }
                     .frame(height: 18, alignment: .leading)
-                    Group {
-                        if let message, !pending {
-                            Text(issueSummary(message)).foregroundStyle(.orange)
-                                .help(message).accessibilityLabel(format("需要处理：%@", message))
-                        } else if showsActivity {
-                            Text(copy("正在按顺序处理，可继续更改选择。")).foregroundStyle(.secondary)
-                        } else if item.isAwaitingDiscovery {
-                            Text(copy(item.detail))
-                                .foregroundStyle(connectionFailed ? Color.orange : Color.secondary)
-                                .help(copy(item.detail))
-                        } else if item.hasMixedGroups {
-                            Text(copy("已有图标分类不一致，请明确选择此应用的显示方式。")).foregroundStyle(.orange)
-                        } else {
-                            Text(needsConfirmation ? copy("选择已保留，等待应用并确认。") :
-                                    (!item.canMove ? copy("由系统管理，保持显示。") :
-                                        (item.ownerName.isEmpty || item.ownerName == item.name ? copy("更改后自动处理") : item.ownerName)))
-                                .foregroundStyle(.secondary)
-                        }
+                    if let detail = trayItemDetail(item, message: pending ? nil : message,
+                                                   showsActivity: showsActivity, needsConfirmation: needsConfirmation) {
+                        Text(message != nil && !pending ? issueSummary(detail) : detail)
+                            .foregroundStyle((message != nil && !pending) || connectionFailed || item.hasMixedGroups
+                                ? Color.orange : Color.secondary)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                            .frame(height: 14, alignment: .leading)
+                            .help(detail)
+                            .accessibilityLabel(message != nil && !pending ? format("需要处理：%@", detail) : detail)
                     }
-                    .font(.system(size: 11))
-                    .lineLimit(2, reservesSpace: true)
-                    .frame(height: 30, alignment: .topLeading)
                 }
+                // A normal title is centered; a useful second line shares this
+                // same compact space during processing, errors and recovery.
+                .frame(height: 34)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             ZStack {
@@ -565,8 +557,19 @@ struct SettingsView: View {
             .disabled(trayControlsDisabled || !item.canMove || !item.isAvailable)
             .help(item.canMove ? copy("选择后立即保存并处理。处理中继续更改，将以最新选择为准。") : copy(item.detail))
         }
-        .padding(.horizontal, 16).padding(.vertical, 13)
+        .padding(.horizontal, 16).padding(.vertical, 7)
         .background(message != nil && !pending ? Color.orange.opacity(0.035) : .clear)
+    }
+
+    private func trayItemDetail(_ item: ManagedItemRow, message: String?,
+                                showsActivity: Bool, needsConfirmation: Bool) -> String? {
+        if let message { return message }
+        if showsActivity { return copy("正在按顺序处理，可继续更改选择。") }
+        if item.isAwaitingDiscovery { return copy(item.detail) }
+        if item.hasMixedGroups { return copy("已有图标分类不一致，请明确选择此应用的显示方式。") }
+        if needsConfirmation { return copy("选择已保留，等待应用并确认。") }
+        if !item.canMove { return copy("由系统管理，保持显示。") }
+        return item.ownerName.isEmpty || item.ownerName == item.name ? nil : item.ownerName
     }
 
     private var savedRecords: some View {

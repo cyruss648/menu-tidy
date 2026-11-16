@@ -1,8 +1,8 @@
 # 构建与发布
 
-本次版本修复可选图像缺失的全局误报与无效补采，发布范围与验证边界见[更新记录](../CHANGELOG.md)和[原始图像状态记录](OPTIONAL-ICON-IMAGES-20261116.md)。macOS 27 assessment 后端与原生菜单栏显示设置的兼容边界见[原生菜单栏允许开关研究](NATIVE-VISIBILITY-RESEARCH.md)。
+本次版本压缩图标管理行并修复软件更新卡片的过量占位，发布范围与验证边界见[更新记录](../CHANGELOG.md)和[紧凑布局记录](COMPACT-SETTINGS-LAYOUT-20261116.md)。macOS 27 assessment 后端与原生菜单栏显示设置的兼容边界见[原生菜单栏允许开关研究](NATIVE-VISIBILITY-RESEARCH.md)。
 
-Menu Tidy 当前源码版本为 **0.7.27（build 103）**。本版本将可选原始图像不足改为主动查看的信息，并停止已有应用图标项目的原始截图轮询与补采。实现、完整门禁及原生窗口回归见[原始图像状态记录](OPTIONAL-ICON-IMAGES-20261116.md)。此前读取连接异常与启动补偿见[读取连接与启动恢复记录](AX-CLIENT-RECOVERY-20261116.md)，其他历史修复见[更新记录](../CHANGELOG.md)。`SPARKLE_PRIVATE_KEY` 已获用户明确授权并上传。下面的流程只在对应 Actions 与 Release 实际完成后构成公开发布；本地候选验收不替代 GitHub 发布物安装验收。
+Menu Tidy 当前源码版本为 **0.7.28（build 104）**。更新反馈改为共用两行摘要与详情浮层，消除透明等待、错误占位叠加产生的空白。此前可选图像误报修复见[原始图像状态记录](OPTIONAL-ICON-IMAGES-20261116.md)，其他历史修复见[更新记录](../CHANGELOG.md)。`SPARKLE_PRIVATE_KEY` 已获用户明确授权并上传。下面的流程只在对应 Actions 与 Release 实际完成后构成公开发布；本地候选验收不替代 GitHub 发布物安装验收。
 
 普通提交和 Pull Request 会生成供检查的构建产物；只有推送与应用版本一致的 `v*` 标签，才会尝试创建 GitHub Release。**版本带预发布后缀时进入 preview，并标为 Prerelease；没有后缀时进入 stable。** 例如 `v0.6.0-beta.1` 不改变稳定版 Latest，`v0.6.0` 则作为稳定版发布并更新 Latest。不要用文案中的“预览版”代替实际版本后缀。
 

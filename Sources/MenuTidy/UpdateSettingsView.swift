@@ -47,43 +47,17 @@ struct UpdateSettingsView: View {
                         .disabled(!updates.canConfigureUpdates || !updates.allowsAutomaticUpdates)
                 }
                 Divider()
-                HStack(alignment: .center, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(copy(updates.statusMessage))
-                            .font(.system(size: 11, weight: .medium))
-                            .lineLimit(2, reservesSpace: true)
-                            .help(copy(updates.statusMessage))
-                        if let date = updates.lastUpdateCheckDate {
-                            Text(format("最近检查：%@", date.formatted(
-                                Date.FormatStyle(date: .abbreviated, time: .shortened).locale(preferences.locale))))
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                        } else {
-                            Text(copy("尚无检查记录"))
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                        }
-                        DeferredActivity(isActive: updates.operationInProgress) { showsActivity in
-                            Text(copy("当前菜单栏操作结束后可检查或安装更新。"))
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                                .lineLimit(2, reservesSpace: true)
-                                .opacity(showsActivity ? 1 : 0)
-                                .accessibilityHidden(!showsActivity)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                    DeferredActivity(isActive: updates.sessionInProgress) { showsActivity in
-                        ActivityIndicator(isVisible: showsActivity, label: copy("正在处理软件更新"))
-                    }
-                    Button(copy("检查更新…")) { updates.checkForUpdates() }
-                        .disabled(!updates.canCheckForUpdates)
-                }
-                .padding(.vertical, 13)
-                Label(updates.issue.map(copy) ?? " ", systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 11)).foregroundStyle(.orange)
-                    .lineLimit(2, reservesSpace: true)
-                    .help(updates.issue.map(copy) ?? "")
-                    .opacity(updates.issue == nil ? 0 : 1)
-                    .accessibilityHidden(updates.issue == nil)
-                    .padding(.bottom, 13)
+                UpdateStatusRow(
+                    status: copy(updates.statusMessage),
+                    lastCheck: updates.lastUpdateCheckDate.map {
+                        format("最近检查：%@", $0.formatted(
+                            Date.FormatStyle(date: .abbreviated, time: .shortened).locale(preferences.locale)))
+                    } ?? copy("尚无检查记录"),
+                    issue: updates.issue.map(copy),
+                    operationInProgress: updates.operationInProgress,
+                    sessionInProgress: updates.sessionInProgress,
+                    canCheckForUpdates: updates.canCheckForUpdates,
+                    checkForUpdates: updates.checkForUpdates)
                 Divider()
                 HStack(spacing: 16) {
                     Button { showsHistory = true } label: {
@@ -137,4 +111,72 @@ struct UpdateSettingsView: View {
         if seconds >= 3600 { return format("每 %lld 小时", Int64(seconds / 3600)) }
         return format("每 %lld 分钟", Int64(seconds / 60))
     }
+}
+
+/// All update states share two text lines; full details never add height to the settings page.
+struct UpdateStatusRow: View {
+    let status: String
+    let lastCheck: String
+    let issue: String?
+    let operationInProgress: Bool
+    let sessionInProgress: Bool
+    let canCheckForUpdates: Bool
+    let checkForUpdates: () -> Void
+    @ObservedObject private var preferences = AppPreferences.shared
+    @State private var showsDetails = false
+
+    var body: some View {
+        HStack(spacing: 16) {
+            DeferredActivity(isActive: operationInProgress) { showsActivity in
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(status)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(issue == nil ? Color.primary : Color.orange)
+                        .help(status)
+                    Text(issue ?? (showsActivity ? waitingMessage : lastCheck))
+                        .font(.system(size: 10))
+                        .foregroundStyle(issue == nil ? Color.secondary : Color.orange)
+                        .help(issue ?? (showsActivity ? waitingMessage : lastCheck))
+                }
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            DeferredActivity(isActive: sessionInProgress) { showsActivity in
+                ActivityIndicator(isVisible: showsActivity, label: copy("正在处理软件更新"))
+            }
+            Button { showsDetails = true } label: {
+                Image(systemName: issue == nil ? "info.circle" : "exclamationmark.triangle")
+                    .foregroundStyle(issue == nil ? Color.secondary : Color.orange)
+                    .frame(width: 16, height: 16)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(copy("软件更新状态详情"))
+            .help(copy("软件更新状态详情"))
+            .popover(isPresented: $showsDetails) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(copy("软件更新")).font(.headline)
+                    Text(status)
+                    Text(lastCheck).foregroundStyle(.secondary)
+                    if operationInProgress {
+                        Text(waitingMessage).foregroundStyle(.secondary)
+                    }
+                    if let issue {
+                        Label(issue, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .font(.system(size: 12))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .padding(16)
+                .frame(width: 360, alignment: .leading)
+            }
+            Button(copy("检查更新…"), action: checkForUpdates)
+                .disabled(!canCheckForUpdates)
+        }
+        .padding(.vertical, 13)
+    }
+
+    private var waitingMessage: String { copy("当前菜单栏操作结束后可检查或安装更新。") }
+    private func copy(_ key: LocalizedMessage) -> String { preferences.localized(key) }
 }

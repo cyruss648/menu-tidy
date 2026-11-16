@@ -4,6 +4,15 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.28] - 2026-11-16
+
+- Reduce management rows from 79 pt to 48 pt and remove repeated automatic-apply hints. Normal rows center the name; processing, failures, and pending confirmation share a compact detail line.
+- Remove the oversized blank area in Software Update caused by separate invisible placeholders for waiting and error messages.
+- Share a compact two-line area for update results, last-check time, waiting reasons, and error summaries. Full text is available in update status details without expanding the settings card.
+- Keep delayed activity indicators and a stable Check for Updates action. Real failures remain visible through warning text and an icon.
+
+Verification: native layout regression covers narrow and wide cards, idle, waiting, checking, long errors, and recovery. Full gate, public package verification, and installed-app acceptance are recorded separately in the compact settings layout report. Uses the project's self-signed release identity and is not Apple notarized.
+
 ## [0.7.27] - 2026-11-16
 
 - Stop treating missing optional original images as persistent “Needs attention” errors. The tray remains usable with app icons or names; snapshot gaps, offline records, and disabled screen recording no longer become global failures.

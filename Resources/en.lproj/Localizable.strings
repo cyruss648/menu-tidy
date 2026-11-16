@@ -837,3 +837,4 @@
 "系统当前未提供可单独采集的图标窗口；托盘将继续使用应用图标或名称。" = "The system is not currently exposing individually capturable icon windows; the tray continues to use app icons or names.";
 "本轮未取得新的原始图标图像；仍可使用应用图标或名称。" = "No new original icon images were obtained in this attempt; app icons or names remain available.";
 "图标图像仅在本机显示与缓存，不上传、不采集声音" = "Icon images are displayed and cached locally, with no uploads or audio capture";
+"软件更新状态详情" = "Software update status details";
