@@ -4,6 +4,15 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.29] - 2026-11-17
+
+- Move running applications whose menu bar icons are disabled into Offline and Saved Records, labeled “No menu bar icon currently.” Keep their saved categories and exclude them from current icon counts and batch actions.
+- Reconnect an icon enabled again in the same application process using its saved category. Previous successful connection attempts no longer block rediscovery; failed attempts retain their retry limits and confirmed hidden inventory remains protected.
+- Stop showing a warning solely because a tray action opens no new menu or window. Screenshot, toggle, and no-op behaviors still receive exactly one native action.
+- Keep warnings for rejected actions, missing permissions, and failed hiding restoration. Preserve temporary visibility while a target interface is still open or its state cannot be confirmed.
+
+Verification: the full local gate for both fixes passed 110 Python, 540 Swift core, and 199 application integration tests, including absent icons, same-process rediscovery, actions without popups, real failures, and lock-screen recovery. The final version gate, dual architecture public packages, signed feeds, and installed third-party application acceptance are recorded separately in the repository's icon absence and quiet actions report. Uses the project's self-signed release identity and is not Apple notarized.
+
 ## [0.7.28] - 2026-11-16
 
 - Reduce management rows from 79 pt to 48 pt and remove repeated automatic-apply hints. Normal rows center the name; processing, failures, and pending confirmation share a compact detail line.

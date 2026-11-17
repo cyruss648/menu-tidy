@@ -53,6 +53,109 @@ final class PanelSessionIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testActionWithoutANewPresentationRestoresHiddenStateWithoutAWarningOrRepeat() async throws {
+        let f = try await Fixture.make(); defer { f.dispose() }
+        let choice = f.defaults.data(forKey: "nativeTrayChoices.v1")
+        f.system.panelPressReturnsPresentation = false
+        f.model.recordPanelItemFailure(id: f.id, message: MenuBarAccessError.actionRejected.localizedMessage)
+
+        await f.activate()
+
+        XCTAssertEqual(f.system.panelPressCount, 1)
+        XCTAssertEqual(f.system.panelVisibilityReadCount, 1)
+        XCTAssertEqual(f.system.panelStatusReadCount, 0)
+        XCTAssertEqual(f.system.rehiddenBundles, [f.bundle])
+        XCTAssertEqual(f.system.allowed[f.bundle], false)
+        XCTAssertTrue(f.system.revealedBundles.isEmpty)
+        XCTAssertNil(f.model.panelActivationError)
+        XCTAssertNil(f.model.trayItemErrors[f.id])
+        XCTAssertNil(f.model.positionRecoveryMessage)
+        XCTAssertNil(f.model.panelItemProgress)
+        XCTAssertFalse(f.model.isActivatingPanelItem)
+        XCTAssertTrue(f.model.trayPlacementSelectionAllowed)
+        XCTAssertEqual(f.defaults.data(forKey: "nativeTrayChoices.v1"), choice)
+    }
+
+    @MainActor
+    func testActionWithoutAPresentationStillReportsARealRehideFailure() async throws {
+        let f = try await Fixture.make(); defer { f.dispose() }
+        f.system.panelPressReturnsPresentation = false
+        f.system.beforeRehide = { throw MenuBarAccessError.rejected }
+
+        await f.activate()
+
+        XCTAssertEqual(f.system.panelPressCount, 1)
+        XCTAssertNil(f.model.panelActivationError)
+        XCTAssertNotNil(f.model.positionRecoveryMessage)
+        XCTAssertEqual(f.model.trayItemErrors[f.id], f.model.positionRecoveryMessage)
+        XCTAssertEqual(f.system.allowed[f.bundle], true)
+        XCTAssertEqual(f.model.trayPlacementGroup(id: f.id), .collapsible)
+        XCTAssertFalse(f.model.isActivatingPanelItem)
+    }
+
+    @MainActor
+    func testUnconfirmedPresentationCannotHideAnOpenOrUnreadableInterface() async throws {
+        for visible in [true, nil] as [Bool?] {
+            let f = try await Fixture.make(); defer { f.dispose() }
+            f.system.panelPressReturnsPresentation = false
+            f.system.panelHasVisiblePresentation = { visible }
+
+            await f.activate()
+
+            XCTAssertEqual(f.system.panelPressCount, 1)
+            XCTAssertNil(f.model.panelActivationError, "An absent presentation token alone is not an action failure")
+            XCTAssertNotNil(f.model.positionRecoveryMessage)
+            XCTAssertEqual(f.model.trayItemErrors[f.id], f.model.positionRecoveryMessage)
+            XCTAssertTrue(f.system.rehiddenBundles.isEmpty)
+            XCTAssertTrue(f.system.revealedBundles.contains(f.bundle))
+            XCTAssertEqual(f.system.allowed[f.bundle], true)
+            XCTAssertFalse(f.model.isActivatingPanelItem)
+        }
+    }
+
+    @MainActor
+    func testRejectedOrUnsupportedActionStillShowsItsErrorAndDoesNotRepeat() async throws {
+        for error in [MenuBarAccessError.actionRejected, .actionUnavailable] {
+            let f = try await Fixture.make(); defer { f.dispose() }
+            f.system.beforePanelPress = { throw error }
+
+            await f.activate()
+
+            XCTAssertEqual(f.system.panelPressCount, 1)
+            XCTAssertEqual(f.model.panelActivationError, error.localizedMessage)
+            XCTAssertEqual(f.model.trayItemErrors[f.id], error.localizedMessage)
+            XCTAssertNil(f.model.positionRecoveryMessage)
+            XCTAssertEqual(f.system.rehiddenBundles, [f.bundle])
+            XCTAssertEqual(f.system.allowed[f.bundle], false)
+            XCTAssertFalse(f.model.isActivatingPanelItem)
+        }
+    }
+
+    @MainActor
+    func testLockDuringNoPresentationCheckDefersRecoveryWithoutReplayingTheAction() async throws {
+        let f = try await Fixture.make(); defer { f.dispose() }
+        f.system.panelPressReturnsPresentation = false
+        f.system.panelHasVisiblePresentation = {
+            f.model.setDesktopSessionAvailableForTesting(false)
+            return false
+        }
+
+        await f.activate()
+
+        XCTAssertTrue(f.system.rehiddenBundles.isEmpty)
+        XCTAssertNil(f.model.panelActivationError)
+        XCTAssertNil(f.model.positionRecoveryMessage)
+        XCTAssertNil(f.model.trayItemErrors[f.id])
+        XCTAssertFalse(f.model.isActivatingPanelItem)
+        f.system.panelHasVisiblePresentation = nil
+        try await f.unlock(at: 102)
+        XCTAssertEqual(f.system.panelPressCount, 1)
+        XCTAssertEqual(f.system.rehiddenBundles, [f.bundle])
+        XCTAssertEqual(f.system.allowed[f.bundle], false)
+        XCTAssertNil(f.model.positionRecoveryMessage)
+    }
+
+    @MainActor
     func testLockAndUnlockDuringPressCannotPublishAnOldPresentationOrReplayTheAction() async throws {
         let f = try await Fixture.make(); defer { f.dispose() }
         f.system.beforePanelPress = {
@@ -391,6 +494,7 @@ final class PanelSessionIntegrationTests: XCTestCase {
 
         func dispose() {
             system.panelPresentationStatus = nil
+            system.panelHasVisiblePresentation = nil
             system.beforePanelPress = nil
             system.beforeRehide = nil
             system.beforeScan = nil

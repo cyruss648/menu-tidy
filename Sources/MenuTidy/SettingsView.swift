@@ -577,15 +577,18 @@ struct SettingsView: View {
             if !unavailableItems.isEmpty || !model.offlineDrafts.isEmpty || !model.discardedOfflineDrafts.isEmpty {
                 DisclosureGroup(format("离线与保留记录 · %lld", Int64(unavailableItems.count + model.offlineDrafts.count)), isExpanded: $presentation.savedRecordsExpanded) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text(copy("应用未运行或图标身份尚未确认的记录保留在这里，不参加批量操作。"))
+                        Text(copy("应用未运行、未显示菜单栏图标或图标身份尚未确认的记录保留在这里，不计入当前图标，也不参加批量操作。"))
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                         ForEach(unavailableItems) { item in
                             HStack(spacing: 10) {
                                 itemIcon(item)
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(item.name).font(.system(size: 12, weight: .medium))
-                                    Text(format("应用未运行或图标不可用 · %@", copy(item.group.title)))
+                                    Text(item.isAwaitingDiscovery
+                                        ? format("当前无菜单栏图标 · %@", copy(item.group.title))
+                                        : format("应用未运行或图标不可用 · %@", copy(item.group.title)))
                                         .font(.system(size: 11)).foregroundStyle(.secondary)
+                                        .help(copy(item.detail))
                                 }
                                 Spacer()
                                 Button(model.forgetItemAffectsApplication(id: item.id) ? copy("忘记此应用…") : copy("忘记此图标规则")) {

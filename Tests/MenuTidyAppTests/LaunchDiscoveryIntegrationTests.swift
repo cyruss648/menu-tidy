@@ -104,7 +104,7 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    func testRunningApplicationWithoutAnIconIsNeutralAndKeepsItsChoice() async throws {
+    func testRunningApplicationWithoutAnIconKeepsOnlyAnOfflineRecordAndItsChoice() async throws {
         for group in ItemVisibility.allCases {
             let f = try Fixture(group: group); defer { f.dispose() }
             f.system.runningBundles = [f.bundle]
@@ -117,7 +117,9 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
             f.model.refreshMenuItems()
             await f.model.waitForTestingOperations()
 
-            let row = try XCTUnwrap(f.model.managementItems.first)
+            XCTAssertTrue(f.model.managementItems.isEmpty, "A running process alone is not a current menu bar icon")
+            let row = try XCTUnwrap(f.model.items.first)
+            XCTAssertFalse(row.isAvailable)
             XCTAssertTrue(row.isAwaitingDiscovery)
             XCTAssertFalse(row.isPending)
             XCTAssertFalse(row.canMove)
@@ -141,6 +143,114 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testDisablingAnObservedIconRemovesItUntilTheSameProcessCreatesItAgain() async throws {
+        for group in ItemVisibility.allCases {
+            let f = try Fixture(group: group); defer { f.dispose() }
+            f.system.runningBundles = [f.bundle]
+            f.system.snapshots = [f.snapshot]
+            f.model.refreshMenuItems()
+            await f.model.waitForTestingOperations()
+            XCTAssertEqual(f.model.managementItems.count, 1)
+            let choice = f.defaults.data(forKey: "nativeTrayChoices.v1")
+            let writes = f.system.hiddenBundles.count
+
+            f.system.snapshots = []
+            f.model.refreshMenuItems()
+            await f.model.waitForTestingOperations()
+
+            XCTAssertTrue(f.model.managementItems.isEmpty)
+            XCTAssertTrue(f.model.panelItems.isEmpty)
+            XCTAssertEqual(f.model.items.count, 1)
+            let saved = try XCTUnwrap(f.model.items.first)
+            XCTAssertFalse(saved.isAvailable)
+            XCTAssertTrue(saved.isAwaitingDiscovery)
+            XCTAssertEqual(saved.group, group)
+            XCTAssertEqual(f.model.trayPlacementOutstandingCount, 0)
+            XCTAssertEqual(f.model.trayPendingApplicationCount, 0)
+            XCTAssertEqual(f.model.trayRetryCount, 0)
+            XCTAssertEqual(f.system.hiddenBundles.count, writes)
+            XCTAssertEqual(f.defaults.data(forKey: "nativeTrayChoices.v1"), choice)
+
+            f.system.snapshots = [f.snapshot]
+            try await f.fire(160)
+            let returned = try XCTUnwrap(f.model.managementItems.first)
+            XCTAssertEqual(f.model.items.count, 1)
+            XCTAssertFalse(returned.isAwaitingDiscovery)
+            XCTAssertEqual(returned.group, group)
+            XCTAssertFalse(returned.isPending)
+            XCTAssertEqual(f.defaults.data(forKey: "nativeTrayChoices.v1"), choice)
+            XCTAssertNil(f.system.maintenanceTimer)
+        }
+    }
+
+    @MainActor
+    func testFailedConnectionDoesNotRetryWhenTheSameIconDisappearsAndReturns() async throws {
+        for initiallyConfirmed in [false, true] {
+            let f = try Fixture(); defer { f.dispose() }
+            f.system.runningBundles = [f.bundle]
+            f.system.snapshots = [f.snapshot]
+            if initiallyConfirmed {
+                f.model.refreshMenuItems()
+                await f.model.waitForTestingOperations()
+                XCTAssertFalse(try XCTUnwrap(f.model.managementItems.first).isPending)
+            }
+            f.system.beforeVisibilityRead = { throw MenuBarAccessError.rejected }
+            if initiallyConfirmed {
+                // Lose the earlier hidden state so applying the same choice
+                // performs verification instead of accepting existing proof.
+                f.system.allowed[f.bundle] = true
+                f.model.refreshMenuItems()
+                await f.model.waitForTestingOperations()
+                f.model.requestTrayPlacement(id: f.snapshot.id, group: .collapsible)
+            } else {
+                f.model.refreshMenuItems()
+            }
+            await f.model.waitForTestingOperations()
+            XCTAssertNotNil(f.model.trayPlacementFailure(id: f.snapshot.id))
+            let writes = f.system.hiddenBundles.count
+            f.system.beforeVisibilityRead = nil
+            f.system.snapshots = []
+            f.model.refreshMenuItems()
+            await f.model.waitForTestingOperations()
+            XCTAssertTrue(f.model.managementItems.isEmpty)
+
+            f.system.snapshots = [f.snapshot]
+            try await f.fire(160)
+            XCTAssertEqual(f.system.hiddenBundles.count, writes, "Disappearance must not reset a failed connection's retry policy")
+            XCTAssertNotNil(f.model.trayPlacementFailure(id: f.snapshot.id))
+            XCTAssertTrue(try XCTUnwrap(f.model.managementItems.first).isPending)
+        }
+    }
+
+    @MainActor
+    func testAbsentRunningApplicationDoesNotDuplicateOldRulesAndCanBeForgotten() async throws {
+        let rules = ["item:old-a", "item:old-b"].map {
+            ItemRule(id: $0, name: "Fixture", bundleIdentifier: "org.example.DelayedStatus", visibility: .collapsible)
+        }
+        let f = try Fixture(group: .alwaysHidden, rules: rules); defer { f.dispose() }
+        f.system.runningBundles = [f.bundle]
+        let savedRules = f.defaults.data(forKey: "itemRules.v1")
+        f.model.refreshMenuItems()
+        await f.model.waitForTestingOperations()
+
+        XCTAssertTrue(f.model.managementItems.isEmpty)
+        XCTAssertEqual(f.model.items.count, 1, "One application choice must not appear again for each old source rule")
+        let saved = try XCTUnwrap(f.model.items.first)
+        XCTAssertFalse(saved.isAvailable)
+        XCTAssertEqual(saved.group, .alwaysHidden)
+        XCTAssertEqual(f.defaults.data(forKey: "itemRules.v1"), savedRules, "Moving the row must not delete saved rules")
+        XCTAssertTrue(f.model.forgetItemAffectsApplication(id: saved.id))
+        XCTAssertTrue(f.model.canForgetItem(id: saved.id))
+
+        f.model.forgetItem(id: saved.id)
+        XCTAssertTrue(f.model.items.isEmpty)
+        XCTAssertNil(try JSONDecoder().decode(NativeTrayChoices.self,
+            from: XCTUnwrap(f.defaults.data(forKey: "nativeTrayChoices.v1"))).group(bundle: f.bundle))
+        XCTAssertTrue(try JSONDecoder().decode(ItemRuleBook.self,
+            from: XCTUnwrap(f.defaults.data(forKey: "itemRules.v1"))).rules.isEmpty)
+    }
+
+    @MainActor
     func testIconEnabledInTheSameProcessReconnectsAfterTheLaunchWindow() async throws {
         let f = try Fixture(); defer { f.dispose() }
         f.system.runningBundles = [f.bundle]
@@ -150,6 +260,8 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
         f.system.beforeScan = { scans += 1 }
         f.model.noteApplicationLaunch(f.owner)
         for time in [101.0, 103, 107, 115, 130] { try await f.fire(time) }
+        XCTAssertTrue(f.model.managementItems.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(f.model.items.first).isAvailable)
         XCTAssertEqual(f.model.trayPlacementOutstandingCount, 0)
         XCTAssertEqual(scans, 5)
         try await f.fire(189)
@@ -226,7 +338,7 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
                 presentationIdentity: .application(bundle: bundle))
         }
 
-        init(group: ItemVisibility = .collapsible) throws {
+        init(group: ItemVisibility = .collapsible, rules: [ItemRule] = []) throws {
             suite = "dev.hdh.MenuTidy.tests.launch-discovery.\(UUID().uuidString)"
             defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
             for key in ["startupApplyPending", "periodicApplyPending", "autoCollapse", "shortcutEnabled"] {
@@ -235,6 +347,10 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
             defaults.set(true, forKey: "hasCompletedSetup")
             defaults.set(try JSONEncoder().encode(NativeTrayChoices(existing: [bundle: group])),
                 forKey: "nativeTrayChoices.v1")
+            if !rules.isEmpty {
+                defaults.set(try JSONEncoder().encode(ItemRuleBook(rules: Dictionary(uniqueKeysWithValues: rules.map { ($0.id, $0) }))),
+                    forKey: "itemRules.v1")
+            }
             system = MenuTidyTestEnvironment()
             system.uptime = 100
             system.managedBundles = [bundle]

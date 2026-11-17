@@ -160,7 +160,8 @@
 "更改后自动处理" = "Applied automatically";
 "应用并确认此前保存的选择。" = "Apply and confirm the previously saved choice.";
 "选择后立即保存并处理。处理中继续更改，将以最新选择为准。" = "The choice is saved and applied immediately. A newer choice replaces one already in progress.";
-"应用未运行或图标身份尚未确认的记录保留在这里，不参加批量操作。" = "Records for apps that are not running, or icons whose identity is unconfirmed, stay here and are excluded from batch actions.";
+"应用未运行、未显示菜单栏图标或图标身份尚未确认的记录保留在这里，不计入当前图标，也不参加批量操作。" = "Records for apps that are not running, have no menu bar icon, or have an unconfirmed icon identity stay here. They are excluded from current icon counts and batch actions.";
+"当前无菜单栏图标 · %@" = "No menu bar icon currently · %@";
 "忘记此应用…" = "Forget This App…";
 "忘记此图标规则" = "Forget This Icon Rule";
 "仅在此应用没有可用图标时操作；删除它的离线显示规则和草稿，保留其他应用记录。" = "Available only when this app has no usable icon. Removes its offline display rules and drafts while keeping other apps.";
@@ -502,7 +503,6 @@
 "已保存的 {0} 个隐藏图标本次均未能确认；应用可能未运行，或图标暂时无法唯一读取。本次检查范围为 0，不代表这些图标的图像已经齐全。" = "None of the {0} saved hidden icons could be confirmed. Their apps may be closed or their identities ambiguous. The checked scope is zero; this does not mean their images are complete.";
 "已保存的分类无法读取，原始设置已备份。请刷新图标后重新分类。" = "Saved display rules could not be read. The original settings were backed up. Refresh the icons and classify them again.";
 "已删除 {0} 条待关联草稿，已保存的分类与当前图标显示不变。" = "Deleted {0} unlinked drafts. Saved rules and current icon visibility are unchanged.";
-"已发送一次后台操作，但未确认新菜单或窗口。没有补发点击。" = "One background action was sent, but no new menu or window was confirmed. No extra click was sent.";
 "已尝试恢复原排序记录，但原生位置尚未确认。请检查当前布局，再重试恢复或保留当前布局。" = "Original position records were restored, but native positions are unconfirmed. Check the current layout, then retry recovery or keep the layout.";
 "已应用并确认 {0} 项分类。" = "Applied and confirmed {0} display choices. ";
 "已应用规则；当前未读到此图标。启动对应应用后刷新。" = "Applied rule; this icon was not found. Start its app and refresh.";

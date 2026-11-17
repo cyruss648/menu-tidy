@@ -291,8 +291,11 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
         XCTAssertNotNil(fixture.defaults.string(forKey: "nativeStartupRecoveryRelease.v1"))
         XCTAssertNotNil(fixture.system.maintenanceTimer,
             "A known running owner with an incomplete AX inventory keeps discovery alive")
-        XCTAssertTrue(fixture.model.managementItems.contains { $0.bundleIdentifier == "org.example.NoStatusItem" })
-        XCTAssertFalse(fixture.model.managementItems.first { $0.bundleIdentifier == "org.example.NoStatusItem" }?.canMove ?? true)
+        XCTAssertFalse(fixture.model.managementItems.contains { $0.bundleIdentifier == "org.example.NoStatusItem" })
+        let saved = try XCTUnwrap(fixture.model.items.first { $0.bundleIdentifier == "org.example.NoStatusItem" })
+        XCTAssertFalse(saved.isAvailable)
+        XCTAssertTrue(saved.isAwaitingDiscovery)
+        XCTAssertFalse(saved.canMove)
     }
 
     @MainActor

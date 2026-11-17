@@ -735,8 +735,8 @@ final class MenuTidyModel: ObservableObject {
         }
     }
 
-    /// Reconnect saved intent once per process lifetime. A manual refresh of
-    /// the same processes does not restart rejected work or create a retry loop.
+    /// Reconnect saved intent once per process lifetime or after a previously
+    /// confirmed icon disappears. Refresh never restarts rejected work.
     private func reconnectDiscoveredTrayItems() {
         guard ensureDesktopSessionAvailable(), !sessionResumePending,
               !nativeStartupRecoveryScheduled,
@@ -3890,6 +3890,27 @@ final class MenuTidyModel: ObservableObject {
         let observedOwnerKeys = Set(snapshots.compactMap { snapshot in
             snapshotOwnerKeys[snapshot.processIdentifier]
         })
+        let observedBundles = Set(snapshots.compactMap(\.bundleIdentifier))
+        if usesNativeVisibility && isRefreshing && !isApplying && !isActivatingPanelItem && !isRefreshingNativeIcons {
+            let failedOwnerKeys = Set(ownerReadFailures.filter { $0.error != AXError.noValue.rawValue }
+                .map { ScanOwnerKey($0.owner) })
+            // A confirmed icon can be disabled and recreated with the same
+            // source ID in the same process. Retire only its successful
+            // connection attempt after an ordinary scan loses the whole app
+            // inventory, so its saved choice can reconnect when it returns.
+            // Failed work, unscanned owners and our own concealment stay intact.
+            for (id, evidence) in previousNativeEvidence {
+                guard let bundle = evidence.identity.bundleIdentifier,
+                      !observedBundles.contains(bundle),
+                      nativeTrayChoices.group(bundle: bundle) == evidence.group,
+                      ownerIsCurrent(evidence.identity),
+                      let ownerKey = previousSnapshotOwnerKeys[evidence.identity.pid],
+                      scannedOwnerKeys.contains(ownerKey), !failedOwnerKeys.contains(ownerKey),
+                      trayConnectionAttempts[id] == evidence.identity,
+                      trayPlacementFailure(id: id) == nil else { continue }
+                trayConnectionAttempts.removeValue(forKey: id)
+            }
+        }
         // An app may intentionally omit its icon or enable it later in the
         // same process. Preserve intent without pending work, and check only
         // at the passive interval after the bounded launch window.
@@ -3903,7 +3924,6 @@ final class MenuTidyModel: ObservableObject {
             }
         }
         launchDiscovery.reconcile(current: currentOwnerKeys, observed: observedOwnerKeys)
-        let observedBundles = Set(snapshots.compactMap(\.bundleIdentifier))
         let currentBundles = Set(owners.compactMap(\.bundleIdentifier))
         nativeDiscoveryRevealBundles = nativeDiscoveryRevealBundles.filter { bundle in
             !observedBundles.contains(bundle) &&
@@ -4066,13 +4086,17 @@ final class MenuTidyModel: ObservableObject {
                 where runningBundles.contains(bundle) && !representedBundles.contains(bundle) {
                 let name = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
                     .flatMap { FileManager.default.displayName(atPath: $0.path) } ?? bundle
+                let connectionFailed = disabledDiscoveryOwners[bundle] != nil
+                // A running process does not prove it still has a status item.
+                // Ordinary absence belongs with saved records; a confirmed
+                // read failure keeps its reconnect action in the main list.
                 result.append(ManagedItemRow(id: "native-app:" + bundle, name: name, ownerName: name,
                     bundleIdentifier: bundle, icon: applicationIcon(for: bundle), group: group,
-                    isAvailable: true, canMove: false,
-                    detail: disabledDiscoveryOwners[bundle] == nil
+                    isAvailable: connectionFailed, canMove: false,
+                    detail: !connectionFailed
                         ? LocalizedMessage("当前未读到菜单栏图标，可能已在应用内关闭。分类已保留，图标出现后会自动接回。")
                         : LocalizedMessage("Menu Tidy 暂时无法读取此应用的菜单栏图标。选择已保留，可重新连接后恢复。"),
-                    isPending: disabledDiscoveryOwners[bundle] != nil, presentationIdentity: .application(bundle: bundle),
+                    isPending: connectionFailed, presentationIdentity: .application(bundle: bundle),
                     isAwaitingDiscovery: true))
             }
         }
@@ -4084,7 +4108,7 @@ final class MenuTidyModel: ObservableObject {
         for rule in rules.rules.values where !result.contains(where: { $0.id == rule.id }) && !offlineTargetIDs.contains(rule.id) {
             if usesNativeVisibility, let bundle = rule.bundleIdentifier,
                nativeTrayChoices.group(bundle: bundle) != nil,
-               result.contains(where: { $0.isAvailable && $0.bundleIdentifier == bundle }) { continue }
+               result.contains(where: { ($0.isAvailable || $0.isAwaitingDiscovery) && $0.bundleIdentifier == bundle }) { continue }
             result.append(ManagedItemRow(id: rule.id, name: rule.name, ownerName: rule.bundleIdentifier ?? "—",
                 bundleIdentifier: rule.bundleIdentifier, icon: nil,
                 group: usesNativeVisibility ? (rule.bundleIdentifier.flatMap { nativeTrayChoices.group(bundle: $0) } ?? rule.visibility) : rule.visibility,
@@ -4941,11 +4965,13 @@ final class MenuTidyModel: ObservableObject {
                         }
                     }
                 } else {
-                    // Never retry a possibly dispatched AX request.
+                    // A status-item action can take a screenshot, toggle a
+                    // setting, or intentionally show no UI. No new menu/window
+                    // alone is not an error or permission to press again.
+                    // The closure and hidden-state checks below still apply.
                     if let actionIdentity, self.panelItemOwnerHasEnded(actionIdentity) {
                         presentationClosed = true
                     } else {
-                        self.panelActivationError = LocalizedMessage("已发送一次后台操作，但未确认新菜单或窗口。没有补发点击。")
                         Self.diagnosticLogger.notice("backgroundItemAction presentationConfirmed=false")
                     }
                 }
@@ -4991,7 +5017,8 @@ final class MenuTidyModel: ObservableObject {
                         }
                         return false
                     }
-                    return await self.access.hasVisiblePresentation(id: id) == false
+                    guard self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration else { return false }
+                    return await self.panelHasVisiblePresentation(id: id, identity: actionIdentity) == false
                 }
                 canRestore = await checkClosure.value
                 if !canRestore, self.ensureDesktopSessionAvailable(), sessionGeneration == self.desktopSessionGeneration {
@@ -5225,10 +5252,25 @@ final class MenuTidyModel: ObservableObject {
         if let testingEnvironment {
             testingEnvironment.panelPressCount += 1
             try await testingEnvironment.beforePanelPress?()
-            return .testingMenu()
+            return testingEnvironment.panelPressReturnsPresentation ? .testingMenu() : nil
         }
         #endif
         return try await access.pressItem(id: id, baseline: baseline)
+    }
+
+    private func panelHasVisiblePresentation(id: String,
+                                             identity: ObservedItemGroupHistory.Identity?) async -> Bool? {
+        if let identity, panelItemOwnerHasEnded(identity) { return false }
+        let visible: Bool?
+        if let testingEnvironment {
+            testingEnvironment.panelVisibilityReadCount += 1
+            if let check = testingEnvironment.panelHasVisiblePresentation { visible = await check() }
+            else { visible = false }
+        } else {
+            visible = await access.hasVisiblePresentation(id: id)
+        }
+        if let identity, panelItemOwnerHasEnded(identity) { return false }
+        return visible
     }
 
     private func panelItemOwnerHasEnded(_ identity: ObservedItemGroupHistory.Identity) -> Bool {

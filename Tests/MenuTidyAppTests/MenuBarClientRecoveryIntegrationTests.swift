@@ -93,7 +93,9 @@ final class MenuBarClientRecoveryIntegrationTests: XCTestCase {
             return true
         }
         for _ in 0..<4 { await f.refresh() }
-        let absent = try XCTUnwrap(f.model.managementItems.first)
+        XCTAssertTrue(f.model.managementItems.isEmpty)
+        let absent = try XCTUnwrap(f.model.items.first)
+        XCTAssertFalse(absent.isAvailable)
         XCTAssertTrue(absent.isAwaitingDiscovery)
         XCTAssertFalse(absent.isPending)
         XCTAssertFalse(f.model.trayItemNeedsAttention(absent))

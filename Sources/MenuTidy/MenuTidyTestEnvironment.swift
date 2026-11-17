@@ -44,10 +44,14 @@ final class MenuTidyTestEnvironment {
     var nativeAssessmentAuthoritative = false
     var revealedBundles: Set<String> = []
     var panelPressCount = 0
+    var panelPressReturnsPresentation = true
     var panelStatusReadCount = 0
+    var panelVisibilityReadCount = 0
     var rehiddenBundles: [String] = []
     var beforePanelPress: (() async throws -> Void)?
     var panelPresentationStatus: (() async -> MenuBarPresentationStatus)?
+    /// A complete no-change observation is false; unreadable state is nil.
+    var panelHasVisiblePresentation: (() async -> Bool?)?
     /// Positive process-exit evidence, independent of missing AX snapshots.
     var endedOwners: [ObservedItemGroupHistory.Identity] = []
     var beforeRehide: (() throws -> Void)?
