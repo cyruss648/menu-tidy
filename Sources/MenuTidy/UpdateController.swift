@@ -9,6 +9,9 @@ import Sparkle
 final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var automaticallyChecksForUpdates = true
     @Published private(set) var automaticallyDownloadsUpdates = false
+    @Published private(set) var automaticallyInstallsWhenIdle = false
+    @Published private(set) var hasPreparedUpdate = false
+    @Published private(set) var canInstallPreparedUpdate = false
     @Published private(set) var updateCheckInterval = UpdateCheckInterval.defaultValue
     @Published private(set) var canCheckForUpdates = false
     @Published private(set) var canConfigureUpdates = false
@@ -26,7 +29,14 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var schedulingPolicy = UpdateSchedulingPolicy()
     private var schedulingTask: Task<Void, Never>?
     private var automaticCheckTimer: Timer?
+    private var preparedInstallationTimer: Timer?
     private let intervalDefaultsKey = "updateCheckInterval"
+    private let automaticInstallationDefaultsKey = "automaticallyInstallUpdatesWhenIdle"
+    private var automaticInstallationPaused = false
+    private lazy var readyInstaller = ReadyUpdateInstaller { [weak self] in
+        self?.statusMessage = LocalizedMessage("正在准备安装并重新打开 Menu Tidy…")
+        self?.refreshState()
+    }
 
     var currentVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
@@ -43,6 +53,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
     init(model: MenuTidyModel, enabled: Bool) {
         self.model = model
         super.init()
+        automaticallyInstallsWhenIdle = UserDefaults.standard.bool(forKey: automaticInstallationDefaultsKey)
         guard enabled else {
             statusMessage = LocalizedMessage("演示模式不检查或安装更新")
             return
@@ -71,6 +82,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
             Task { @MainActor [weak self] in
                 self?.refreshState()
                 self?.resumeInstallationIfReady()
+                self?.schedulePreparedInstallation()
                 self?.scheduleUpdaterWork()
             }
         }.store(in: &subscriptions)
@@ -92,6 +104,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
         if !enabled { schedulingPolicy.automaticChecksWereDisabled() }
         updater.automaticallyChecksForUpdates = enabled
         refreshState()
+        schedulePreparedInstallation()
         scheduleAutomaticCheckTimer(from: updater.lastUpdateCheckDate)
     }
 
@@ -108,6 +121,68 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
               !enabled || updater.allowsAutomaticUpdates else { return }
         updater.automaticallyDownloadsUpdates = enabled
         refreshState()
+        schedulePreparedInstallation()
+    }
+
+    func setAutomaticallyInstallsWhenIdle(_ enabled: Bool) {
+        guard canConfigureUpdates,
+              !enabled || (automaticallyChecksForUpdates && automaticallyDownloadsUpdates) else { return }
+        automaticallyInstallsWhenIdle = enabled
+        UserDefaults.standard.set(enabled, forKey: automaticInstallationDefaultsKey)
+        if readyInstaller.hasUpdate, !readyInstaller.isInstalling, !automaticInstallationPaused {
+            statusMessage = enabled
+                ? LocalizedMessage("更新已准备好，解锁并空闲后将自动安装并重新打开")
+                : LocalizedMessage("更新已准备好，将在退出时安装")
+        }
+        schedulePreparedInstallation()
+        // A download already scheduled for quit belongs to Sparkle's installer.
+        // A later background check uses its scheduled driver, which does not
+        // offer willInstallUpdateOnQuit again. Do not promise to reclaim it.
+    }
+
+    func installPreparedUpdate() {
+        guard installationIsSafe, readyInstaller.hasUpdate else { return }
+        issue = nil
+        readyInstaller.install()
+    }
+
+    func installationTerminationWasCancelled() {
+        guard readyInstaller.hasUpdate else { return }
+        automaticInstallationPaused = true
+        readyInstaller.terminationWasCancelled()
+        issue = LocalizedMessage("退出前恢复尚未完成，自动安装已暂停。请完成图标恢复后点击“安装并重新打开”。")
+        statusMessage = LocalizedMessage("更新已准备好，安装已暂停")
+        refreshState()
+    }
+
+    private var installationIsSafe: Bool {
+        !operationInProgress && model?.canAutomaticallyInstallUpdate == true
+    }
+
+    private var automaticInstallationEnabled: Bool {
+        automaticallyInstallsWhenIdle && automaticallyChecksForUpdates &&
+            automaticallyDownloadsUpdates && !automaticInstallationPaused
+    }
+
+    private func schedulePreparedInstallation() {
+        readyInstaller.updateAutomaticInstallation(enabled: automaticInstallationEnabled) { [weak self] in
+            self?.automaticInstallationEnabled == true && self?.installationIsSafe == true
+        }
+        refreshState()
+    }
+
+    private func observePreparedInstallation() {
+        preparedInstallationTimer?.invalidate()
+        // Some cleanup task references are not published. Keep checking while
+        // Sparkle's update cycle is held so their completion cannot strand it.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.resumeInstallationIfReady()
+                self?.schedulePreparedInstallation()
+            }
+        }
+        preparedInstallationTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func observe(_ updater: SPUUpdater) {
@@ -128,6 +203,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
     private func updaterStateDidChange() {
         refreshState()
         if !automaticallyChecksForUpdates { schedulingPolicy.automaticChecksWereDisabled() }
+        schedulePreparedInstallation()
         scheduleUpdaterWork()
     }
 
@@ -176,6 +252,8 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
         allowsAutomaticUpdates = updater.allowsAutomaticUpdates
         sessionInProgress = updater.sessionInProgress
         lastUpdateCheckDate = updater.lastUpdateCheckDate
+        hasPreparedUpdate = readyInstaller.hasUpdate
+        canInstallPreparedUpdate = readyInstaller.hasUpdate && !readyInstaller.isInstalling && installationIsSafe
         canCheckForUpdates = canConfigureUpdates && updater.canCheckForUpdates &&
             !operationInProgress && !waitingToInstall
     }
@@ -218,6 +296,16 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,
                  immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        refreshState()
+        if automaticInstallationEnabled {
+            readyInstaller.stage(immediateInstallHandler)
+            observePreparedInstallation()
+            statusMessage = LocalizedMessage("\(item.displayVersionString) 已准备好，解锁并空闲后将自动安装并重新打开")
+            schedulePreparedInstallation()
+            // The handler is only valid when this delegate returns true.
+            // The idle delay ensures it is never invoked inside this callback.
+            return true
+        }
         statusMessage = LocalizedMessage("\(item.displayVersionString) 已准备好，将在退出时安装")
         // Opting in to automatic downloads also opts in to installation on quit.
         // Returning false leaves scheduling with Sparkle; it does not veto install.
@@ -226,8 +314,9 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,
                  untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
-        guard operationInProgress else { return false }
+        guard !installationIsSafe else { return false }
         postponedInstallation = installHandler
+        observePreparedInstallation()
         waitingToInstall = true
         statusMessage = LocalizedMessage("更新已准备好，等待当前菜单栏操作结束…")
         refreshState()
@@ -235,7 +324,7 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
     }
 
     private func resumeInstallationIfReady() {
-        guard !operationInProgress, let installation = postponedInstallation else { return }
+        guard installationIsSafe, let installation = postponedInstallation else { return }
         postponedInstallation = nil
         waitingToInstall = false
         statusMessage = LocalizedMessage("正在准备安装并重新打开 Menu Tidy…")
@@ -247,6 +336,10 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+        readyInstaller.clear()
+        automaticInstallationPaused = false
+        preparedInstallationTimer?.invalidate()
+        preparedInstallationTimer = nil
         postponedInstallation = nil
         waitingToInstall = false
         if let error = error as NSError? {

@@ -293,6 +293,13 @@
 "默认每 30 分钟检查当前更新通道。菜单栏操作进行中会顺延；关闭后仍可手动检查。" = "Checks the current update channel every 30 minutes by default. Checks wait while menu bar work is active; manual checks remain available when this is off.";
 "自动检查间隔" = "Automatic check interval";
 "自动下载并在退出时安装" = "Download automatically and install on quit";
+"空闲时自动安装并重新打开" = "Install and relaunch automatically when idle";
+"需开启自动检查和自动下载，默认关闭。开启后新下载的更新会在解锁、托盘关闭且操作结束后自动安装；此前已准备好的更新可从“检查更新…”安装。" = "Requires automatic checks and downloads; off by default. Newly downloaded updates install when the desktop is unlocked, the tray is closed, and operations are finished. Install previously prepared updates through Check for Updates.";
+"更新已验证，可在操作结束后安装。关闭自动安装仍会保留退出时安装。" = "The update is verified and can be installed after menu bar work finishes. Turning off automatic installation still allows installation on quit.";
+"安装并重新打开" = "Install and Relaunch";
+"退出前恢复尚未完成，自动安装已暂停。请完成图标恢复后点击“安装并重新打开”。" = "Pre-quit recovery is incomplete, so automatic installation is paused. Finish restoring the icons, then choose Install and Relaunch.";
+"更新已准备好，安装已暂停" = "Update ready; installation paused";
+"{0} 已准备好，解锁并空闲后将自动安装并重新打开" = "{0} is ready and will install and relaunch automatically when unlocked and idle";
 "开启后会在后台下载，并在你退出应用时完成安装。默认关闭，由你确认安装。" = "When enabled, updates download in the background and install when you quit. Off by default, so you confirm installation.";
 "开启自动检查更新后可启用；重新开启时会保留之前的自动安装选择。" = "Available after automatic checks are enabled. Turning them back on keeps the previous automatic-install choice.";
 "尚无检查记录" = "No check recorded yet";
@@ -838,3 +845,5 @@
 "本轮未取得新的原始图标图像；仍可使用应用图标或名称。" = "No new original icon images were obtained in this attempt; app icons or names remain available.";
 "图标图像仅在本机显示与缓存，不上传、不采集声音" = "Icon images are displayed and cached locally, with no uploads or audio capture";
 "软件更新状态详情" = "Software update status details";
+"更新已准备好，解锁并空闲后将自动安装并重新打开" = "The update is ready. Menu Tidy will install and reopen when the desktop is unlocked and the app is idle.";
+"更新已准备好，将在退出时安装" = "The update is ready and will install when you quit.";

@@ -47,6 +47,27 @@ struct UpdateSettingsView: View {
                         .disabled(!updates.canConfigureUpdates || !updates.allowsAutomaticUpdates)
                 }
                 Divider()
+                preferenceRow(title: copy("空闲时自动安装并重新打开"),
+                              detail: copy("需开启自动检查和自动下载，默认关闭。开启后新下载的更新会在解锁、托盘关闭且操作结束后自动安装；此前已准备好的更新可从“检查更新…”安装。")) {
+                    Toggle(copy("空闲时自动安装并重新打开"), isOn: Binding(
+                        get: { updates.automaticallyInstallsWhenIdle },
+                        set: { updates.setAutomaticallyInstallsWhenIdle($0) }))
+                        .labelsHidden().toggleStyle(.switch)
+                        .disabled(!updates.canConfigureUpdates ||
+                            (!updates.automaticallyInstallsWhenIdle &&
+                             (!updates.automaticallyChecksForUpdates || !updates.automaticallyDownloadsUpdates)))
+                }
+                if updates.hasPreparedUpdate {
+                    HStack {
+                        Text(copy("更新已验证，可在操作结束后安装。关闭自动安装仍会保留退出时安装。"))
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                        Spacer()
+                        Button(copy("安装并重新打开")) { updates.installPreparedUpdate() }
+                            .disabled(!updates.canInstallPreparedUpdate)
+                    }
+                    .padding(.vertical, 10)
+                }
+                Divider()
                 UpdateStatusRow(
                     status: copy(updates.statusMessage),
                     lastCheck: updates.lastUpdateCheckDate.map {

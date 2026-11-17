@@ -165,7 +165,7 @@ final class MenuTidyModel: ObservableObject {
     @Published private(set) var discardedOfflineDrafts: [PendingDraftRecord] = []
     @Published private(set) var draftPersistenceIssue: LocalizedMessage?
     var settingsVisible = false { didSet { resetIdleTime(); rescheduleMaintenanceTimer() } }
-    var contextMenuVisible = false { didSet { resetIdleTime(); if contextMenuVisible { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
+    @Published var contextMenuVisible = false { didSet { resetIdleTime(); if contextMenuVisible { cancelPassiveIconCapture() }; rescheduleMaintenanceTimer() } }
     var onShowSettings: (() -> Void)?
     var onReconnectMenuBarClient: ((Bool) -> Bool)?
     var onMemoryPressure: (() -> Void)?
@@ -5751,6 +5751,20 @@ final class MenuTidyModel: ObservableObject {
     }
 
     func quit() { NSApp.terminate(nil) }
+
+    var canAutomaticallyInstallUpdate: Bool {
+        // workTask may retain a completed task; its operation flags, rather
+        // than the stored reference, determine whether work is still running.
+        !isUIPreview && !stopping && !preparingToTerminate && desktopSessionAvailable &&
+            !sessionResumePending && !nativeStartupRecoveryScheduled && !isPanelPresented &&
+            !contextMenuVisible && !temporarilyRevealingAll &&
+            !isReconnectingMenuBarClient && !isApplying && !isRefreshing &&
+            !isRecoveringPositions && !isArranging && !isActivatingPanelItem &&
+            trayPlacementTask == nil && panelActivationTask == nil &&
+            passiveIconCaptureTask == nil && nativeRecoveryIssue == nil &&
+            positionRecoveryMessage == nil && interruptedNativePanelRecoveries.isEmpty &&
+            !positionLayoutRecoveryNeeded
+    }
 
     func prepareForTermination() async -> Bool {
         if isUIPreview { return true }

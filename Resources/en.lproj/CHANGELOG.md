@@ -4,6 +4,15 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.30] - 2026-11-17
+
+- Added a separate, opt-in “Automatically install and reopen when idle” option. With automatic checks and downloads enabled, a verified update can install and reopen Menu Tidy after five seconds of app inactivity.
+- Installation waits while the desktop is locked, the tray or context menu is open, an icon operation is running, or recovery is incomplete. Normal termination and icon restoration remain required.
+- Failed restoration pauses automatic attempts and keeps an explicit “Install and Reopen” retry. Disabling idle installation preserves any installation already scheduled for normal quit.
+- Versions through 0.7.29 must install a newer version once using the existing updater before this option becomes available.
+
+Validation and release/installation evidence are recorded separately in the idle update installation report. Releases retain the project signing identity and are not Apple-notarized.
+
 ## [0.7.29] - 2026-11-17
 
 - Move running applications whose menu bar icons are disabled into Offline and Saved Records, labeled “No menu bar icon currently.” Keep their saved categories and exclude them from current icon counts and batch actions.

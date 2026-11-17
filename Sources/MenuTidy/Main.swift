@@ -209,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     guard let self else { sender.reply(toApplicationShouldTerminate: false); return }
                     let canTerminate = await self.model.prepareForTermination()
                     self.terminationTask = nil
+                    if !canTerminate { self.updates?.installationTerminationWasCancelled() }
                     sender.reply(toApplicationShouldTerminate: canTerminate)
                 }
             }

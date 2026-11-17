@@ -5,6 +5,28 @@ import XCTest
 
 final class PanelSessionIntegrationTests: XCTestCase {
     @MainActor
+    func testAutomaticUpdateWaitsForTrayAndUnlockedSession() async throws {
+        let f = try await Fixture.make(); defer { f.dispose() }
+        XCTAssertTrue(f.model.canAutomaticallyInstallUpdate)
+        f.model.showIconPanelFromControl()
+        XCTAssertFalse(f.model.canAutomaticallyInstallUpdate)
+        f.model.closeIconPanel()
+        XCTAssertTrue(f.model.canAutomaticallyInstallUpdate)
+        f.model.contextMenuVisible = true
+        XCTAssertFalse(f.model.canAutomaticallyInstallUpdate)
+        f.model.contextMenuVisible = false
+        XCTAssertTrue(f.model.canAutomaticallyInstallUpdate)
+        f.model.setDesktopSessionAvailableForTesting(false)
+        XCTAssertFalse(f.model.canAutomaticallyInstallUpdate)
+        try await f.unlock(at: 102)
+        XCTAssertTrue(f.model.canAutomaticallyInstallUpdate)
+        f.system.beforePanelPress = { XCTAssertFalse(f.model.canAutomaticallyInstallUpdate) }
+        await f.activate()
+        f.model.closeIconPanel()
+        XCTAssertTrue(f.model.canAutomaticallyInstallUpdate)
+    }
+
+    @MainActor
     func testLockedDesktopCannotOpenTheTrayOrSendANativeAction() async throws {
         let f = try await Fixture.make(); defer { f.dispose() }
         f.model.setDesktopSessionAvailableForTesting(false)
@@ -91,6 +113,8 @@ final class PanelSessionIntegrationTests: XCTestCase {
         XCTAssertEqual(f.system.allowed[f.bundle], true)
         XCTAssertEqual(f.model.trayPlacementGroup(id: f.id), .collapsible)
         XCTAssertFalse(f.model.isActivatingPanelItem)
+        f.model.closeIconPanel()
+        XCTAssertFalse(f.model.canAutomaticallyInstallUpdate, "A failed restore must prevent automatic restart")
     }
 
     @MainActor
@@ -246,6 +270,8 @@ final class PanelSessionIntegrationTests: XCTestCase {
         XCTAssertNil(f.model.positionRecoveryMessage)
         XCTAssertTrue(f.model.trayPlacementSelectionAllowed)
         XCTAssertEqual(f.system.allowed[f.bundle], true)
+        f.model.closeIconPanel()
+        XCTAssertTrue(f.model.canAutomaticallyInstallUpdate, "Successful recovery must unblock installation")
     }
 
     @MainActor
