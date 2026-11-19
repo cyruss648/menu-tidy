@@ -6,20 +6,18 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.7.30</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.30</link>
-      <pubDate>Tue, 17 Nov 2026 06:41:13 +0000</pubDate>
-      <sparkle:version>106</sparkle:version>
-      <sparkle:shortVersionString>0.7.30</sparkle:shortVersionString>
+      <title>Menu Tidy 0.7.31</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.31</link>
+      <pubDate>Thu, 19 Nov 2026 07:32:26 +0000</pubDate>
+      <sparkle:version>107</sparkle:version>
+      <sparkle:shortVersionString>0.7.31</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
-      <description sparkle:format="plain-text">## [0.7.30] - 2026-11-17
+      <description sparkle:format="plain-text">## [0.7.31] - 2026-11-19
 
-- 新增独立的“空闲时自动安装并重新打开”选项，默认关闭；开启自动检查、自动下载和此选项后，已验证的更新可在 Menu Tidy 连续空闲 5 秒后安装并重新打开，无需手动退出。
-- 锁屏、托盘或右键菜单打开、图标操作进行中及恢复未完成时等待；安装继续经过正常退出与图标恢复流程。
-- 退出恢复失败会暂停自动尝试，保留“安装并重新打开”手动重试入口；关闭自动安装仍保留已安排的退出时安装。
-- 0.7.29 及更早版本需先通过现有更新器安装一次新版本，才能开启此选项。
+- 修复 macOS 27 从外接显示器切回内建屏幕后，点击重试可能清空托盘的问题。即使图标暂时离开菜单栏区域，Menu Tidy 也能按当前应用进程重新识别图标并保留原有分类。
+- 显示器布局改变时放弃旧布局的扫描结果，合并连续变化后重新读取图标。若变化发生在解锁恢复期间，重新读取后继续处理等待中的点击。
 
-验证范围与发布、安装状态分别记录于[空闲自动安装记录](docs/IDLE-UPDATE-INSTALLATION-20261117.md)。沿用项目自签名发行身份，未经 Apple 公证。
+自动化回归覆盖重试后的图标恢复、连续显示器布局变化和解锁期间的点击。本机仅连接内建屏幕，实际拔插外接显示器待复验。发行使用项目自签名证书，Apple 公证状态为未公证。
 
 ### 软件内更新与首次安装
 
@@ -31,8 +29,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.7.30-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.7.30-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.7.31-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.7.31-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -55,12 +53,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.30/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.30/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.30/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.31/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.31/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.31/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.30/Menu-Tidy-0.7.30-macos-x86_64.zip" length="4285468" type="application/octet-stream" sparkle:edSignature="ELpNAlIDYxdI3v06Py7o+o6f9oF1PEDQA+6rt1CoJZrbJCvEdROzL8xojgVU0sNC5OVkOmdKOIKzbWA/xh40Dw=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.31/Menu-Tidy-0.7.31-macos-x86_64.zip" length="4285879" type="application/octet-stream" sparkle:edSignature="Ukes38umTHvq9Govvw6IOCXJorDIfkJZIWNQukoMBs5tanGgfeHa3GAKrfY4cXUPmuKqMMcuEqOIHOeQFZ4bDw=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: UZ70LOfWmj0zIZCYhwD0dymnJ92JNzBd9pYsjFHvE283zIF9LMwNhJlqrbcVhKVSbicOYBL7ufUnfZdVdWgFAg==
-length: 5723
+edSignature: V8MDUqfTtWH9HaEVW++a12nUQaGjQnOt/kP4oZAt51DDBdYmeiLYVBiN4LZ2wdPx+VemMvfOlAsNuP+GUrOSBQ==
+length: 5556
 -->
