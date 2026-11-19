@@ -385,7 +385,7 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
             startupEnvironmentMarker: signature, startupReleaseMarker: release)
         defer { fixture.dispose() }
 
-        XCTAssertEqual(fixture.model.managedHiddenApplicationBundles, [bundle])
+        XCTAssertEqual(fixture.model.hiddenApplicationDiscoveryBundles, [bundle])
         XCTAssertNotNil(fixture.system.maintenanceTimer)
     }
 
@@ -400,7 +400,7 @@ final class StartupPendingApplicationIntegrationTests: XCTestCase {
             startupReleaseMarker: "previous-release")
         defer { fixture.dispose() }
 
-        XCTAssertEqual(fixture.model.managedHiddenApplicationBundles, [bundle])
+        XCTAssertEqual(fixture.model.hiddenApplicationDiscoveryBundles, [bundle])
         XCTAssertNotNil(fixture.system.maintenanceTimer)
     }
 

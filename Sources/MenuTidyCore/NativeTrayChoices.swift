@@ -41,7 +41,7 @@ public struct NativeTrayChoices: Codable, Equatable, Sendable {
 
     public func group(bundle: String) -> ItemVisibility? { choices[bundle] }
 
-    /// Persisted application intent is also an inventory hint during startup.
+    /// Persisted application intent can also guide native inventory discovery.
     /// It does not prove that the application is running or that its current
     /// status item is visible; the native scanner still verifies both.
     public var hiddenBundles: Set<String> {

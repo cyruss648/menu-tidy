@@ -113,7 +113,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         // budget and every active reservation before requesting revalidation.
         clearPositionHidingBlocker()
         restoreControlVisibility()
-        model?.recoverVisibility()
+        model?.screenLayoutDidChange()
     }
 
     func restoreControlVisibility() {

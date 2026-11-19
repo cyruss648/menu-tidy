@@ -439,6 +439,35 @@ final class PanelSessionIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testDisplayChangeDuringResumeRetriesDiscoveryAndKeepsTheWaitingClick() async throws {
+        let fixture = try await Fixture.make()
+        defer {
+            fixture.system.beforeScan = nil
+            fixture.dispose()
+        }
+        await fixture.lockFromMenu()
+        fixture.model.setDesktopSessionAvailableForTesting(true)
+        fixture.model.showIconPanelFromControl()
+        fixture.model.activatePanelItem(id: fixture.id, useNativeAction: true)
+        var scans = 0
+        fixture.system.beforeScan = {
+            scans += 1
+            if scans == 1 { fixture.model.screenLayoutDidChange() }
+        }
+
+        try await fixture.fire(at: 102)
+        XCTAssertEqual(fixture.system.panelPressCount, 1)
+        XCTAssertEqual(fixture.model.pendingPanelItemID, fixture.id)
+        XCTAssertNil(fixture.model.positionRecoveryMessage)
+
+        try await fixture.fire(at: 103)
+        XCTAssertEqual(fixture.system.panelPressCount, 2)
+        XCTAssertNil(fixture.model.pendingPanelItemID)
+        XCTAssertNil(fixture.model.positionRecoveryMessage)
+        XCTAssertEqual(fixture.system.allowed[fixture.bundle], false)
+    }
+
+    @MainActor
     func testFailedResumeScanShowsRecoveryActionInsteadOfWaitingForever() async throws {
         let f = try await Fixture.make(); defer { f.dispose() }
         await f.lockFromMenu()

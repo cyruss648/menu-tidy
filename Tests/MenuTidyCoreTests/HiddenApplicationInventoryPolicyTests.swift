@@ -8,7 +8,7 @@ final class HiddenApplicationInventoryPolicyTests: XCTestCase {
         XCTAssertTrue(accepts())
     }
 
-    func testVisibleUnmanagedAndSystemApplicationsCannotUseIdentityOnlyDiscovery() {
+    func testUnlistedAndSystemApplicationsCannotUseIdentityOnlyDiscovery() {
         XCTAssertFalse(accepts(managed: []))
         XCTAssertFalse(accepts(bundle: "com.apple.controlcenter", managed: ["com.apple.controlcenter"]))
         XCTAssertFalse(accepts(bundle: nil))
@@ -33,6 +33,6 @@ final class HiddenApplicationInventoryPolicyTests: XCTestCase {
                          bundle: String? = "org.example.Hidden", managed: Set<String>? = nil) -> Bool {
         HiddenApplicationInventoryPolicy.accepts(isApplicationExtras: extras, depth: depth,
             role: role, ownerPID: pid, rootPID: root, launchTime: epoch, bundleIdentifier: bundle,
-            managedHiddenBundles: managed ?? [self.bundle])
+            hiddenApplicationBundles: managed ?? [self.bundle])
     }
 }

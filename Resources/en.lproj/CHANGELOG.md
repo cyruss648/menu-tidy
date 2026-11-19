@@ -4,6 +4,13 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.31] - 2026-11-19
+
+- Fixed a macOS 27 issue where clicking Retry after switching from an external monitor to the built-in display could empty the tray. Menu Tidy can rediscover icons that temporarily fall outside the menu bar area, match them to their current application processes, and keep their saved categories.
+- Discard scan results from the previous display layout and rescan once consecutive display changes settle. A display change during unlock recovery keeps a waiting tray click queued until the rescan completes.
+
+Automated regression tests cover icon rediscovery after Retry, consecutive display changes, and clicks queued during unlock recovery. Physical monitor reconnection and disconnection remain to be verified with an external display. Packages use the project's self-signed release certificate and have no Apple notarization.
+
 ## [0.7.30] - 2026-11-17
 
 - Added a separate, opt-in “Automatically install and reopen when idle” option. With automatic checks and downloads enabled, a verified update can install and reopen Menu Tidy after five seconds of app inactivity.

@@ -4943,8 +4943,8 @@ actor MenuBarAccessibility {
         let hiddenIdentityOnly = !sourceIsUsable && HiddenApplicationInventoryPolicy.accepts(
             isApplicationExtras: source == .applicationExtras, depth: depth, role: role,
             ownerPID: owner.pid, rootPID: enumerationRootPID, launchTime: owner.launchTime,
-            bundleIdentifier: owner.bundleIdentifier, managedHiddenBundles: scanHiddenApplicationBundles)
-        // A managed application's direct extras child can supply identity
+            bundleIdentifier: owner.bundleIdentifier, hiddenApplicationBundles: scanHiddenApplicationBundles)
+        // A known application's direct extras child can supply identity
         // without geometry. Remote host items remain provisional until their
         // parent establishes a unique presentation binding.
         guard sourceIsUsable || hiddenIdentityOnly || (source == .hostWindow && depth == 2 && ancestors.count == 2 &&

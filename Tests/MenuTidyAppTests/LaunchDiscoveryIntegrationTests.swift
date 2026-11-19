@@ -69,7 +69,7 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
         try await f.fire(103)
         XCTAssertTrue(f.model.items.contains { $0.isAvailable && $0.group == .collapsible && !$0.isPending })
         XCTAssertEqual(f.model.panelItems.count, 1)
-        XCTAssertEqual(f.model.managedHiddenApplicationBundles, [f.bundle])
+        XCTAssertEqual(f.model.hiddenApplicationDiscoveryBundles, [f.bundle])
         XCTAssertEqual(f.defaults.data(forKey: "nativeTrayChoices.v1"), originalChoice)
         XCTAssertEqual(f.system.panelPressCount, 0)
         XCTAssertTrue(f.system.revealedBundles.isEmpty)
@@ -311,14 +311,100 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    func testTemporarilyRevealedAndUnmanagedApplicationsDoNotReceiveHiddenDiscoveryPermission() throws {
+    func testPreferenceBackendOnlyIncludesCurrentlyManagedHiddenApplicationsOutsideStartup() throws {
         let f = try Fixture(); defer { f.dispose() }
-        XCTAssertEqual(f.model.managedHiddenApplicationBundles, [f.bundle])
+        XCTAssertEqual(f.model.hiddenApplicationDiscoveryBundles, [f.bundle])
         f.system.allowed[f.bundle] = true
-        XCTAssertTrue(f.model.managedHiddenApplicationBundles.isEmpty)
+        XCTAssertTrue(f.model.hiddenApplicationDiscoveryBundles.isEmpty)
         f.system.allowed[f.bundle] = false
         f.system.managedBundles = []
-        XCTAssertTrue(f.model.managedHiddenApplicationBundles.isEmpty)
+        XCTAssertTrue(f.model.hiddenApplicationDiscoveryBundles.isEmpty)
+    }
+
+    @MainActor
+    func testNativeAssessmentDiscoveryExcludesVisibleAndTemporarilyRevealedApplications() throws {
+        let visible = try Fixture(group: .visible)
+        defer { visible.dispose() }
+        visible.system.nativeAssessmentAuthoritative = true
+        visible.system.managedBundles = []
+        XCTAssertTrue(visible.model.hiddenApplicationDiscoveryBundles.isEmpty)
+
+        let revealed = try Fixture()
+        defer { revealed.dispose() }
+        revealed.system.nativeAssessmentAuthoritative = true
+        revealed.system.allowed[revealed.bundle] = true
+        revealed.system.revealedBundles = [revealed.bundle]
+        XCTAssertTrue(revealed.model.hiddenApplicationDiscoveryBundles.isEmpty)
+    }
+
+    @MainActor
+    func testNativeAssessmentRecoveryRetryRediscoversAnOffBandIcon() async throws {
+        let fixture = try Fixture()
+        defer {
+            fixture.system.beforeScan = nil
+            fixture.dispose()
+        }
+        fixture.system.nativeAssessmentAuthoritative = true
+        fixture.system.runningBundles = [fixture.bundle]
+        fixture.system.snapshots = [fixture.snapshot]
+        let savedChoice = fixture.defaults.data(forKey: "nativeTrayChoices.v1")
+        fixture.model.refreshMenuItems()
+        await fixture.model.waitForTestingOperations()
+        XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
+
+        fixture.system.beforeScan = {
+            let admitsOffBandIcon = HiddenApplicationInventoryPolicy.accepts(isApplicationExtras: true,
+                depth: 1, role: "AXMenuBarItem", ownerPID: fixture.owner.pid, rootPID: fixture.owner.pid,
+                launchTime: fixture.owner.launchTime, bundleIdentifier: fixture.bundle,
+                hiddenApplicationBundles: fixture.model.hiddenApplicationDiscoveryBundles)
+            fixture.system.snapshots = admitsOffBandIcon ? [fixture.snapshot] : []
+        }
+        fixture.model.retryPositionRecovery()
+        await fixture.model.waitForTestingOperations()
+
+        XCTAssertTrue(fixture.system.managedBundles.isEmpty)
+        XCTAssertEqual(fixture.system.restoredBundles, [fixture.bundle])
+        XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
+        XCTAssertEqual(fixture.model.panelItems.first?.group, .collapsible)
+        XCTAssertEqual(fixture.defaults.data(forKey: "nativeTrayChoices.v1"), savedChoice)
+        XCTAssertEqual(fixture.system.panelPressCount, 0)
+        XCTAssertNil(fixture.model.positionRecoveryMessage)
+    }
+
+    @MainActor
+    func testDisplayChangesDiscardTheInFlightScanAndCoalesceDiscovery() async throws {
+        let fixture = try Fixture()
+        defer {
+            fixture.system.beforeScan = nil
+            fixture.dispose()
+        }
+        fixture.system.snapshots = [fixture.snapshot]
+        fixture.model.refreshMenuItems()
+        await fixture.model.waitForTestingOperations()
+        XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
+
+        var scans = 0
+        fixture.system.snapshots = []
+        fixture.system.beforeScan = {
+            scans += 1
+            guard scans == 1 else { return }
+            fixture.system.uptime = 101
+            fixture.model.screenLayoutDidChange()
+            fixture.system.uptime = 101.5
+            fixture.model.screenLayoutDidChange()
+        }
+        fixture.model.refreshMenuItems()
+        await fixture.model.waitForTestingOperations()
+        XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
+        XCTAssertEqual(scans, 1)
+
+        fixture.system.snapshots = [fixture.snapshot]
+        try await fixture.fire(102)
+        XCTAssertEqual(scans, 1)
+        try await fixture.fire(102.5)
+        XCTAssertEqual(scans, 2)
+        XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
+        XCTAssertNil(fixture.system.maintenanceTimer)
     }
 
     @MainActor

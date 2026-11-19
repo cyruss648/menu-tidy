@@ -279,7 +279,6 @@ final class MenuTidyModel: ObservableObject {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var runningApplicationsObservation: NSKeyValueObservation?
     private var runningApplicationKeys: Set<ScanOwnerKey>?
-    private var applicationObservers: [NSObjectProtocol] = []
     private let demoMode = CommandLine.arguments.contains("--demo-items")
     let isUIPreview = CommandLine.arguments.contains("--preview-ui")
     private let access = MenuBarAccessibility()
@@ -323,6 +322,7 @@ final class MenuTidyModel: ObservableObject {
     private var visibilityDiagnosticsStopped = false
     private var lastPermissionCheck = 0.0
     private var anchorScanSequence = 0
+    private var screenLayoutGeneration = 0
     private var stopping = false
     private var arrangementSequence = 0
     private var beforeTemporaryRevealCollapsed: Bool?
@@ -1013,13 +1013,6 @@ final class MenuTidyModel: ObservableObject {
                 }
             })
         }
-        applicationObservers.append(NotificationCenter.default.addObserver(
-            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.requestPassiveCaptureAfterEvent()
-                    self?.refreshNativeAssessmentIfNeeded()
-                }
-            })
     }
 
     private var operationInterruptedBySessionChange: Bool {
@@ -1386,22 +1379,22 @@ final class MenuTidyModel: ObservableObject {
         trayDiscoveryNeeded = true
     }
 
-    var managedHiddenApplicationBundles: Set<String> {
+    var hiddenApplicationDiscoveryBundles: Set<String> {
         guard usesNativeVisibility else { return [] }
         let startupRecoveryChanged = nativeStartupRecoveryIsEnabled &&
             (nativeStartupRecoveryEnvironmentChanged || nativeStartupRecoveryReleaseChanged)
-        let persisted = (nativeStartupRecoveryDue != nil || nativeStartupRecoveryAttempt > 0 ||
+        let usesAssessment = usesNativeAssessment || testingEnvironment?.nativeAssessmentAuthoritative == true
+        let persisted = (usesAssessment || nativeStartupRecoveryDue != nil || nativeStartupRecoveryAttempt > 0 ||
                          startupRecoveryChanged)
             ? nativeTrayChoices.hiddenBundles : []
         let owned: Set<String> = Set(managedNativeTargets.compactMap { target in
             guard case .application(let bundle) = target, (try? nativeAllowed(target)) == false else { return nil }
             return bundle
         })
-        // A stale macOS 27 assessment can hide an application before this
-        // process has rebuilt its process-local ownership state. Saved intent
-        // is safe as a discovery hint: the scanner still requires a live owner
-        // and a fresh AX identity before publishing the item.
-        return persisted.union(owned)
+        // Releasing an assessment can leave sources outside the menu band
+        // until MenuBarAgent updates. Saved choices let the scan find those
+        // live sources without granting geometry or native ownership.
+        return persisted.union(owned).filter { !nativeTargetIsRevealed(.application(bundle: $0)) }
     }
 
     func requestAccessibility() {
@@ -1670,6 +1663,7 @@ final class MenuTidyModel: ObservableObject {
         guard !isRecoveringPositions, !isActivatingPanelItem, !isApplying, !isRefreshing, !isArranging else { return }
         guard accessibilityGranted else { managementError = LocalizedMessage("先在权限页开启辅助功能权限，再读取菜单栏图标。"); return }
         let refreshSessionGeneration = desktopSessionGeneration
+        let refreshLayoutGeneration = screenLayoutGeneration
         requestPassiveCaptureAfterEvent()
         if prepareOverflow { closeIconPanel() }
         isRefreshing = true
@@ -1696,8 +1690,14 @@ final class MenuTidyModel: ObservableObject {
                 }
                 if let generation = sessionResumeGeneration {
                     self.isResumingPanelRecovery = false
-                    self.finishSessionResumeRefresh(generation: generation, succeeded: scanSucceeded && !Task.isCancelled)
-                    self.resumePendingPanelAction(succeeded: scanSucceeded && !Task.isCancelled, generation: generation)
+                    if !scanSucceeded, !Task.isCancelled, generation == self.desktopSessionGeneration,
+                       refreshLayoutGeneration != self.screenLayoutGeneration {
+                        self.sessionResumeDue = self.lastRecoveryCheck + BackgroundMaintenanceSchedule.interactionInterval
+                        self.rescheduleMaintenanceTimer()
+                    } else {
+                        self.finishSessionResumeRefresh(generation: generation, succeeded: scanSucceeded && !Task.isCancelled)
+                        self.resumePendingPanelAction(succeeded: scanSucceeded && !Task.isCancelled, generation: generation)
+                    }
                 } else if let attempt = nativeStartupRecoveryAttempt {
                     self.finishNativeStartupRecovery(attempt: attempt,
                         succeeded: nativeStartupRecoveryRebindSucceeded &&
@@ -3769,6 +3769,7 @@ final class MenuTidyModel: ObservableObject {
         }
         anchorScanSequence += 1
         let scanID = anchorScanSequence
+        let layoutGeneration = screenLayoutGeneration
         let (owners, bands) = menuBarScanInputs()
         let scanOwners = testingEnvironment.map { $0.enumerationOwners ?? owners }
             ?? incrementalScanOwners(from: owners, discover: discover)
@@ -3787,7 +3788,7 @@ final class MenuTidyModel: ObservableObject {
                 retainHiddenIDs: Set(nativeVisibilityEvidence.filter {
                     $0.value.group != .visible && self.ownerIsCurrent($0.value.identity)
                 }.keys),
-                hiddenApplicationBundles: managedHiddenApplicationBundles,
+                hiddenApplicationBundles: hiddenApplicationDiscoveryBundles,
                 enumerationOwners: scanOwners)
                 ownerReadFailures = await access.ownerReadFailures()
             }
@@ -3797,12 +3798,12 @@ final class MenuTidyModel: ObservableObject {
         }
         logOwnAnchors(newSnapshots, scanID: scanID)
         try requireDesktopSession(generation: sessionGeneration)
-        guard !stopping, !Task.isCancelled, scanID == anchorScanSequence else { throw MenuBarAccessError.cancelled }
+        guard !stopping, !Task.isCancelled, scanID == anchorScanSequence,
+              layoutGeneration == screenLayoutGeneration else { throw MenuBarAccessError.cancelled }
         // A process can exit while AX scanning is suspended. Retain its
         // recovery intent before reconciliation discards the old evidence.
         registerDepartedNativeOwners()
         scheduleNativeOwnerRecoveryDiscoveryIfNeeded()
-        scanSchedule.complete(scanned: scanOwners.map(ScanOwnerKey.init))
         let currentOwnerKeys = Set(owners.map(ScanOwnerKey.init))
         let scannedOwnerKeys = Set(scanOwners.map(ScanOwnerKey.init))
         // A scanned host can return remote items owned by an unscanned app.
@@ -3856,10 +3857,6 @@ final class MenuTidyModel: ObservableObject {
                 (snapshot.processIdentifier, ScanOwnerKey($0))
             }
         }, uniquingKeysWith: { first, _ in first })
-        // Keep the previous round's successful owners as the next round's
-        // warm set. This bounds repeat work while the scheduler rotates
-        // through the remaining live processes.
-        successfulScanOwnerKeys = scannedOwnerKeys.intersection(currentOwnerKeys)
         actualGroups.removeAll()
         if usesNativeVisibility && !isArranging {
             await reconcileNativeVisibilityEvidence()
@@ -3886,7 +3883,13 @@ final class MenuTidyModel: ObservableObject {
             actualGroups = verifiedPositionGroups
         }
         try requireDesktopSession(generation: sessionGeneration)
+        guard layoutGeneration == screenLayoutGeneration else { throw MenuBarAccessError.cancelled }
         published = true
+        scanSchedule.complete(scanned: scanOwners.map(ScanOwnerKey.init))
+        // Keep the previous round's successful owners as the next round's
+        // warm set. This bounds repeat work while the scheduler rotates
+        // through the remaining live processes.
+        successfulScanOwnerKeys = scannedOwnerKeys.intersection(currentOwnerKeys)
         let observedOwnerKeys = Set(snapshots.compactMap { snapshot in
             snapshotOwnerKeys[snapshot.processIdentifier]
         })
@@ -5582,6 +5585,19 @@ final class MenuTidyModel: ObservableObject {
         applyState()
     }
 
+    func screenLayoutDidChange() {
+        guard !stopping, !preparingToTerminate else { return }
+        if usesNativeVisibility {
+            screenLayoutGeneration += 1
+            lastRecoveryCheck = maintenanceUptime
+            cancelPassiveIconCapture()
+            trayDiscoveryNeeded = true
+        } else {
+            recoverVisibility()
+        }
+        requestPassiveCaptureAfterEvent()
+    }
+
     func recoverVisibility() {
         if isUIPreview { return }
         guard ensureDesktopSessionAvailable(), !sessionResumePending else { return }
@@ -5863,8 +5879,6 @@ final class MenuTidyModel: ObservableObject {
         runningApplicationKeys = nil
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         workspaceObservers.removeAll()
-        applicationObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        applicationObservers.removeAll()
         shortcut.unregister()
         statusBar?.stop()
         statusBar = nil
