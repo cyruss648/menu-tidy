@@ -4,6 +4,13 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.32] - 2026-11-21
+
+- Fixed macOS 27 startup recovery and native menu-bar rebuilds reapplying hidden assessment too early, which could make saved hidden icons appear during recovery or be hidden against the replacement process.
+- Temporarily release native hidden assessment during recovery, re-read the menu-bar inventory, then restore the saved classifications. Successful recovery also clears stale failed-owner entries so old failures do not block later retries.
+
+Automated regression coverage includes native hidden-assessment release during recovery, inventory rebuilding, and failed-owner queue cleanup. Uses the project's self-signed release identity and is not Apple-notarized.
+
 ## [0.7.31] - 2026-11-19
 
 - Fixed a macOS 27 issue where clicking Retry after switching from an external monitor to the built-in display could empty the tray. Menu Tidy can rediscover icons that temporarily fall outside the menu bar area, match them to their current application processes, and keep their saved categories.

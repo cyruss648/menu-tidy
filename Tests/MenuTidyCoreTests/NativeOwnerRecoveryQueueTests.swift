@@ -62,4 +62,15 @@ final class NativeOwnerRecoveryQueueTests: XCTestCase {
         }
         XCTAssertTrue(queue.pendingTargets.isEmpty)
     }
+
+    func testExplicitFullRestoreClearsFailedRecoveryEntries() {
+        var queue = NativeOwnerRecoveryQueue<String>()
+        queue.register(target: "app", departedOwner: owner())
+        queue.recordFailure(target: "app")
+
+        queue.removeAll()
+
+        XCTAssertTrue(queue.pendingTargets.isEmpty)
+        XCTAssertTrue(queue.failedTargets.isEmpty)
+    }
 }

@@ -257,6 +257,7 @@ final class MenuTidyModel: ObservableObject {
     private var nativeStartupRecoveryScheduled = false
     private var nativeStartupRecoveryScanPending = false
     private var nativeStartupRecoveryRebindSucceeded = true
+    private var nativeStartupRecoveryAssessmentReleased = false
     /// Keep a relaunching saved application visible while its status item is
     /// being rediscovered. Reapplying the native assessment first can hide it
     /// before MenuBarAgent reports its new process identity.
@@ -5925,6 +5926,7 @@ private extension MenuTidyModel {
             nativeStartupRecoveryDue = nil
             nativeStartupRecoveryScanPending = false
             nativeStartupRecoveryRebindSucceeded = true
+            nativeStartupRecoveryAssessmentReleased = false
             return
         }
         let environmentChanged = nativeStartupRecoveryEnvironmentChanged
@@ -5932,6 +5934,7 @@ private extension MenuTidyModel {
         guard !nativeStartupRecoveryScheduled else { return }
         nativeStartupRecoveryScheduled = true
         nativeStartupRecoveryAttempt = 0
+        nativeStartupRecoveryAssessmentReleased = false
         nativeStartupRecoveryDue = maintenanceUptime + Self.nativeStartupInitialDelay
         let reason = environmentChanged && releaseChanged
             ? "process-start-environment-and-release-changed"
@@ -5939,6 +5942,20 @@ private extension MenuTidyModel {
                 ? "process-start-environment-changed"
                 : (releaseChanged ? "process-start-release-changed" : "process-start"))
         Self.diagnosticLogger.notice("nativeStartupRebind scheduled=true reason=\(reason, privacy: .public) due=\(self.nativeStartupRecoveryDue ?? 0)")
+        reassertPersistedNativeAssessmentForStartup()
+    }
+
+    private func reassertPersistedNativeAssessmentForStartup() {
+        guard usesNativeAssessment, nativeStartupRecoveryScheduled,
+              !nativeStartupRecoveryAssessmentReleased else { return }
+        let recovering = nativeDiscoveryRevealBundles.union(
+            Set(nativeOwnerRecoveries.pendingTargets.compactMap { target in
+                if case .application(let bundle) = target { return bundle }
+                return nil
+            }))
+        let hidden = nativeTrayChoices.hiddenBundles.subtracting(recovering)
+        nativeAssessmentStore.syncDesiredHiddenBundles(hidden)
+        nativeAssessmentStore.refresh(observedBundles: Set(currentRunningApplicationOwners().compactMap(\.bundleIdentifier)))
     }
 
     private func runNativeStartupRecovery(at now: TimeInterval) {
@@ -5980,7 +5997,16 @@ private extension MenuTidyModel {
         nativeStartupRecoveryAttempt += 1
         let attempt = nativeStartupRecoveryAttempt
         Self.diagnosticLogger.notice("nativeStartupRebind started=true attempt=\(attempt)")
-        let rebindSucceeded = restoreAllNativeTargets()
+        let releaseAssessment = usesNativeAssessment
+        let rebindSucceeded = restoreAllNativeTargets(
+            releaseAssessment: releaseAssessment)
+        if releaseAssessment {
+            // The assessment is process-owned. A new process may have
+            // reasserted saved choices during the startup hold, so the
+            // successful or failed journal recovery must still leave the
+            // assessment released while MenuBarAgent rebuilds its AX tree.
+            nativeStartupRecoveryAssessmentReleased = true
+        }
         nativeStartupRecoveryRebindSucceeded = rebindSucceeded
         if !rebindSucceeded {
             Self.diagnosticLogger.notice("nativeStartupRebind rebindSucceeded=false scanAfterFailure=true")
@@ -6031,6 +6057,7 @@ private extension MenuTidyModel {
                 nativeStartupRecoveryDue = nil
                 nativeStartupRecoveryScheduled = false
                 nativeStartupRecoveryAttempt = 0
+                nativeStartupRecoveryAssessmentReleased = false
                 nativeStartupRecoveryRebindSucceeded = true
                 Self.diagnosticLogger.notice("nativeStartupRebind exhausted=true reason=\(failure, privacy: .public)")
                 refreshNativeAssessmentIfNeeded()
@@ -6064,6 +6091,7 @@ private extension MenuTidyModel {
         nativeStartupRecoveryDue = nil
         nativeStartupRecoveryScheduled = false
         nativeStartupRecoveryAttempt = 0
+        nativeStartupRecoveryAssessmentReleased = false
         nativeStartupRecoveryRebindSucceeded = true
         Self.diagnosticLogger.notice("nativeStartupRebind finished=true observedBundles=\(observedBundles.count) expectedRunning=\(expectedRunning.count)")
         refreshNativeAssessmentIfNeeded()
@@ -6104,6 +6132,7 @@ private extension MenuTidyModel {
 
     func syncNativeAssessmentIntent() {
         guard usesNativeAssessment else { return }
+        let assessmentReleased = nativeStartupRecoveryScheduled && nativeStartupRecoveryAssessmentReleased
         var inventoried = Set(snapshots.compactMap { snapshot -> String? in
             guard snapshot.canMove, snapshot.ownIdentifier == nil,
                   let identity = observedItemIdentity(snapshot), ownerIsCurrent(identity) else { return nil }
@@ -6112,9 +6141,11 @@ private extension MenuTidyModel {
         // A reveal may precede the replacement AX source. Keep ownership of
         // that in-flight reveal so its cleanup can restore the hidden choice.
         inventoried.formUnion(nativeAssessmentStore.revealedBundles)
-        let persistedHidden = Set(nativeTrayChoices.choices.compactMap { bundle, group in
-            group == .visible || !inventoried.contains(bundle) ? nil : bundle
-        })
+        let persistedHidden = assessmentReleased
+            ? Set(nativeTrayChoices.choices.compactMap { bundle, group in
+                group == .visible || !inventoried.contains(bundle) ? nil : bundle
+            })
+            : nativeTrayChoices.hiddenBundles
         // A relaunched hidden application must remain visible through the next
         // discovery scan. Reasserting its persisted choice here would hide the
         // replacement process before its menu-bar item can be observed.
@@ -6125,7 +6156,8 @@ private extension MenuTidyModel {
         let hidden = NativeMenuBarAssessmentStore.desiredHiddenBundles(
             persisted: persistedHidden,
             recovering: recovering.union(nativeDiscoveryRevealBundles),
-            startupRecoveryInProgress: nativeStartupRecoveryScheduled)
+            startupRecoveryInProgress: nativeStartupRecoveryScheduled,
+            assessmentReleased: assessmentReleased)
         nativeAssessmentStore.syncDesiredHiddenBundles(hidden)
     }
 
@@ -6365,7 +6397,7 @@ private extension MenuTidyModel {
         } catch { succeeded = false }
         return succeeded
     }
-    func restoreAllNativeTargets() -> Bool {
+    func restoreAllNativeTargets(releaseAssessment: Bool = true) -> Bool {
         if let testingEnvironment {
             var succeeded = true
             for bundle in testingEnvironment.managedBundles {
@@ -6376,13 +6408,17 @@ private extension MenuTidyModel {
             return succeeded
         }
         let reloadsSucceeded = reloadAllNativeRecoveryJournalsIfNeeded()
-        nativeAssessmentStore.restoreAll()
+        if releaseAssessment { nativeAssessmentStore.restoreAll() }
         let applications = nativeVisibilityStore.restoreAll()
         let systems = nativeSystemVisibilityStore.restoreAll()
-        nativeOwnerRecoveries.retainManagedTargets(managedNativeTargets)
         if !systems.isEmpty { recheckNativeVisibilityAccess() }
         let restored = reloadsSucceeded && applications.isEmpty && systems.isEmpty && nativeRecoveryIssue == nil
-        if restored { interruptedNativePanelRecoveries.removeAll() }
+        if restored {
+            interruptedNativePanelRecoveries.removeAll()
+            nativeOwnerRecoveries.removeAll()
+        } else {
+            nativeOwnerRecoveries.retainManagedTargets(managedNativeTargets)
+        }
         return restored
     }
     func latestNativeGroup(id: String, target: NativeVisibilityTarget) -> ItemVisibility {

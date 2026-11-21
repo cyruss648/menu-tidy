@@ -45,4 +45,8 @@ public struct NativeOwnerRecoveryQueue<Target: Hashable> {
     public mutating func complete(target: Target) {
         entries.removeValue(forKey: target)
     }
+
+    public mutating func removeAll() {
+        entries.removeAll()
+    }
 }

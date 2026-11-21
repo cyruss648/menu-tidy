@@ -247,8 +247,9 @@ final class NativeMenuBarAssessmentStore {
     /// same applications from MenuBarAgent again and makes recovery impossible.
     static func desiredHiddenBundles(persisted: Set<String>,
                                      recovering: Set<String>,
-                                     startupRecoveryInProgress: Bool) -> Set<String> {
-        guard !startupRecoveryInProgress else { return [] }
+                                     startupRecoveryInProgress: Bool,
+                                     assessmentReleased: Bool = true) -> Set<String> {
+        guard !startupRecoveryInProgress || !assessmentReleased else { return [] }
         return persisted.subtracting(recovering)
     }
 

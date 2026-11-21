@@ -95,11 +95,18 @@ final class NativeMenuBarAssessmentStoreTests: XCTestCase {
         XCTAssertTrue(NativeMenuBarAssessmentStore.desiredHiddenBundles(
             persisted: persisted,
             recovering: [],
-            startupRecoveryInProgress: true).isEmpty)
+            startupRecoveryInProgress: true,
+            assessmentReleased: true).isEmpty)
+        XCTAssertEqual(NativeMenuBarAssessmentStore.desiredHiddenBundles(
+            persisted: persisted,
+            recovering: [],
+            startupRecoveryInProgress: true,
+            assessmentReleased: false), persisted)
         XCTAssertEqual(NativeMenuBarAssessmentStore.desiredHiddenBundles(
             persisted: persisted,
             recovering: ["org.example.Other"],
-            startupRecoveryInProgress: false), ["org.example.BLEUnlock"])
+            startupRecoveryInProgress: false,
+            assessmentReleased: true), ["org.example.BLEUnlock"])
     }
 
     @MainActor
@@ -109,6 +116,7 @@ final class NativeMenuBarAssessmentStoreTests: XCTestCase {
         XCTAssertEqual(NativeMenuBarAssessmentStore.desiredHiddenBundles(
             persisted: persisted,
             recovering: ["org.example.BLEUnlock"],
-            startupRecoveryInProgress: false), ["org.example.Other"])
+            startupRecoveryInProgress: false,
+            assessmentReleased: true), ["org.example.Other"])
     }
 }
