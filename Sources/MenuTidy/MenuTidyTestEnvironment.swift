@@ -42,6 +42,9 @@ final class MenuTidyTestEnvironment {
     /// Models macOS 27's application-wide assessment result when MenuBarAgent
     /// has replaced the source AX node during a visibility transition.
     var nativeAssessmentAuthoritative = false
+    var displayAssessmentRefreshes = 0
+    var displayAssessmentReleases = 0
+    var displayAssessmentReleased = false
     var revealedBundles: Set<String> = []
     var panelPressCount = 0
     var panelPressReturnsPresentation = true
@@ -56,6 +59,21 @@ final class MenuTidyTestEnvironment {
     var endedOwners: [ObservedItemGroupHistory.Identity] = []
     var beforeRehide: (() throws -> Void)?
     var beforeRestore: (() throws -> Void)?
+
+    func releaseDisplayAssessment() {
+        guard nativeAssessmentAuthoritative else { return }
+        displayAssessmentReleases += 1
+        displayAssessmentReleased = true
+        restoredBundles.append(contentsOf: managedBundles.sorted())
+        managedBundles.removeAll()
+        for bundle in allowed.keys { allowed[bundle] = true }
+    }
+
+    func refreshDisplayAssessment() {
+        guard nativeAssessmentAuthoritative else { return }
+        displayAssessmentRefreshes += 1
+        displayAssessmentReleased = false
+    }
 
     func isCurrent(_ identity: ObservedItemGroupHistory.Identity) -> Bool {
         if nativeAssessmentAuthoritative {

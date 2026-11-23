@@ -324,6 +324,11 @@ final class MenuTidyModel: ObservableObject {
     private var lastPermissionCheck = 0.0
     private var anchorScanSequence = 0
     private var screenLayoutGeneration = 0
+    private var screenLayoutRecoveryScheduled = false
+    private var screenLayoutRecoveryDue: TimeInterval?
+    private var screenLayoutRecoveryAttempt = 0
+    private var screenLayoutRecoveryAssessmentReleased = false
+    private static let screenLayoutRecoveryRetryDelays: [TimeInterval] = [2, 5, 12]
     private var stopping = false
     private var arrangementSequence = 0
     private var beforeTemporaryRevealCollapsed: Bool?
@@ -348,6 +353,7 @@ final class MenuTidyModel: ObservableObject {
     }
     private var pendingPanelAction: PendingPanelAction?
     private var trayPlacementTask: Task<Void, Never>?
+    private var trayReconnectGeneration = 0
     private var panelIsPreparingNativeAction = false
     private var trayConnectionAttempts: [String: ObservedItemGroupHistory.Identity] = [:]
     private var trayDiscoveryNeeded = false { didSet { rescheduleMaintenanceTimer() } }
@@ -756,9 +762,12 @@ final class MenuTidyModel: ObservableObject {
         Self.diagnosticLogger.notice("tray reconnectStarted=true items=\(ids.count)")
         applyItemRules(requestedItemIDs: Set(ids), preservePanel: true)
         let reconnectTask = workTask
+        trayReconnectGeneration += 1
+        let generation = trayReconnectGeneration
         Task { [weak self] in
             await reconnectTask?.value
-            self?.trayReconnectIDs = []
+            guard let self, self.trayReconnectGeneration == generation else { return }
+            self.trayReconnectIDs = []
         }
     }
     var permissionSettingsName: LocalizedMessage { ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 ? LocalizedMessage("设备控制和数据访问") : LocalizedMessage("辅助功能") }
@@ -1041,6 +1050,11 @@ final class MenuTidyModel: ObservableObject {
         sessionResumeNeedsRefresh = true
         periodicPendingApplicationGeneration += 1
         periodicPendingApplicationDue = nil
+        if !available {
+            screenLayoutRecoveryDue = nil
+        } else if screenLayoutRecoveryScheduled {
+            screenLayoutRecoveryDue = maintenanceUptime + BackgroundMaintenanceSchedule.interactionInterval
+        }
         startupPendingApplicationDue = nil
         startupPendingApplicationNeedsRefresh = true
         if available {
@@ -1309,6 +1323,10 @@ final class MenuTidyModel: ObservableObject {
             rescheduleMaintenanceTimer()
             return
         }
+        if runScreenLayoutRecovery(at: now) {
+            rescheduleMaintenanceTimer()
+            return
+        }
         if shouldMonitorAutoCollapse && now >= lastAutoCollapseCheck + BackgroundMaintenanceSchedule.interactionInterval {
             lastAutoCollapseCheck = now
             checkAutoCollapse()
@@ -1331,6 +1349,77 @@ final class MenuTidyModel: ObservableObject {
         scheduleMenuBarClientRecoveryIfNeeded()
         schedulePassiveIconCapture()
         rescheduleMaintenanceTimer()
+    }
+
+    private func runScreenLayoutRecovery(at now: TimeInterval) -> Bool {
+        guard let due = screenLayoutRecoveryDue, screenLayoutRecoveryScheduled, now >= due else { return false }
+        guard !isActivatingPanelItem, !isArranging, !contextMenuVisible else {
+            screenLayoutRecoveryDue = now + BackgroundMaintenanceSchedule.interactionInterval
+            return false
+        }
+        if !screenLayoutRecoveryAssessmentReleased {
+            if testingEnvironment?.nativeAssessmentAuthoritative == true {
+                testingEnvironment?.releaseDisplayAssessment()
+            } else {
+                nativeAssessmentStore.restoreAll()
+            }
+            screenLayoutRecoveryAssessmentReleased = true
+            trayConnectionAttempts.removeAll()
+            nativeVisibilityEvidence.removeAll()
+            actualGroups.removeAll()
+            rebuildRows()
+        }
+        screenLayoutRecoveryDue = nil
+        if panelInteractionBusy || trayPlacementTask != nil {
+            screenLayoutRecoveryDue = now + BackgroundMaintenanceSchedule.interactionInterval
+            return false
+        }
+        refreshPermissions()
+        guard accessibilityGranted else {
+            screenLayoutRecoveryDue = now + BackgroundMaintenanceSchedule.permissionInterval
+            return false
+        }
+        Self.diagnosticLogger.notice("screenLayoutRecovery scan=true attempt=\(self.screenLayoutRecoveryAttempt + 1)")
+        trayDiscoveryNeeded = false
+        refreshMenuItems()
+        return true
+    }
+
+    private func completeScreenLayoutRecoveryIfPossible() {
+        guard screenLayoutRecoveryScheduled, screenLayoutRecoveryAssessmentReleased else { return }
+        let runningBundles = testingEnvironment?.runningBundles ??
+            Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        let expectedRunning = nativeTrayChoices.hiddenBundles.intersection(runningBundles)
+        let observedBundles = Set(snapshots.compactMap(\.bundleIdentifier))
+        let missing = expectedRunning.subtracting(observedBundles)
+        if !missing.isEmpty {
+            if screenLayoutRecoveryAttempt < Self.screenLayoutRecoveryRetryDelays.count {
+                screenLayoutRecoveryDue = maintenanceUptime + Self.screenLayoutRecoveryRetryDelays[screenLayoutRecoveryAttempt]
+                screenLayoutRecoveryAttempt += 1
+                Self.diagnosticLogger.notice("screenLayoutRecovery inventoryIncomplete=true missing=\(missing.count) retry=\(self.screenLayoutRecoveryAttempt)")
+                return
+            }
+            retainUnobservedRunningNativeBundles(missing)
+        }
+        screenLayoutRecoveryScheduled = false
+        screenLayoutRecoveryAssessmentReleased = false
+        screenLayoutRecoveryAttempt = 0
+        screenLayoutRecoveryDue = nil
+        if nativeStartupRecoveryScheduled {
+            nativeStartupRecoveryScanPending = true
+            nativeStartupRecoveryDue = maintenanceUptime + BackgroundMaintenanceSchedule.interactionInterval
+            rescheduleMaintenanceTimer()
+            Self.diagnosticLogger.notice("screenLayoutRecovery deferredStartup=true")
+            return
+        }
+        if testingEnvironment?.nativeAssessmentAuthoritative == true {
+            testingEnvironment?.refreshDisplayAssessment()
+        }
+        refreshNativeAssessmentIfNeeded()
+        rebindNativeApplicationEvidenceToCurrentSnapshots()
+        rebuildRows()
+        reconnectDiscoveredTrayItems()
+        Self.diagnosticLogger.notice("screenLayoutRecovery finished=true observedBundles=\(observedBundles.count) expectedRunning=\(expectedRunning.count)")
     }
 
     private func requestPassiveCaptureAfterEvent() {
@@ -1708,8 +1797,21 @@ final class MenuTidyModel: ObservableObject {
                         sessionGeneration: refreshSessionGeneration)
                 } else if let generation = periodicPendingGeneration {
                     self.finishPeriodicPendingRefresh(generation: generation, succeeded: scanSucceeded && !Task.isCancelled)
-                } else if scanSucceeded && !Task.isCancelled {
-                    self.reconnectDiscoveredTrayItems()
+                } else {
+                    if scanSucceeded && !Task.isCancelled {
+                        self.completeScreenLayoutRecoveryIfPossible()
+                    } else if self.screenLayoutRecoveryScheduled && self.screenLayoutRecoveryAssessmentReleased &&
+                        !self.stopping && !self.preparingToTerminate && self.desktopSessionAvailable {
+                        let delay = Self.screenLayoutRecoveryRetryDelays[
+                            min(self.screenLayoutRecoveryAttempt, Self.screenLayoutRecoveryRetryDelays.count - 1)]
+                        self.screenLayoutRecoveryDue = self.maintenanceUptime + delay
+                        self.screenLayoutRecoveryAttempt = min(self.screenLayoutRecoveryAttempt + 1,
+                            Self.screenLayoutRecoveryRetryDelays.count)
+                        self.trayDiscoveryNeeded = true
+                    }
+                    if !self.screenLayoutRecoveryScheduled {
+                        self.reconnectDiscoveredTrayItems()
+                    }
                 }
                 self.scheduleMenuBarClientRecoveryIfNeeded()
             }
@@ -2419,8 +2521,13 @@ final class MenuTidyModel: ObservableObject {
                     ? LocalizedMessage("本次应用已停止。已确认的分类保留，其余选择仍待处理。")
                     : LocalizedMessage("本次应用已停止。仍有位置需要恢复，请使用上方恢复入口；分类选择已保留。")
             } else if let failureMessage {
-                self.managementError = LocalizedMessage("\(failureMessage) 本次分类尚未全部生效：已确认的项目已保存，其余选择仍待应用。不支持后台调整的图标仍保留为待应用，不会回退到模拟拖动。")
-                self.managementMessage = nil
+                if self.screenLayoutRecoveryScheduled {
+                    self.managementError = nil
+                    self.managementMessage = LocalizedMessage("显示器布局已变化，正在重新读取并连接图标；已保存的选择保持不变。")
+                } else {
+                    self.managementError = LocalizedMessage("\(failureMessage) 本次分类尚未全部生效：已确认的项目已保存，其余选择仍待应用。不支持后台调整的图标仍保留为待应用，不会回退到模拟拖动。")
+                    self.managementMessage = nil
+                }
             } else if requestedIDSet.isSubset(of: Set(self.itemApplicationIssues.keys)) {
                 self.managementMessage = LocalizedMessage("本次没有可自动整理的项目，未修改图标位置。选择已保留，可筛选「未自动应用」查看原因。")
             } else {
@@ -5592,6 +5699,25 @@ final class MenuTidyModel: ObservableObject {
             screenLayoutGeneration += 1
             lastRecoveryCheck = maintenanceUptime
             cancelPassiveIconCapture()
+            if !sessionResumePending && !isResumingPanelRecovery && !isActivatingPanelItem {
+                closeIconPanel()
+            }
+            if usesNativeAssessment || testingEnvironment?.nativeAssessmentAuthoritative == true {
+                if !trayReconnectIDs.isEmpty {
+                    trayReconnectGeneration += 1
+                    workTask?.cancel()
+                    for id in trayReconnectIDs { trayConnectionAttempts.removeValue(forKey: id) }
+                    trayPlacementErrors = trayPlacementErrors.filter { !trayReconnectIDs.contains($0.key) }
+                    itemApplicationIssues = itemApplicationIssues.filter { !trayReconnectIDs.contains($0.key) }
+                    trayReconnectIDs.removeAll()
+                    rebuildRows()
+                }
+                if !sessionResumePending && !isResumingPanelRecovery {
+                    screenLayoutRecoveryScheduled = true
+                    screenLayoutRecoveryAttempt = 0
+                    screenLayoutRecoveryDue = maintenanceUptime + BackgroundMaintenanceSchedule.interactionInterval
+                }
+            }
             trayDiscoveryNeeded = true
         } else {
             recoverVisibility()
@@ -5857,7 +5983,12 @@ final class MenuTidyModel: ObservableObject {
         nativeStartupRecoveryScheduled = false
         nativeStartupRecoveryScanPending = false
         nativeStartupRecoveryRebindSucceeded = true
+        nativeStartupRecoveryAssessmentReleased = false
         nativeDiscoveryRevealBundles.removeAll()
+        screenLayoutRecoveryDue = nil
+        screenLayoutRecoveryScheduled = false
+        screenLayoutRecoveryAssessmentReleased = false
+        screenLayoutRecoveryAttempt = 0
         clientRecoveryTask?.cancel()
         clientRecoveryTask = nil
         isReconnectingMenuBarClient = false
@@ -6132,6 +6263,10 @@ private extension MenuTidyModel {
 
     func syncNativeAssessmentIntent() {
         guard usesNativeAssessment else { return }
+        if screenLayoutRecoveryScheduled && screenLayoutRecoveryAssessmentReleased {
+            if !nativeStartupRecoveryScheduled { nativeAssessmentStore.syncDesiredHiddenBundles([]) }
+            return
+        }
         let assessmentReleased = nativeStartupRecoveryScheduled && nativeStartupRecoveryAssessmentReleased
         var inventoried = Set(snapshots.compactMap { snapshot -> String? in
             guard snapshot.canMove, snapshot.ownIdentifier == nil,
@@ -6463,6 +6598,24 @@ private extension MenuTidyModel {
         nativeVisibilityEvidence = confirmed
     }
 
+    private func rebindNativeApplicationEvidenceToCurrentSnapshots() {
+        guard usesNativeVisibility else { return }
+        var rebound = nativeVisibilityEvidence
+        for snapshot in snapshots where snapshot.canMove && snapshot.ownIdentifier == nil {
+            guard let bundle = snapshot.bundleIdentifier,
+                  let group = nativeTrayChoices.group(bundle: bundle),
+                  let identity = observedItemIdentity(snapshot),
+                  ownerIsCurrent(identity) else { continue }
+            let target = NativeVisibilityTarget.application(bundle: bundle)
+            guard !nativeTargetIsRevealed(target),
+                  let allowed = try? nativeAllowed(target),
+                  allowed == (group == .visible) else { continue }
+            rebound[snapshot.id] = NativeVisibilityEvidence(identity: identity, target: target, group: group)
+        }
+        nativeVisibilityEvidence = rebound
+        actualGroups.merge(rebound.mapValues(\.group)) { _, current in current }
+    }
+
     func inspectUnmanagedNativeVisibility(_ source: MenuBarItemSnapshot) async -> Bool? {
         if let testingEnvironment { return testingEnvironment.visibility(id: source.id) }
         if source.bundleIdentifier?.hasPrefix("com.apple.") == true {
@@ -6760,6 +6913,7 @@ private extension MenuTidyModel {
             return await nativeAssessmentStore.changeVisibility(changes, observedBundles: observedBundles)
         }
         guard let testingEnvironment else { return nativeVisibilityStore.changeVisibility(changes) }
+        if testingEnvironment.displayAssessmentReleased { testingEnvironment.refreshDisplayAssessment() }
         testingEnvironment.visibilityBatches.append(changes)
         var results: [String: Result<Void, Error>] = [:]
         for bundle in changes.keys.sorted() {

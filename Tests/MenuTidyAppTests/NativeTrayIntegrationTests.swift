@@ -331,6 +331,50 @@ final class NativeTrayIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testDisplayChangeDuringReconnectSchedulesRecoveryAndRetries() async throws {
+        let suite = "dev.hdh.MenuTidy.tests.display-reconnect.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "hasCompletedSetup")
+        defaults.set(false, forKey: "startupApplyPending")
+        defaults.set(false, forKey: "periodicApplyPending")
+        defaults.set(try JSONEncoder().encode(NativeTrayChoices(existing: [bundle: .collapsible])), forKey: "nativeTrayChoices.v1")
+        let original = rule("session:display-reconnect", .visible)
+        let system = environment([original])
+        system.nativeAssessmentAuthoritative = true
+        system.runningBundles = [bundle]
+        system.uptime = 100
+        let model = MenuTidyModel(testing: system, defaults: defaults)
+        defer {
+            system.beforeScan = nil
+            model.stop()
+        }
+        var scans = 0
+        system.beforeScan = {
+            scans += 1
+            guard scans == 2 else { return }
+            await MainActor.run { model.screenLayoutDidChange() }
+        }
+
+        model.refreshMenuItems()
+        await model.waitForTestingOperations()
+        XCTAssertTrue(try XCTUnwrap(model.managementItems.first).isPending)
+        XCTAssertNotNil(system.maintenanceTimer)
+        XCTAssertTrue(system.hiddenBundles.isEmpty)
+        XCTAssertNil(model.managementError)
+        system.beforeScan = nil
+        system.uptime = 102
+        try XCTUnwrap(system.maintenanceTimer).fire()
+        await model.waitForTestingOperations()
+
+        XCTAssertEqual(system.hiddenBundles, [bundle])
+        XCTAssertFalse(try XCTUnwrap(model.managementItems.first).isPending)
+        XCTAssertEqual(model.trayPlacementOutstandingCount, 0)
+        XCTAssertNil(model.trayPlacementFailure(id: original.id))
+        XCTAssertNil(system.maintenanceTimer)
+    }
+
+    @MainActor
     func testForgettingNativeChoiceAlsoRemovesLegacyRulesThatWouldReviveOnRestart() async throws {
         let suite = "dev.hdh.MenuTidy.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

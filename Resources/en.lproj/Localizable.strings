@@ -618,6 +618,7 @@
 "本应用分隔项的位置记录不存在。" = "This app's separator has no position record.";
 "本应用隐藏的位置已恢复；重新授权后可继续整理。" = "Positions hidden by this app were restored. Grant access again to continue organizing.";
 "本次刷新已停止，现有列表与选择已保留。" = "Refresh stopped. The existing list and choices are preserved.";
+"显示器布局已变化，正在重新读取并连接图标；已保存的选择保持不变。" = "The display layout changed. Refreshing and reconnecting icons while preserving saved choices.";
 "本次应用已停止。仍有位置需要恢复，请使用上方恢复入口；分类选择已保留。" = "Applying stopped. Some positions still need recovery; use the recovery controls above. Your choices are preserved.";
 "本次应用已停止。已确认的分类保留，其余选择仍待处理。" = "Applying stopped. Confirmed groups are preserved; other choices remain pending.";
 "本次未能核对隐藏图标图像" = "Hidden icon images could not be verified this time";

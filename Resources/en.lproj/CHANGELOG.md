@@ -4,6 +4,13 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.33] - 2026-11-23
+
+- Fixed macOS 27 tray disconnections after display switches when native hidden assessment and old menu-bar connection evidence became invalid. Menu Tidy now delays assessment release, waits for menu-bar rebuilding, and uses bounded 2 / 5 / 12-second retries; still-running missing icons remain visible and enter low-frequency discovery.
+- A display switch during reconnect cancels the invalidated attempt without consuming a retry. Saved categories are restored after rediscovery. Independent display recovery no longer interrupts a click waiting during unlock recovery, while ordinary open tray panels close on switch so they cannot retain an old screen reference.
+
+Automated regression tests cover assessment release after display changes, late inventory, scan failure, repeated changes, interrupted reconnect, and panel closing. This Mac passed a BetterDisplay disconnect/reconnect check for the external display. A physical cable unplug/replug still needs a separate check. Uses the project's self-signed release identity and is not Apple-notarized.
+
 ## [0.7.32] - 2026-11-21
 
 - Fixed macOS 27 startup recovery and native menu-bar rebuilds reapplying hidden assessment too early, which could make saved hidden icons appear during recovery or be hidden against the replacement process.

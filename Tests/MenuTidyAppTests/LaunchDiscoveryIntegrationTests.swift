@@ -408,6 +408,91 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testDisplayChangeReleasesNativeAssessmentAndReconnectsRediscoveredIcons() async throws {
+        let fixture = try Fixture()
+        defer { fixture.dispose() }
+        fixture.system.nativeAssessmentAuthoritative = true
+        fixture.system.runningBundles = [fixture.bundle]
+        fixture.system.snapshots = [fixture.snapshot]
+        fixture.model.refreshMenuItems()
+        await fixture.model.waitForTestingOperations()
+        XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
+
+        fixture.model.screenLayoutDidChange()
+        try await fixture.fire(102)
+        XCTAssertEqual(fixture.system.displayAssessmentReleases, 1)
+        XCTAssertEqual(fixture.system.displayAssessmentRefreshes, 1)
+        XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
+        XCTAssertFalse(try XCTUnwrap(fixture.model.managementItems.first).isPending)
+        XCTAssertNil(fixture.system.maintenanceTimer)
+    }
+
+    @MainActor
+    func testDisplayChangeRetriesWhenMenuBarInventoryArrivesLate() async throws {
+        let fixture = try Fixture()
+        defer {
+            fixture.system.beforeScan = nil
+            fixture.dispose()
+        }
+        fixture.system.nativeAssessmentAuthoritative = true
+        fixture.system.runningBundles = [fixture.bundle]
+        fixture.model.screenLayoutDidChange()
+        try await fixture.fire(102)
+        XCTAssertNil(fixture.model.panelItems.first)
+        XCTAssertTrue(fixture.system.managedBundles.isEmpty)
+
+        fixture.system.snapshots = [fixture.snapshot]
+        try await fixture.fire(104)
+        XCTAssertEqual(fixture.system.displayAssessmentReleases, 1)
+        XCTAssertEqual(fixture.system.displayAssessmentRefreshes, 1)
+        XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
+        XCTAssertFalse(try XCTUnwrap(fixture.model.managementItems.first).isPending)
+        XCTAssertNil(fixture.system.maintenanceTimer)
+    }
+
+    @MainActor
+    func testDisplayChangeRetriesAFailedRediscoveryWithoutPublishingStaleRows() async throws {
+        let fixture = try Fixture()
+        defer {
+            fixture.system.beforeScan = nil
+            fixture.dispose()
+        }
+        fixture.system.nativeAssessmentAuthoritative = true
+        fixture.system.runningBundles = [fixture.bundle]
+        fixture.model.screenLayoutDidChange()
+        var scans = 0
+        fixture.system.beforeScan = {
+            scans += 1
+            if scans == 1 { throw MenuBarAccessError.scanTimedOut(scannedOwners: 0, totalOwners: 0, elapsed: 0) }
+        }
+        try await fixture.fire(102)
+        XCTAssertTrue(fixture.model.managementItems.isEmpty)
+        try await fixture.fire(104)
+        fixture.system.snapshots = [fixture.snapshot]
+        try await fixture.fire(109)
+        XCTAssertEqual(fixture.system.displayAssessmentReleases, 1)
+        XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
+        XCTAssertFalse(try XCTUnwrap(fixture.model.managementItems.first).isPending)
+        XCTAssertNil(fixture.system.maintenanceTimer)
+    }
+
+    @MainActor
+    func testRepeatedDisplayChangesReleaseAndRebuildOnce() async throws {
+        let fixture = try Fixture()
+        defer { fixture.dispose() }
+        fixture.system.nativeAssessmentAuthoritative = true
+        fixture.system.runningBundles = [fixture.bundle]
+        fixture.system.snapshots = [fixture.snapshot]
+        fixture.model.screenLayoutDidChange()
+        fixture.system.uptime = 101
+        fixture.model.screenLayoutDidChange()
+        try await fixture.fire(102)
+        XCTAssertEqual(fixture.system.displayAssessmentReleases, 1)
+        XCTAssertEqual(fixture.system.displayAssessmentRefreshes, 1)
+        XCTAssertNil(fixture.system.maintenanceTimer)
+    }
+
+    @MainActor
     private struct Fixture {
         let bundle = "org.example.DelayedStatus"
         let system: MenuTidyTestEnvironment
