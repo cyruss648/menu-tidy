@@ -371,7 +371,11 @@ final class NativeTrayIntegrationTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(model.managementItems.first).isPending)
         XCTAssertEqual(model.trayPlacementOutstandingCount, 0)
         XCTAssertNil(model.trayPlacementFailure(id: original.id))
-        XCTAssertNil(system.maintenanceTimer)
+        XCTAssertNotNil(system.maintenanceTimer)
+        system.uptime = 202
+        try XCTUnwrap(system.maintenanceTimer).fire()
+        await model.waitForTestingOperations()
+        XCTAssertEqual(system.displayAssessmentRefreshes, 2)
     }
 
     @MainActor

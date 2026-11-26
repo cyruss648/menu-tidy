@@ -329,6 +329,9 @@ final class MenuTidyModel: ObservableObject {
     private var screenLayoutRecoveryAttempt = 0
     private var screenLayoutRecoveryAssessmentReleased = false
     private static let screenLayoutRecoveryRetryDelays: [TimeInterval] = [2, 5, 12]
+    private var screenLayoutAssessmentReassertionDue: TimeInterval?
+    private var screenLayoutAssessmentReassertionAttempt = 0
+    private static let screenLayoutAssessmentReassertionDelays: [TimeInterval] = [4, 8, 16]
     private var stopping = false
     private var arrangementSequence = 0
     private var beforeTemporaryRevealCollapsed: Bool?
@@ -1052,6 +1055,8 @@ final class MenuTidyModel: ObservableObject {
         periodicPendingApplicationDue = nil
         if !available {
             screenLayoutRecoveryDue = nil
+            screenLayoutAssessmentReassertionDue = nil
+            screenLayoutAssessmentReassertionAttempt = 0
         } else if screenLayoutRecoveryScheduled {
             screenLayoutRecoveryDue = maintenanceUptime + BackgroundMaintenanceSchedule.interactionInterval
         }
@@ -1284,7 +1289,8 @@ final class MenuTidyModel: ObservableObject {
                 ? lastRecoveryCheck + BackgroundMaintenanceSchedule.interactionInterval : nil,
             !panelInteractionBusy && accessibilityGranted ? launchDiscovery.nextAttemptAt.map {
                 max($0, lastRecoveryCheck + BackgroundMaintenanceSchedule.interactionInterval)
-            } : nil
+            } : nil,
+            screenLayoutAssessmentReassertionDue
         ].compactMap { $0 }.min() : nil
         guard let delay = BackgroundMaintenanceSchedule.nextDelay(at: now,
             autoCollapseDue: !sessionResumePending && monitorsAutoCollapse ? lastAutoCollapseCheck + BackgroundMaintenanceSchedule.interactionInterval : nil,
@@ -1324,6 +1330,10 @@ final class MenuTidyModel: ObservableObject {
             return
         }
         if runScreenLayoutRecovery(at: now) {
+            rescheduleMaintenanceTimer()
+            return
+        }
+        if runScreenLayoutAssessmentReassertion(at: now) {
             rescheduleMaintenanceTimer()
             return
         }
@@ -1419,7 +1429,45 @@ final class MenuTidyModel: ObservableObject {
         rebindNativeApplicationEvidenceToCurrentSnapshots()
         rebuildRows()
         reconnectDiscoveredTrayItems()
+        scheduleScreenLayoutAssessmentReassertion()
         Self.diagnosticLogger.notice("screenLayoutRecovery finished=true observedBundles=\(observedBundles.count) expectedRunning=\(expectedRunning.count)")
+    }
+
+    private func runScreenLayoutAssessmentReassertion(at now: TimeInterval) -> Bool {
+        guard let due = screenLayoutAssessmentReassertionDue, now >= due else { return false }
+        screenLayoutAssessmentReassertionDue = nil
+        guard !nativeTrayChoices.hiddenBundles.isEmpty else {
+            screenLayoutAssessmentReassertionAttempt = 0
+            return false
+        }
+        guard !stopping, !preparingToTerminate, desktopSessionAvailable,
+              !screenLayoutRecoveryScheduled, !nativeStartupRecoveryScheduled else {
+            screenLayoutAssessmentReassertionDue = now + BackgroundMaintenanceSchedule.interactionInterval
+            return true
+        }
+        reassertNativeAssessmentIfNeeded()
+        if screenLayoutAssessmentReassertionAttempt < Self.screenLayoutAssessmentReassertionDelays.count {
+            let delay = Self.screenLayoutAssessmentReassertionDelays[screenLayoutAssessmentReassertionAttempt]
+            screenLayoutAssessmentReassertionAttempt += 1
+            screenLayoutAssessmentReassertionDue = now + delay
+            Self.diagnosticLogger.notice("screenLayoutRecovery reassert=true attempt=\(self.screenLayoutAssessmentReassertionAttempt) nextDue=\(self.screenLayoutAssessmentReassertionDue ?? 0)")
+        } else {
+            screenLayoutAssessmentReassertionAttempt = 0
+            Self.diagnosticLogger.notice("screenLayoutRecovery reassertionComplete=true")
+        }
+        return true
+    }
+
+    private func scheduleScreenLayoutAssessmentReassertion() {
+        guard !nativeTrayChoices.hiddenBundles.isEmpty else {
+            screenLayoutAssessmentReassertionDue = nil
+            screenLayoutAssessmentReassertionAttempt = 0
+            return
+        }
+        screenLayoutAssessmentReassertionAttempt = 0
+        screenLayoutAssessmentReassertionDue = maintenanceUptime + Self.screenLayoutAssessmentReassertionDelays[0]
+        rescheduleMaintenanceTimer()
+        Self.diagnosticLogger.notice("screenLayoutRecovery reassertionScheduled=true due=\(self.screenLayoutAssessmentReassertionDue ?? 0)")
     }
 
     private func requestPassiveCaptureAfterEvent() {
@@ -5703,6 +5751,8 @@ final class MenuTidyModel: ObservableObject {
                 closeIconPanel()
             }
             if usesNativeAssessment || testingEnvironment?.nativeAssessmentAuthoritative == true {
+                screenLayoutAssessmentReassertionDue = nil
+                screenLayoutAssessmentReassertionAttempt = 0
                 if !trayReconnectIDs.isEmpty {
                     trayReconnectGeneration += 1
                     workTask?.cancel()
@@ -5989,6 +6039,8 @@ final class MenuTidyModel: ObservableObject {
         screenLayoutRecoveryScheduled = false
         screenLayoutRecoveryAssessmentReleased = false
         screenLayoutRecoveryAttempt = 0
+        screenLayoutAssessmentReassertionDue = nil
+        screenLayoutAssessmentReassertionAttempt = 0
         clientRecoveryTask?.cancel()
         clientRecoveryTask = nil
         isReconnectingMenuBarClient = false
@@ -6300,6 +6352,15 @@ private extension MenuTidyModel {
         guard usesNativeAssessment else { return }
         syncNativeAssessmentIntent()
         guard !nativeAssessmentStore.hiddenBundles.isEmpty else { return }
+        nativeAssessmentStore.refresh(observedBundles: Set(snapshots.compactMap(\.bundleIdentifier)))
+    }
+
+    private func reassertNativeAssessmentIfNeeded() {
+        if testingEnvironment?.nativeAssessmentAuthoritative == true {
+            testingEnvironment?.refreshDisplayAssessment()
+            return
+        }
+        guard usesNativeAssessment, !nativeAssessmentStore.hiddenBundles.isEmpty else { return }
         nativeAssessmentStore.refresh(observedBundles: Set(snapshots.compactMap(\.bundleIdentifier)))
     }
 

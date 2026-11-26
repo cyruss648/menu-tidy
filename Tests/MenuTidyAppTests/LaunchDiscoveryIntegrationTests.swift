@@ -424,6 +424,8 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
         XCTAssertEqual(fixture.system.displayAssessmentRefreshes, 1)
         XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
         XCTAssertFalse(try XCTUnwrap(fixture.model.managementItems.first).isPending)
+        XCTAssertNotNil(fixture.system.maintenanceTimer)
+        try await fixture.drainDisplayAssessmentReassertions()
         XCTAssertNil(fixture.system.maintenanceTimer)
     }
 
@@ -447,6 +449,8 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
         XCTAssertEqual(fixture.system.displayAssessmentRefreshes, 1)
         XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
         XCTAssertFalse(try XCTUnwrap(fixture.model.managementItems.first).isPending)
+        XCTAssertNotNil(fixture.system.maintenanceTimer)
+        try await fixture.drainDisplayAssessmentReassertions()
         XCTAssertNil(fixture.system.maintenanceTimer)
     }
 
@@ -473,6 +477,8 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
         XCTAssertEqual(fixture.system.displayAssessmentReleases, 1)
         XCTAssertEqual(fixture.model.panelItems.map(\.id), [fixture.snapshot.id])
         XCTAssertFalse(try XCTUnwrap(fixture.model.managementItems.first).isPending)
+        XCTAssertNotNil(fixture.system.maintenanceTimer)
+        try await fixture.drainDisplayAssessmentReassertions()
         XCTAssertNil(fixture.system.maintenanceTimer)
     }
 
@@ -489,7 +495,33 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
         try await fixture.fire(102)
         XCTAssertEqual(fixture.system.displayAssessmentReleases, 1)
         XCTAssertEqual(fixture.system.displayAssessmentRefreshes, 1)
+        XCTAssertNotNil(fixture.system.maintenanceTimer)
+        try await fixture.drainDisplayAssessmentReassertions()
         XCTAssertNil(fixture.system.maintenanceTimer)
+    }
+
+    @MainActor
+    func testDisplayChangeReassertsAfterAssessmentIsInvalidatedAfterScan() async throws {
+        let fixture = try Fixture()
+        defer { fixture.dispose() }
+        fixture.system.nativeAssessmentAuthoritative = true
+        fixture.system.runningBundles = [fixture.bundle]
+        fixture.system.snapshots = [fixture.snapshot]
+
+        fixture.model.screenLayoutDidChange()
+        try await fixture.fire(102)
+        XCTAssertEqual(fixture.system.displayAssessmentRefreshes, 1)
+        XCTAssertEqual(fixture.system.managedBundles, [fixture.bundle])
+        XCTAssertEqual(fixture.system.allowed[fixture.bundle], false)
+
+        fixture.system.displayAssessmentReleased = true
+        fixture.system.managedBundles.removeAll()
+        fixture.system.allowed[fixture.bundle] = true
+        try await fixture.fire(200)
+
+        XCTAssertEqual(fixture.system.displayAssessmentRefreshes, 2)
+        XCTAssertEqual(fixture.system.managedBundles, [fixture.bundle])
+        XCTAssertEqual(fixture.system.allowed[fixture.bundle], false)
     }
 
     @MainActor
@@ -535,6 +567,15 @@ final class LaunchDiscoveryIntegrationTests: XCTestCase {
             system.uptime = time
             try XCTUnwrap(system.maintenanceTimer).fire()
             await model.waitForTestingOperations()
+        }
+
+        func drainDisplayAssessmentReassertions() async throws {
+            var time = max(system.uptime + 100, 200)
+            for _ in 0..<4 {
+                guard system.maintenanceTimer != nil else { return }
+                try await fire(time)
+                time += 100
+            }
         }
 
         func dispose() {

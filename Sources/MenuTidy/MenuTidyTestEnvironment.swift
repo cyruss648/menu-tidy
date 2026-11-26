@@ -45,6 +45,7 @@ final class MenuTidyTestEnvironment {
     var displayAssessmentRefreshes = 0
     var displayAssessmentReleases = 0
     var displayAssessmentReleased = false
+    private var assessmentManagedBundles: Set<String> = []
     var revealedBundles: Set<String> = []
     var panelPressCount = 0
     var panelPressReturnsPresentation = true
@@ -64,6 +65,7 @@ final class MenuTidyTestEnvironment {
         guard nativeAssessmentAuthoritative else { return }
         displayAssessmentReleases += 1
         displayAssessmentReleased = true
+        assessmentManagedBundles = managedBundles
         restoredBundles.append(contentsOf: managedBundles.sorted())
         managedBundles.removeAll()
         for bundle in allowed.keys { allowed[bundle] = true }
@@ -73,6 +75,8 @@ final class MenuTidyTestEnvironment {
         guard nativeAssessmentAuthoritative else { return }
         displayAssessmentRefreshes += 1
         displayAssessmentReleased = false
+        managedBundles.formUnion(assessmentManagedBundles)
+        for bundle in assessmentManagedBundles { allowed[bundle] = false }
     }
 
     func isCurrent(_ identity: ObservedItemGroupHistory.Identity) -> Bool {

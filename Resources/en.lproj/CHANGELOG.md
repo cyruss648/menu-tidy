@@ -4,6 +4,13 @@ English summaries of the bundled release history. Full implementation details an
 
 ## [Unreleased]
 
+## [0.7.34] - 2026-11-26
+
+- Fixed the macOS 27 case where native hidden assessment became ineffective again after the menu bar finished rebuilding following a display switch. After the recovery scan, Menu Tidy keeps a bounded 4 / 8 / 16-second stabilization window and rebuilds the confirmed hidden assessment without depending on an AX inventory that may already be stale.
+- Added an integration regression that invalidates the assessment after the recovery scan and verifies saved hidden applications are hidden again, with no maintenance timer left after stabilization.
+
+Automated coverage includes display changes, late inventory, scan failures, repeated changes, interrupted reconnects, and post-recovery assessment invalidation. Packages use the project's self-signed release identity and are not Apple-notarized.
+
 ## [0.7.33] - 2026-11-23
 
 - Fixed macOS 27 tray disconnections after display switches when native hidden assessment and old menu-bar connection evidence became invalid. Menu Tidy now delays assessment release, waits for menu-bar rebuilding, and uses bounded 2 / 5 / 12-second retries; still-running missing icons remain visible and enter low-frequency discovery.
