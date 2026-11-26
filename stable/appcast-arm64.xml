@@ -6,19 +6,19 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/cyruss648/menu-tidy</link>
     <description>Menu Tidy application updates</description>
     <item>
-      <title>Menu Tidy 0.7.33</title>
-      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.33</link>
-      <pubDate>Mon, 23 Nov 2026 07:51:37 +0000</pubDate>
-      <sparkle:version>109</sparkle:version>
-      <sparkle:shortVersionString>0.7.33</sparkle:shortVersionString>
+      <title>Menu Tidy 0.7.34</title>
+      <link>https://github.com/cyruss648/menu-tidy/releases/tag/v0.7.34</link>
+      <pubDate>Thu, 26 Nov 2026 10:34:09 +0000</pubDate>
+      <sparkle:version>110</sparkle:version>
+      <sparkle:shortVersionString>0.7.34</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
       <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-      <description sparkle:format="plain-text">## [0.7.33] - 2026-11-23
+      <description sparkle:format="plain-text">## [0.7.34] - 2026-11-26
 
-- 修复 macOS 27 显示器切换后原生隐藏评估与旧菜单栏连接证据失效导致的托盘断连：切换后延迟释放评估、等待菜单栏重建，并按 2 / 5 / 12 秒有界重试；仍在运行的缺失图标保持可见并进入低频发现。
-- 重连期间发生显示器切换会取消失效重连且不消耗重试机会；成功重新发现后恢复保存的分类。解锁恢复期间的等待点击不会被独立显示恢复打断，普通打开的托盘面板会在切换时关闭，避免继续引用旧屏幕。
+- 修复 macOS 27 显示器切换后菜单栏原生隐藏评估在菜单栏重建完成后再次失效的问题。恢复扫描完成后保留 4 / 8 / 16 秒的有界稳定确认窗口，直接重建已确认的隐藏断言，不依赖可能已经过时的 AX 清单。
+- 增加“扫描完成后断言再次失效”的集成回归，验证已保存为隐藏的应用会重新恢复隐藏，且稳定确认完成后不会留下后台定时器。
 
-自动化回归覆盖显示器切换后的评估释放、清单迟到、扫描失败、连续变化、重连中断和面板关闭。本机使用 BetterDisplay 对外接显示器完成断开与恢复实测，实体拔插外接显示器仍需单独复验。使用项目自签名发行证书，Apple 公证状态为未公证。
+自动化回归覆盖显示器切换、清单迟到、扫描失败、连续变化、重连中断及恢复后原生断言再次失效。发布包使用项目自签名发行证书，Apple 公证状态为未公证。
 
 ### 软件内更新与首次安装
 
@@ -30,8 +30,8 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
 
 ### 下载与验证
 
-Apple Silicon 下载 `Menu-Tidy-0.7.33-macos-arm64.zip`，
-Intel 下载 `Menu-Tidy-0.7.33-macos-x86_64.zip`。
+Apple Silicon 下载 `Menu-Tidy-0.7.34-macos-arm64.zip`，
+Intel 下载 `Menu-Tidy-0.7.34-macos-x86_64.zip`。
 同时下载对应 `.sha256`，在同一目录运行 `shasum -a 256 -c &lt;文件名&gt;.sha256`。
 退出旧实例后，将解压得到的 Menu Tidy.app 移到 /Applications，按界面引导授权辅助功能。
 macOS 27 的原生隐藏需点击「授权菜单栏显示设置…」，在系统选择器中确认已定位的精确偏好文件；
@@ -54,12 +54,12 @@ macOS 27 通过精确应用的原生显示开关隐藏普通应用图标；同�
 最低部署目标为 macOS 13；独立窗口捕获需要 macOS 14+，区域快照需要 macOS 15.2+。
 本机代表性应用的验证不等同于所有应用、旧系统或多显示器场景均兼容。
 
-[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.33/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.33/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.33/docs/NATIVE-VISIBILITY-RESEARCH.md)
+[完整使用说明](https://github.com/cyruss648/menu-tidy/blob/v0.7.34/README.md) · [独立托盘与验收](https://github.com/cyruss648/menu-tidy/blob/v0.7.34/docs/TRAY-EXPERIENCE.md) · [原生隐藏验证](https://github.com/cyruss648/menu-tidy/blob/v0.7.34/docs/NATIVE-VISIBILITY-RESEARCH.md)
 </description>
-      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.33/Menu-Tidy-0.7.33-macos-arm64.zip" length="4068783" type="application/octet-stream" sparkle:edSignature="B1mUSdfImBW61gbxImE3XlEwzLFgSjsby7zSqVYDgQjTW5MiCKxs7SX3d1//psHpdKBTTqn+pg1KywpxVrJzBQ=="></enclosure>
+      <enclosure url="https://github.com/cyruss648/menu-tidy/releases/download/v0.7.34/Menu-Tidy-0.7.34-macos-arm64.zip" length="4071232" type="application/octet-stream" sparkle:edSignature="SbrZa5NC9KukXJD/GJUq1vAukRohP0DQ+hWav/4B/dzvG6dZHqZRBRKGc1DOumBkkTq7mGfR3CMGSoD2JEyODw=="></enclosure>
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: DoLQ4DDrKlyNSsL8Xi8VNkR76KBtANqzIcHLS9CPeu3PqT09950G9vdH4BGg3WaHPTgRRW3sffnb3FLwaH5oAw==
-length: 5842
+edSignature: 3X0WTmdGmkd1P7rh5PiOoYMYuE8PfwJU9HQjPS2vonsmpAg5iqpKUZrLcelKUhzWaq9N+uwQat9juTwdQXr4CA==
+length: 5633
 -->
